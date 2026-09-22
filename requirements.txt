@@ -1,0 +1,10 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+pydantic-settings>=2.5
+httpx>=0.27
+numpy>=2.0
+torch>=2.4
+regex>=2024.0
+pillow>=10.4
+numba>=0.61

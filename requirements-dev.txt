@@ -1,0 +1,8 @@
+-r requirements.txt
+pytest>=8.3
+pytest-asyncio>=0.24
+ruff>=0.7
+
+# M3/M8's HF-oracle cross-checks only (scripts/oracle/) - never imported by app/
+transformers>=4.57
+einops>=0.8  # needed by nomic-embed-text-v1.5's trust_remote_code=True oracle model
