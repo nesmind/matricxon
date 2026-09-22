@@ -6,7 +6,6 @@ import torch
 
 from app.architectures.base import GenerationCancelledError, ModelArchitecture
 from app.runtime.generation_request import GenerationRequest, GenerationResult
-from app.runtime.kv_cache import KVCache
 from app.runtime.sampler import Sampler
 
 logger = logging.getLogger(__name__)
@@ -14,15 +13,16 @@ logger = logging.getLogger(__name__)
 
 class ChatEngine:
     """Runs one autoregressive generation call: prefill the prompt against a
-    fresh KVCache, then sample and decode one token at a time.
+    fresh cache, then sample and decode one token at a time.
 
     Lifetime is a single call - matricxon has no cross-request prompt
     caching (see ROADMAP.md), so every call builds its own cache and
-    Sampler from scratch. `architecture` must be a decoder (expose
-    `kv_cache_layer_shapes` - a `(n_head_kv, head_dim)` pair per layer, see
-    `KVCache`'s own docstring for why it's per-layer rather than one shared
-    pair - as `Mistral3TextArchitecture` does) - encoder-only architectures
-    go through EmbeddingEngine instead.
+    Sampler from scratch. `architecture` must be a decoder (built via its own
+    `build_cache()` - see `ModelArchitecture.build_cache`'s own docstring for
+    why this is a hook rather than a `KVCache` built directly here: every
+    architecture but `nemotron_h`'s hybrid Mamba-2/attention/MLP layers gets
+    the same plain per-layer K/V cache this always built) - encoder-only
+    architectures go through EmbeddingEngine instead.
     """
 
     def __init__(self, architecture: ModelArchitecture, eos_token_ids: set[int]) -> None:
@@ -47,11 +47,7 @@ class ChatEngine:
         """
         sampling = request.sampling
         model_dtype = next(self._architecture.parameters()).dtype
-        kv_cache = KVCache(
-            layer_shapes=self._architecture.kv_cache_layer_shapes,
-            max_seq_len=sampling.num_ctx,
-            dtype=model_dtype,
-        )
+        kv_cache = self._architecture.build_cache(max_seq_len=sampling.num_ctx, dtype=model_dtype)
         sampler = Sampler(sampling)
 
         input_ids = request.input_ids

@@ -107,6 +107,24 @@ class ModelArchitecture(nn.Module, ABC):
             target.bias.copy_(loader.load_tensor(bias_tensor_name))
         return target
 
+    def build_cache(self, max_seq_len: int, dtype: torch.dtype) -> object:
+        """Builds the cache object `ChatEngine.stream()` passes into every real `forward()` call
+        for this model. Default: today's plain per-attention-layer `KVCache`, built from
+        `kv_cache_layer_shapes` - reproduces exactly what `ChatEngine` used to construct directly
+        itself before this hook existed, so every architecture except `NemotronHArchitecture`
+        needs no change at all to keep working. Override only when a model's real cache shape
+        isn't "one K/V tensor pair per layer, uniformly" - `nemotron_h`'s hybrid Mamba-2/
+        attention/MLP layers (see `NemotronHHybridCache`, `app/runtime/mamba_cache.py`) are the
+        one real exception so far: a Mamba-2 layer's real state (a fixed-size recurrent SSM state
+        plus a short conv1d history, never growing with sequence length) has nothing in common
+        with a K/V pair's shape, so `kv_cache_layer_shapes` - not ABC-enforced, a pure per-
+        subclass convention (confirmed: zero references to it anywhere in this base class) - is
+        simply never defined by that architecture; it overrides this method instead.
+        """
+        return KVCache(
+            layer_shapes=self.kv_cache_layer_shapes, max_seq_len=max_seq_len, dtype=dtype
+        )
+
     @classmethod
     @abstractmethod
     def supports(cls, metadata: GGUFMetadata) -> bool:

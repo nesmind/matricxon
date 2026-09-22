@@ -1,10 +1,16 @@
 from app.architectures.base import ModelArchitecture
 from app.architectures.bert import BertArchitecture
+from app.architectures.command_r import CommandRArchitecture
 from app.architectures.gemma4 import Gemma4Architecture
+from app.architectures.granite import GraniteArchitecture
+from app.architectures.granitemoe import GraniteMoeArchitecture
 from app.architectures.llama import LlamaArchitecture
 from app.architectures.mistral3 import Mistral3TextArchitecture
+from app.architectures.nemotron_h import NemotronHArchitecture
 from app.architectures.nomic_bert import NomicBertArchitecture
 from app.architectures.phi2 import Phi2Architecture
+from app.architectures.qwen2 import Qwen2Architecture
+from app.architectures.qwen3 import Qwen3Architecture
 from app.architectures.registry import ArchitectureRegistry
 
 
@@ -34,6 +40,12 @@ class TestNameMatchesSupports:
             LlamaArchitecture,
             Gemma4Architecture,
             Phi2Architecture,
+            GraniteArchitecture,
+            GraniteMoeArchitecture,
+            NemotronHArchitecture,
+            Qwen2Architecture,
+            Qwen3Architecture,
+            CommandRArchitecture,
         ):
             assert architecture_cls.supports(_FakeMetadata(architecture_cls.NAME)) is True
             assert architecture_cls.supports(_FakeMetadata("not-a-real-architecture")) is False
@@ -50,6 +62,12 @@ class TestSupportedNames:
             LlamaArchitecture.NAME,
             Gemma4Architecture.NAME,
             Phi2Architecture.NAME,
+            GraniteArchitecture.NAME,
+            GraniteMoeArchitecture.NAME,
+            NemotronHArchitecture.NAME,
+            Qwen2Architecture.NAME,
+            Qwen3Architecture.NAME,
+            CommandRArchitecture.NAME,
         ]
 
     def test_every_name_is_a_real_string_not_a_class_object(self) -> None:

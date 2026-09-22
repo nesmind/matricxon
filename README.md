@@ -99,7 +99,10 @@ directly to a fused GEMV kernel running against the raw mmap'd quantized
 bytes, covering all 11 packed GGUF quant types
 (`Q2_K`-`Q8_K`/`Q4_0`/`Q4_1`/`Q5_0`/`Q5_1`/`Q8_0`); prefill is unaffected
 and still dequantizes normally. Wired into `mistral3`, `llama`, `gemma4`,
-and `phi2` (not `bert`/`nomic-bert`, which are always-prefill encoders).
+`phi2`, `granite`, `qwen2`, `qwen3`, and `command-r` (not `bert`/
+`nomic-bert`, which are always-prefill encoders, and not `granitemoe`/
+`nemotron_h` - their expert/SSM tensors aren't 2D `nn.Linear`-shaped the
+way the fused GEMV kernels need, a real structural gap, not an oversight).
 Off by default - real measurement on this project's CPU-only target
 hardware showed no speed benefit, but it's shipped as a real, permanent,
 user-selectable choice rather than removed, since results may differ on
@@ -122,10 +125,40 @@ numerics against real weights - a real, open gap, see ROADMAP.md), `phi2`
 attention and MLP branches, unlike every other decoder here - partial
 rotary embeddings, biases on every projection, and a fused `attn_qkv`
 tensor split into query/key/value at materialize time; validated against a
-real `moondream2-gguf` pull) - every other forward pass is cross-checked
-against a real Hugging Face `transformers` model, see
-[Testing](#testing) below. Any other `general.architecture` fails closed
-with a clear error rather than attempting a best-effort forward pass.
+real `moondream2-gguf` pull), `granite` (dense IBM Granite - a plain
+GQA/RoPE/SwiGLU decoder plus four real "Power"-scaling terms:
+`attention_multiplier` replaces the default attention scale entirely,
+`embedding_multiplier`/`residual_multiplier`/`logits_scaling` scale the
+embedding lookup, each layer's residual branches, and the final logits;
+wiring validated against a synthetic fixture, real-weight oracle not yet
+run - see ROADMAP.md), `granitemoe` (Granite's sparse Mixture-of-Experts
+sibling - real top-k-then-softmax routing over real 3D per-expert GGUF
+tensors, the first MoE-shaped code in this project; same validation status
+as `granite`), `nemotron_h` (NVIDIA's hybrid design - three real
+interleaved layer types per real per-layer GGUF arrays, not a uniform
+stack: Mamba-2 state-space layers, plain GQA attention with no RoPE at
+all, and non-gated squared-ReLU MLP layers; needed a new hybrid cache
+class alongside the plain KV cache every other decoder here uses; a real,
+would-have-shipped-broken bug - a wrong sign-convention assumption on the
+SSM's own `A` parameter - was caught by reading a real downloaded GGUF
+file's raw tensor bytes directly, before any of it ever ran; full
+real-weight forward-pass validation still open, see ROADMAP.md),
+`qwen2`/`qwen3` (Alibaba Qwen - `qwen2` has real q/k/v bias, `qwen3` swaps
+that for real per-head QK-norm plus a real `head_dim` that must be read
+from GGUF metadata rather than derived; both are the most rigorously
+validated architectures in this project - full real-weight comparison
+against downloaded HF checkpoints, 0.999+ cosine similarity on all but a
+couple of tail decoder layers, real generation confirmed factually
+correct), and `command-r` (Cohere - a genuine parallel attention+FFN block
+reusing `phi2`'s existing block shape, real bias-free `LayerNorm` rather
+than RMSNorm, and a real logit-scale multiply; wiring validated against a
+synthetic fixture - a real-weight check was attempted but stopped mid-run
+for hardware-safety reasons on this machine, a written-but-unrun oracle
+script is ready for different hardware, see ROADMAP.md) - every other
+forward pass is cross-checked against a real Hugging Face `transformers`
+model, see [Testing](#testing) below. Any other `general.architecture`
+fails closed with a clear error rather than attempting a best-effort
+forward pass.
 
 **GGUF tokenizers:** byte-level BPE (`tokenizer.ggml.model = "gpt2"`),
 WordPiece (`"bert"`), SentencePiece BPE (`"llama"` - score-based merge

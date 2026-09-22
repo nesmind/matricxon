@@ -29,7 +29,16 @@ _LAYER_PREFIX_RE = re.compile(r"^blk\.(\d+)\.")
 # transient-dequant-and-discard path instead, which would make every real embed call *slower*
 # (repeated dequant work, no cross-call cache) rather than saving real steady-state RAM the way it
 # does for chat's decode-dominant workload - a real, deliberate scope decision, not an oversight.
-QUANTIZED_NATIVE_WIRED_ARCHITECTURES = frozenset({"mistral3", "llama", "gemma4", "phi2"})
+# `granitemoe`/`nemotron_h` are also deliberately excluded, for a different real reason: their
+# expert/SSM tensors are hard-coded to bypass `_load_projection` entirely (3D expert tensors and
+# several non-2D SSM tensors - see each architecture's own docstring), so enabling this flag for
+# either would only ever touch a couple of their non-MoE/non-SSM projections (real but marginal
+# savings, since expert/SSM tensors dominate real total memory for both) - not worth the added
+# per-layer-type suffix bookkeeping this file's own flat-suffix-list design would need to stay
+# correct for a hybrid model, so left off rather than partially wired.
+QUANTIZED_NATIVE_WIRED_ARCHITECTURES = frozenset(
+    {"mistral3", "llama", "gemma4", "phi2", "granite", "qwen2", "qwen3", "command-r"}
+)
 
 # The exact 5 (of 7) real per-layer tensor names Mistral3TextArchitecture._load_projection routes
 # through QuantizedLinear when quantized-native compute is enabled - kept in sync with that
@@ -63,6 +72,19 @@ _QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH: dict[str, tuple[str, ...]] = {
         *_QUANTIZED_NATIVE_TENSOR_SUFFIXES,
     ),
     "phi2": ("attn_output.weight", "ffn_up.weight", "ffn_down.weight", "output.weight"),
+    # granite/qwen2/qwen3/command-r all follow llama's exact real _load_projection call list
+    # (attn_v/attn_output/ffn_gate/ffn_up/ffn_down, plus a real separate lm_head when untied) -
+    # confirmed by direct comparison against each architecture's own _materialize_weights, not
+    # assumed from family resemblance (this session's own hard-won lesson - see qwen2.py's
+    # docstring for what happens when that assumption goes unverified). None of the four route
+    # attn_q/attn_k through _load_projection (granite/qwen2/qwen3/command-r all load those via a
+    # plain .copy_() - with or without unpermute_rope_rows depending on the architecture, see each
+    # one's own docstring - never through QuantizedLinear), so those stay excluded here too, same
+    # reasoning as every other entry in this dict.
+    "granite": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
+    "qwen2": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
+    "qwen3": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
+    "command-r": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
 }
 
 

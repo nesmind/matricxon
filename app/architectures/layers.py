@@ -6,22 +6,29 @@ from torch import nn
 def unpermute_rope_rows(weight: torch.Tensor, n_head: int) -> torch.Tensor:
     """Reverses the row permutation llama.cpp's HF->GGUF converter applies to
 
-    attn_q/attn_k weights - a converter-wide convention for every
-    rotate-half-style HF model (llama, mistral, qwen, ...), not specific to
-    any one of matricxon's architectures, which is why this lives here
-    rather than duplicated per architecture (first written for
-    `Mistral3TextArchitecture`, confirmed to also apply to plain `llama`
-    models - see M10's ROADMAP entry).
+    attn_q/attn_k weights for the model families that need it - confirmed
+    real for `mistral3`/`llama` (first written for `Mistral3TextArchitecture`,
+    confirmed to also apply to plain `llama` models - see M10's ROADMAP
+    entry), not for any one of matricxon's architectures universally: `gemma4`
+    needs no permutation at all (see that architecture's own comment), and
+    real-weight oracle validation confirmed (2026-09-22) `qwen2`/`qwen3` need
+    none either - applying this to real Qwen weights silently turns a working
+    model into one that only ever generates garbage (confirmed live: never
+    predicted "Paris" after "The capital of France is", despite every other
+    check passing cleanly). Whether a given real architecture needs this at
+    all must be verified per-architecture against real weights, not assumed
+    from the "it's a rotate-half model" family resemblance alone - that
+    assumption was already wrong once for Qwen.
 
-    That converter interleaves each head's rotary pairs into ggml's
-    split-half convention by swapping a (2, head_dim/2) grouping to
-    (head_dim/2, 2) per head, so GGUF's attn_q.weight/attn_k.weight ship
+    Where it IS needed: that converter interleaves each head's rotary pairs
+    into ggml's split-half convention by swapping a (2, head_dim/2) grouping
+    to (head_dim/2, 2) per head, so GGUF's attn_q.weight/attn_k.weight ship
     already permuted - while `apply_rotary_pos_emb` here (and in every HF
     Mistral/Llama-family model) expects the un-permuted, "natural" row
-    order. Skipping this turns attention silently wrong rather than raising
-    (confirmed against an HF safetensors oracle: raw weight cosine
-    similarity was ~0.03 without this, ~0.997 - full quantization-noise
-    level - with it).
+    order. Skipping this where it IS needed turns attention silently wrong
+    rather than raising (confirmed against an HF safetensors oracle: raw
+    weight cosine similarity was ~0.03 without this, ~0.997 - full
+    quantization-noise level - with it, for `mistral3`/`llama`).
     """
     dim0 = weight.shape[0]
     head_dim = dim0 // n_head

@@ -11,9 +11,15 @@ from app.models.installed_model import InstalledModel
 from app.models.manager import ModelManager
 from tests.tiny_gguf import build_tiny_mistral3_gguf
 from tests.tiny_gguf_bert import build_tiny_bert_gguf
+from tests.tiny_gguf_command_r import build_tiny_command_r_gguf
 from tests.tiny_gguf_gemma4 import build_tiny_gemma4_gguf
+from tests.tiny_gguf_granite import build_tiny_granite_gguf
+from tests.tiny_gguf_granitemoe import build_tiny_granitemoe_gguf
 from tests.tiny_gguf_llama import build_tiny_llama_gguf
+from tests.tiny_gguf_nemotron_h import build_tiny_nemotron_h_gguf
 from tests.tiny_gguf_phi2 import build_tiny_phi2_gguf
+from tests.tiny_gguf_qwen2 import build_tiny_qwen2_gguf
+from tests.tiny_gguf_qwen3 import build_tiny_qwen3_gguf
 
 # The real, already-downloaded ministral-3:3b GGUF from pAIring's Ollama blob
 # store - see tests/fixtures/README.md. Symlinked (never copied) into a test
@@ -259,6 +265,313 @@ def tiny_llama_model(models_dir: Path) -> InstalledModel:
         capabilities=["completion"],
         size_bytes=gguf_path.stat().st_size,
         family="llama",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_granite_model(models_dir: Path) -> InstalledModel:
+    """A tiny but complete, valid, real `granite` GGUF (see tests/tiny_gguf_granite.py) - the
+    dense-decoder equivalent of `tiny_llama_model`, for fast/safe `/api/chat` tests against the
+    real `GraniteArchitecture`/`GGUFTokenizer` pipeline, including its four real
+    "Power"-scaling multipliers."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-granite"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_granite_gguf(gguf_path)
+
+    installed = InstalledModel(
+        tag="tiny-granite:latest",
+        path=str(gguf_path),
+        architecture="granite",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="granite",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_granite_tied_embeddings_model(models_dir: Path) -> InstalledModel:
+    """Same as `tiny_granite_model`, but with no separate `output.weight` tensor - the real shape
+    of real Granite checkpoints (`granite-3.0-2b-instruct`/`granite-3.0-1b-a400m-instruct` both
+    ship `tie_word_embeddings: true`), so this is expected to be the *common* real case, not the
+    edge case - see `GraniteArchitecture`'s own docstring."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-granite-tied"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_granite_gguf(gguf_path, tied_embeddings=True)
+
+    installed = InstalledModel(
+        tag="tiny-granite-tied:latest",
+        path=str(gguf_path),
+        architecture="granite",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="granite",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_granitemoe_model(models_dir: Path) -> InstalledModel:
+    """A tiny but complete, valid, real `granitemoe` GGUF (see tests/tiny_gguf_granitemoe.py) -
+    the sparse-MoE equivalent of `tiny_granite_model`, for fast/safe `/api/chat` tests against
+    the real `GraniteMoeArchitecture`/`GraniteMoeFFN`/`GGUFTokenizer` pipeline."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-granitemoe"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_granitemoe_gguf(gguf_path)
+
+    installed = InstalledModel(
+        tag="tiny-granitemoe:latest",
+        path=str(gguf_path),
+        architecture="granitemoe",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="granitemoe",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_granitemoe_tied_embeddings_model(models_dir: Path) -> InstalledModel:
+    """Same as `tiny_granitemoe_model`, but with no separate `output.weight` tensor - real
+    GraniteMoE checkpoints (`granite-3.0-1b-a400m-instruct`/`granite-3.0-3b-a800m-instruct`) both
+    ship `tie_word_embeddings: true`, same as dense Granite."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-granitemoe-tied"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_granitemoe_gguf(gguf_path, tied_embeddings=True)
+
+    installed = InstalledModel(
+        tag="tiny-granitemoe-tied:latest",
+        path=str(gguf_path),
+        architecture="granitemoe",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="granitemoe",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_nemotron_h_model(models_dir: Path) -> InstalledModel:
+    """A tiny but complete, valid, real `nemotron_h` GGUF (see tests/tiny_gguf_nemotron_h.py) -
+    exercises the real hybrid Mamba-2/attention/MLP per-layer dispatch and
+    `NemotronHHybridCache` end to end, for fast/safe `/api/chat` tests against the real
+    `NemotronHArchitecture`/`GGUFTokenizer` pipeline."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-nemotron-h"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_nemotron_h_gguf(gguf_path)
+
+    installed = InstalledModel(
+        tag="tiny-nemotron-h:latest",
+        path=str(gguf_path),
+        architecture="nemotron_h",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="nemotron_h",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_nemotron_h_tied_embeddings_model(models_dir: Path) -> InstalledModel:
+    """Same as `tiny_nemotron_h_model`, but with no separate `output.weight` tensor."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-nemotron-h-tied"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_nemotron_h_gguf(gguf_path, tied_embeddings=True)
+
+    installed = InstalledModel(
+        tag="tiny-nemotron-h-tied:latest",
+        path=str(gguf_path),
+        architecture="nemotron_h",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="nemotron_h",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_qwen2_model(models_dir: Path) -> InstalledModel:
+    """A tiny but complete, valid, real `qwen2` GGUF (see tests/tiny_gguf_qwen2.py) - exercises
+    real q/k/v bias plus the `unpermute_rope_rows`-on-bias handling, for fast/safe `/api/chat`
+    tests against the real `Qwen2Architecture`/`GGUFTokenizer` pipeline."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-qwen2"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_qwen2_gguf(gguf_path)
+
+    installed = InstalledModel(
+        tag="tiny-qwen2:latest",
+        path=str(gguf_path),
+        architecture="qwen2",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="qwen2",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_qwen2_tied_embeddings_model(models_dir: Path) -> InstalledModel:
+    """Same as `tiny_qwen2_model`, but with no separate `output.weight` tensor - real
+    Qwen2.5 checkpoints up to 3B tie embeddings (stop tying at 7B+)."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-qwen2-tied"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_qwen2_gguf(gguf_path, tied_embeddings=True)
+
+    installed = InstalledModel(
+        tag="tiny-qwen2-tied:latest",
+        path=str(gguf_path),
+        architecture="qwen2",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="qwen2",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_qwen3_model(models_dir: Path) -> InstalledModel:
+    """A tiny but complete, valid, real `qwen3` GGUF (see tests/tiny_gguf_qwen3.py) - exercises
+    real QK-norm plus the `unpermute_rope_rows(..., n_head=1)` handling for its weight tensors,
+    for fast/safe `/api/chat` tests against the real `Qwen3Architecture`/`GGUFTokenizer`
+    pipeline."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-qwen3"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_qwen3_gguf(gguf_path)
+
+    installed = InstalledModel(
+        tag="tiny-qwen3:latest",
+        path=str(gguf_path),
+        architecture="qwen3",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="qwen3",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_qwen3_tied_embeddings_model(models_dir: Path) -> InstalledModel:
+    """Same as `tiny_qwen3_model`, but with no separate `output.weight` tensor - real
+    Qwen3-0.6B ships `tie_word_embeddings: true`."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-qwen3-tied"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_qwen3_gguf(gguf_path, tied_embeddings=True)
+
+    installed = InstalledModel(
+        tag="tiny-qwen3-tied:latest",
+        path=str(gguf_path),
+        architecture="qwen3",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="qwen3",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_command_r_model(models_dir: Path) -> InstalledModel:
+    """A tiny but complete, valid, real `command-r` GGUF (see tests/tiny_gguf_command_r.py) -
+    exercises the real parallel attention+FFN block, bias-free LayerNorm, and logit_scale
+    multiply, for fast/safe `/api/chat` tests against the real `CommandRArchitecture`/
+    `GGUFTokenizer` pipeline."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-command-r"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    # seed=1, not the default 0 - seed=0's random weights happen to make greedy decoding hit a
+    # real EOS token after 2 tokens for this architecture's real logit_scale/parallel-block
+    # combination, which is correct behavior (not a bug) but defeats this fixture's own purpose
+    # of exercising a real multi-token generation.
+    build_tiny_command_r_gguf(gguf_path, seed=1)
+
+    installed = InstalledModel(
+        tag="tiny-command-r:latest",
+        path=str(gguf_path),
+        architecture="command-r",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="command-r",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_command_r_tied_embeddings_model(models_dir: Path) -> InstalledModel:
+    """Same as `tiny_command_r_model`, but with no separate `output.weight` tensor - real
+    Command-R checkpoints are always tied (llama.cpp never emits a separate output tensor for
+    this architecture), so this is actually the real-world-representative case, not the edge one
+    (same lesson `llama`'s tied-embeddings bug already taught - detect dynamically, don't
+    assume)."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-command-r-tied"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_command_r_gguf(gguf_path, tied_embeddings=True)
+
+    installed = InstalledModel(
+        tag="tiny-command-r-tied:latest",
+        path=str(gguf_path),
+        architecture="command-r",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="command-r",
         parameter_size="0.001B",
         context_length=32,
     )
