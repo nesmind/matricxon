@@ -8,6 +8,7 @@ import torch
 from fastapi import FastAPI
 
 from app.config import settings
+from app.native.gemm import NativeGemm
 from app.routers import (
     capabilities_router,
     chat_router,
@@ -77,6 +78,8 @@ class MatricxonApp:
         # docstring; irrelevant once matricxon actually supports a non-CPU device.
         if settings.device == "cpu":
             torch.set_num_threads(settings.torch_threads or os.cpu_count() or 1)
+        # See Settings.gemv_backend - a no-op unless "native"; a failed build only logs a warning.
+        NativeGemm.configure(settings.gemv_backend, settings.torch_threads)
 
     @asynccontextmanager
     async def _lifespan(self, _app: FastAPI) -> AsyncIterator[None]:

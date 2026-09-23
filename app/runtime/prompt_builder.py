@@ -47,6 +47,10 @@ class Mistral3PromptBuilder:
             parts.append(self._render_turn(message))
         return "".join(parts)
 
+    def wants_bos(self, prompt: str) -> bool:
+        """Always - this format has no BOS of its own (see app.runtime.chat_template)."""
+        return True
+
     def _render_turn(self, message: ChatMessage) -> str:
         content = ("[IMG]" * len(message.images or [])) + message.content
 

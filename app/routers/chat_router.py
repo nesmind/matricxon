@@ -11,6 +11,7 @@ from app.dependencies import get_model_catalog, get_model_manager
 from app.models.catalog import ModelCatalog
 from app.models.handle import ModelHandle
 from app.models.manager import ModelManager
+from app.native.gemm import NativeGemm
 from app.runtime.chat_engine import ChatEngine
 from app.runtime.generation_request import GenerationRequest, SamplingConfig
 from app.runtime.prompt_builder import Mistral3PromptBuilder
@@ -62,7 +63,10 @@ class ChatRequestHandler:
             return JSONResponse(status_code=200, content={})
 
         stage_started = time.monotonic()
-        prompt = self._prompt_builder.build(request.messages, request.tools)
+        # The model's own chat template (see app.runtime.chat_template) - Mistral3PromptBuilder
+        # only for mistral3 itself or a model with no template at all.
+        prompt_builder = handle.prompt_builder or self._prompt_builder
+        prompt = prompt_builder.build(request.messages, request.tools)
         logger.info(
             "prompt built: %d messages -> %d chars in %.1fms",
             len(request.messages),
@@ -85,7 +89,9 @@ class ChatRequestHandler:
                 prompt, all_images, handle.tokenizer, mmproj
             )
         else:
-            prompt_token_ids = handle.tokenizer.encode(prompt, add_bos=True)
+            prompt_token_ids = handle.tokenizer.encode(
+                prompt, add_bos=prompt_builder.wants_bos(prompt)
+            )
         logger.info(
             "tokenized: %d chars -> %d tokens in %.1fms (num_ctx=%d, images=%d)",
             len(prompt),
@@ -152,9 +158,7 @@ class ChatRequestHandler:
                 raise item
             eval_count += 1
             now = time.monotonic()
-            logger.info(
-                "token %d: id=%d elapsed=%.3fs", eval_count, item, now - last_token_at
-            )
+            logger.info("token %d: id=%d elapsed=%.3fs", eval_count, item, now - last_token_at)
             last_token_at = now
             # The EOS token itself is a real, counted generation step (matches
             # ChatEngine's own token_ids/eval_count accounting) but its decoded
@@ -173,6 +177,15 @@ class ChatRequestHandler:
             eval_duration,
             eval_duration / eval_count if eval_count else 0.0,
         )
+        native = NativeGemm.active()
+        if native is not None:
+            calls, seconds = native.take_stats()
+            logger.info(
+                "native kernels: %d calls, %.2fs (%.0f%% of generation)",
+                calls,
+                seconds,
+                100 * seconds / eval_duration if eval_duration else 0.0,
+            )
         yield ChatDoneChunk(
             prompt_eval_count=prompt_eval_count,
             eval_count=eval_count,

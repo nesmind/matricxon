@@ -3,6 +3,7 @@ from torch import nn
 
 from app.gguf.dequant.quantized_gemv_registry import GEMV_KERNELS
 from app.gguf.dequant.registry import QuantStrategyRegistry
+from app.native.gemm import NativeGemm
 
 
 class QuantizedLinear(nn.Module):
@@ -49,6 +50,11 @@ class QuantizedLinear(nn.Module):
         self._dtype = dtype
         self._raw = raw
         self._gemv_fn, _ = GEMV_KERNELS[ggml_type]
+        self._ggml_type = ggml_type
+        # Settings.gemv_backend == "native" and a C kernel exists for this type/shape: it handles
+        # both decode and prefill below. None otherwise - the Numba/dequant paths stay in charge.
+        native = NativeGemm.active()
+        self._native = native if native and native.supports(ggml_type, in_features) else None
         self._strategy = QuantStrategyRegistry().get(ggml_type)
         if bias is not None:
             self.bias = nn.Parameter(bias.to(dtype))
@@ -66,7 +72,16 @@ class QuantizedLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, _ = x.shape
-        if batch == 1 and seq_len == 1:
+        if self._native is not None:
+            y = self._native.matmul(
+                self._ggml_type,
+                self._raw,
+                x.reshape(-1, self.in_features),
+                self.out_features,
+                self.in_features,
+            )
+            y = y.to(self._dtype).reshape(batch, seq_len, self.out_features)
+        elif batch == 1 and seq_len == 1:
             # Real decode step - the fused GEMV kernel, never a full dequantized weight.
             x_flat = x.reshape(-1).to(torch.float32)
             y = self._gemv_fn(x_flat, self._raw, self.out_features, self.in_features)

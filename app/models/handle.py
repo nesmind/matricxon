@@ -38,6 +38,9 @@ class ModelHandle:
     size_bytes: int
     keep_alive_seconds: int
     last_used_at: float
+    # This model's own chat-template prompt builder (app.runtime.chat_template); None falls back
+    # to Mistral3PromptBuilder in chat_router.
+    prompt_builder: object | None = None
 
     @property
     def expires_at(self) -> float:

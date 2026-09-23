@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -77,6 +78,13 @@ class Settings(BaseSettings):
     # flag, let real measurement (not optimism) decide whether this becomes the default -  the
     # old path itself is never removed either way.
     enable_quantized_native_compute: bool = False
+    # Which kernels `QuantizedLinear` runs on (only matters with enable_quantized_native_compute):
+    # "numba" (default, today's float-based Numba GEMV) or "native" - matricxon's own C integer
+    # kernels (app/native/, see ROADMAP.md's "In-house native (C) quantized kernels"), built on
+    # first use with the system C compiler. "native" also takes over prefill for those tensors.
+    # Falls back to numba per tensor for a type/shape the C kernels don't cover, or entirely if
+    # the library can't be built.
+    gemv_backend: Literal["numba", "native"] = "numba"
 
     device: str = "cpu"
     # None means "use every CPU core" (os.cpu_count()) - PyTorch's own default heuristic measured

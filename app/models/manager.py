@@ -18,6 +18,7 @@ from app.models.load_dtype import (
 from app.models.memory_guard import ensure_enough_memory_to_load
 from app.models.tokenizer_dispatch import build_tokenizer
 from app.models.worker import ModelWorker
+from app.runtime.chat_template import PromptBuilderFactory
 
 
 class ModelManager:
@@ -256,6 +257,7 @@ class ModelManager:
                     loader, dtype=dtype, **quantized_native_kwargs
                 )
             tokenizer = build_tokenizer(loader.metadata)
+            prompt_builder = PromptBuilderFactory.for_metadata(loader.metadata)
         except Exception:
             loader.close()
             raise
@@ -274,4 +276,5 @@ class ModelManager:
                 else self._default_keep_alive_seconds
             ),
             last_used_at=now,
+            prompt_builder=prompt_builder,
         )
