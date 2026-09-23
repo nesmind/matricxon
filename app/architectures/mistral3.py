@@ -7,12 +7,13 @@ import torch.nn.functional as F
 from torch import nn
 
 from app.architectures.base import GenerationCancelledError, ModelArchitecture
-from app.architectures.layers import RMSNorm, unpermute_rope_rows
+from app.architectures.layers import RMSNorm
 from app.architectures.mistral3_layers import (  # noqa: F401 - re-exported for existing importers
     GroupedQueryAttention,
     Mistral3DecoderLayer,
     SwiGLUMLP,
 )
+from app.architectures.quantized_embedding import QuantizedEmbedding
 from app.architectures.rope import YarnRotaryEmbedding
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
@@ -44,13 +45,10 @@ class Mistral3TextArchitecture(ModelArchitecture):
         super().__init__()
         layer_dtypes = layer_dtypes or {}
         # See Settings.enable_quantized_native_compute's own docstring - a real, permanent,
-        # user-selectable choice, not a temporary rollout flag. `q_proj`/`k_proj` are
-        # deliberately excluded even when this is on: they need `unpermute_rope_rows`'s real
-        # row permutation (see `_materialize_weights` below), which the fused GEMV kernels don't
-        # support - real, scoped follow-up work, not silently dropped. `v_proj`/`o_proj`/
-        # `gate_proj`/`up_proj`/`down_proj` (5 of 7 real per-layer tensors, and the largest ones -
-        # confirmed against a real Ministral-3B pull: the 3 FFN tensors alone outweigh q/k/v/output
-        # combined) still capture most of the real RAM saving this exists for.
+        # user-selectable choice, not a temporary rollout flag. When on, all 7 per-layer
+        # projections go quantized-native - `q_proj`/`k_proj` with `unpermute_rope_rows` applied
+        # to their packed rows (see `PackedWeightLoading._load_projection`) - and so does the
+        # tied token_embd/lm_head table (`QuantizedEmbedding`).
         self._enable_quantized_native = enable_quantized_native
         self.n_embd = metadata.get_u32(metadata.arch_key("embedding_length"))
         self.n_head = metadata.get_u32(metadata.arch_key("attention.head_count"))
@@ -178,7 +176,11 @@ class Mistral3TextArchitecture(ModelArchitecture):
         self, loader: GGUFModelLoader, stop_check: Callable[[], bool] | None = None
     ) -> None:
         stage_started = time.monotonic()
-        self.token_embd.weight.copy_(loader.load_tensor("token_embd.weight"))
+        enabled = self._enable_quantized_native
+        embed_dtype = self.token_embd.weight.dtype
+        self.token_embd = self._load_token_embedding(loader, self.token_embd, embed_dtype, enabled)
+        if isinstance(self.token_embd, QuantizedEmbedding):
+            self.lm_head = self.token_embd.as_linear()
         self.output_norm.weight.copy_(loader.load_tensor("output_norm.weight"))
         logger.debug(
             "materializing: token_embd + output_norm in %.1fs",
@@ -192,16 +194,23 @@ class Mistral3TextArchitecture(ModelArchitecture):
             layer.post_attention_layernorm.weight.copy_(
                 loader.load_tensor(prefix + "ffn_norm.weight")
             )
-            # q_proj/k_proj always take today's path (real row permutation needed - see
-            # __init__'s own comment on why the fused GEMV kernels can't do that yet).
-            layer.self_attn.q_proj.weight.copy_(
-                unpermute_rope_rows(loader.load_tensor(prefix + "attn_q.weight"), self.n_head)
-            )
-            layer.self_attn.k_proj.weight.copy_(
-                unpermute_rope_rows(loader.load_tensor(prefix + "attn_k.weight"), self.n_head_kv)
-            )
             dtype = self._layer_dtypes[i]
-            enabled = self._enable_quantized_native
+            layer.self_attn.q_proj = self._load_projection(
+                loader,
+                prefix + "attn_q.weight",
+                layer.self_attn.q_proj,
+                dtype,
+                enabled,
+                rope_heads=self.n_head,
+            )
+            layer.self_attn.k_proj = self._load_projection(
+                loader,
+                prefix + "attn_k.weight",
+                layer.self_attn.k_proj,
+                dtype,
+                enabled,
+                rope_heads=self.n_head_kv,
+            )
             layer.self_attn.v_proj = self._load_projection(
                 loader, prefix + "attn_v.weight", layer.self_attn.v_proj, dtype, enabled
             )
@@ -277,8 +286,14 @@ class Mistral3TextArchitecture(ModelArchitecture):
                 raise GenerationCancelledError(f"stopped after layer {i + 1}/{self.n_layer}")
 
         stage_started = time.monotonic()
+        if self._last_logits_only:
+            x = x[:, -1:, :]
         x = self.output_norm(x.to(self.output_norm.weight.dtype))
-        logits = F.linear(x.to(self.token_embd.weight.dtype), self.token_embd.weight)
+        lm_head = getattr(self, "lm_head", None)
+        if lm_head is not None:
+            logits = lm_head(x)
+        else:
+            logits = F.linear(x.to(self.token_embd.weight.dtype), self.token_embd.weight)
         logger.debug(
             "output_norm + lm_head: %.1fms (logits shape=%s)",
             (time.monotonic() - stage_started) * 1000,

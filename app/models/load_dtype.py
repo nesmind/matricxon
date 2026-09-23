@@ -43,9 +43,11 @@ QUANTIZED_NATIVE_WIRED_ARCHITECTURES = frozenset(
 # The exact 5 (of 7) real per-layer tensor names Mistral3TextArchitecture._load_projection routes
 # through QuantizedLinear when quantized-native compute is enabled - kept in sync with that
 # method by hand for now (only one architecture is wired so far, see the plan behind this work);
-# `attn_q`/`attn_k` are excluded there (real row permutation needed, no fused-kernel support for
-# that yet) and stay excluded here for the same reason - estimating them as quantized-native-sized
-# when they're not would under-estimate real memory need, the one thing this guard must never do.
+# `attn_q`/`attn_k` are excluded from this shared base list because most architectures still load
+# them on the float path - estimating them as quantized-native-sized when they're not would
+# under-estimate real memory need, the one thing this guard must never do. mistral3/llama add them
+# (plus `token_embd`) below: those two apply `unpermute_rope_rows` to the packed rows and keep the
+# embedding table packed (`PackedWeightLoading`).
 _QUANTIZED_NATIVE_TENSOR_SUFFIXES = (
     "attn_v.weight",
     "attn_output.weight",
@@ -63,9 +65,11 @@ _QUANTIZED_NATIVE_TENSOR_SUFFIXES = (
 # comment - not silently included by an over-broad shared list). Reusing the broader
 # `_QUANTIZED_NATIVE_TENSOR_SUFFIXES` for every architecture would *under*-estimate real memory
 # need for whichever ones don't actually route q/k that way - the one thing this must never do.
+_PACKED_QK_AND_EMBEDDING = ("attn_q.weight", "attn_k.weight", "token_embd.weight")
+
 _QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH: dict[str, tuple[str, ...]] = {
-    "mistral3": _QUANTIZED_NATIVE_TENSOR_SUFFIXES,
-    "llama": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
+    "mistral3": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, *_PACKED_QK_AND_EMBEDDING),
+    "llama": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, *_PACKED_QK_AND_EMBEDDING, "output.weight"),
     "gemma4": (
         "attn_q.weight",
         "attn_k.weight",

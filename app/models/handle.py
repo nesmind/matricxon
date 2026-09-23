@@ -1,8 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.architectures.base import ModelArchitecture
 from app.models.worker import ModelWorker
 from app.runtime.gemma_tokenizer import Gemma4Tokenizer
+from app.runtime.prompt_cache import PromptCache
 from app.runtime.sentencepiece_tokenizer import SentencePieceTokenizer
 from app.runtime.tokenizer import GGUFTokenizer
 from app.runtime.wordpiece_tokenizer import WordPieceTokenizer
@@ -41,6 +42,9 @@ class ModelHandle:
     # This model's own chat-template prompt builder (app.runtime.chat_template); None falls back
     # to Mistral3PromptBuilder in chat_router.
     prompt_builder: object | None = None
+    # This model's KV cache kept between calls, so a chat's next turn only prefills its new tokens
+    # (see PromptCache). Freed with the handle when the model is evicted/unloaded.
+    prompt_cache: PromptCache = field(default_factory=PromptCache)
 
     @property
     def expires_at(self) -> float:

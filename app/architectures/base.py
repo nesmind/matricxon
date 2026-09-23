@@ -8,8 +8,7 @@ from typing import ClassVar
 import torch
 from torch import nn
 
-from app.architectures.quantized_linear import QuantizedLinear
-from app.gguf.dequant.quantized_gemv_registry import has_gemv_kernel
+from app.architectures.packed_weights import PackedWeightLoading
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
 from app.runtime.kv_cache import KVCache
@@ -25,7 +24,7 @@ class GenerationCancelledError(Exception):
     """
 
 
-class ModelArchitecture(nn.Module, ABC):
+class ModelArchitecture(PackedWeightLoading, nn.Module, ABC):
     """Base class for a model built directly from a GGUF file's weights.
 
     Hyperparameters are read generically off GGUF's `<arch>.*` metadata
@@ -47,6 +46,7 @@ class ModelArchitecture(nn.Module, ABC):
     #: rather than being re-parsed back out of each `supports()` method's
     #: comparison logic.
     NAME: ClassVar[str]
+    _last_logits_only: bool = False
 
     def __init__(self) -> None:
         super().__init__()
@@ -60,52 +60,6 @@ class ModelArchitecture(nn.Module, ABC):
         # model's *entire* lifetime, not just through materialization - see
         # `_ensure_materialized`'s own docstring for why this changes when the mmap gets closed.
         self._quantized_loader: GGUFModelLoader | None = None
-
-    def _mark_quantized_native_used(self, loader: GGUFModelLoader) -> None:
-        """Called once by `_materialize_weights` (idempotent - a real per-layer loop calls this
-        once per quantized projection, not once total) the first time it builds a real
-        `QuantizedLinear` from `loader` - tells `_ensure_materialized` to keep `loader`'s mmap
-        open past materialization instead of closing it, since a `QuantizedLinear`'s own forward
-        pass reads real raw bytes from it on every future call, not just this one."""
-        self._quantized_loader = loader
-
-    def _load_projection(
-        self,
-        loader: GGUFModelLoader,
-        tensor_name: str,
-        target: nn.Linear,
-        dtype: torch.dtype,
-        enabled: bool,
-        bias_tensor_name: str | None = None,
-    ) -> nn.Module:
-        """Shared by every architecture's `_materialize_weights` for a real per-layer projection
-        eligible for quantized-native compute (see `Settings.enable_quantized_native_compute`'s
-        own docstring) - moved here once `Mistral3TextArchitecture` (the reference implementation)
-        and later `llama`/`gemma4`/`phi2` all needed the identical real decision, rather than four
-        separate copies of it.
-
-        When `enabled` and `tensor_name`'s real GGUF type has a fused kernel
-        (`quantized_gemv_registry.has_gemv_kernel`), returns a real `QuantizedLinear` built
-        straight from this loader's raw bytes - `target` (the placeholder `nn.Linear` built in
-        `__init__`) is discarded, never touched. Otherwise (disabled, or a real type with no fused
-        kernel - e.g. an F16/F32 file) falls straight through to today's exact `.copy_()` path,
-        returning `target` unchanged. `bias_tensor_name`, when given, loads a real bias either way
-        (a `QuantizedLinear`'s own bias is always a real, small, fully-dequantized tensor - see
-        that class's own docstring for why only the main weight stays packed).
-        """
-        if enabled:
-            raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
-            if has_gemv_kernel(ggml_type):
-                self._mark_quantized_native_used(loader)
-                out_features, in_features = shape
-                bias = loader.load_tensor(bias_tensor_name) if bias_tensor_name else None
-                return QuantizedLinear(
-                    out_features, in_features, ggml_type, raw, bias=bias, dtype=dtype
-                )
-        target.weight.copy_(loader.load_tensor(tensor_name))
-        if bias_tensor_name is not None:
-            target.bias.copy_(loader.load_tensor(bias_tensor_name))
-        return target
 
     def build_cache(self, max_seq_len: int, dtype: torch.dtype) -> object:
         """Builds the cache object `ChatEngine.stream()` passes into every real `forward()` call
@@ -290,9 +244,7 @@ class ModelArchitecture(nn.Module, ABC):
         with self._materialize_lock:
             loader = self._pending_loader or self._quantized_loader
             if loader is not None:
-                for module in self.modules():
-                    if isinstance(module, QuantizedLinear):
-                        module.release()
+                self._release_packed_modules()
                 loader.close()
             self._pending_loader = None
             self._quantized_loader = None
@@ -304,8 +256,14 @@ class ModelArchitecture(nn.Module, ABC):
         position_ids: torch.Tensor | None = None,
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
+        last_logits_only: bool = False,
     ) -> torch.Tensor:
+        """`last_logits_only`: the caller only reads the last position's logits (`ChatEngine`),
+        so an architecture that honors `_last_logits_only` (llama, mistral3) runs its lm_head on
+        that one position - a prefill otherwise computes, then throws away, a full-vocabulary
+        row for every prompt token. Others ignore it and still return every position."""
         self._ensure_materialized(stop_check)
+        self._last_logits_only = last_logits_only
         return self._forward_impl(input_ids, kv_cache, position_ids, stop_check, image_embeddings)
 
     @abstractmethod

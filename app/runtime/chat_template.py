@@ -38,6 +38,25 @@ _MOONDREAM_TEMPLATE = (
 )
 _BUILTIN_TEMPLATES = {"moondream2": (_MOONDREAM_TEMPLATE, True)}
 
+# Llama 3.x's own template always opens with a system block ("Cutting Knowledge Date: December
+# 2023 / Today Date: ..."), even with no system message and no tools. Ollama's llama3 template
+# only writes a system block when there is a system message (or tools), so for "Say hi." Ollama
+# prefilled 13 tokens and Matricxon 40 (measured 2026-09-23) - three times the prefill work, which
+# on this project's CPU is most of a short reply's latency. Used instead of the GGUF template
+# whenever there are no tools; with tools, the model's own template (which Ollama's also matches
+# there) still renders the tool-calling instructions.
+_LLAMA3_COMPACT_TEMPLATE = (
+    "{{ bos_token }}"
+    "{% for m in messages %}"
+    "{{ '<|start_header_id|>' + ('ipython' if m.role == 'tool' else m.role)"
+    " + '<|end_header_id|>\n\n' + m.content + '<|eot_id|>' }}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}"
+    "{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}"
+    "{% endif %}"
+)
+_LLAMA3_TEMPLATE_MARKERS = ("<|start_header_id|>", "Cutting Knowledge Date")
+
 
 class PromptBuilder(Protocol):
     def build(self, messages: list[ChatMessage], tools: list[dict] | None = None) -> str: ...
@@ -51,7 +70,12 @@ class ChatTemplateError(MatricxonError):
 
 class ChatTemplatePromptBuilder:
     def __init__(
-        self, template: str, bos_token: str, eos_token: str, add_bos: bool = False
+        self,
+        template: str,
+        bos_token: str,
+        eos_token: str,
+        add_bos: bool = False,
+        no_tools_template: str | None = None,
     ) -> None:
         # Same Jinja settings Hugging Face's own apply_chat_template uses - templates are written
         # against them (whitespace control in particular).
@@ -60,6 +84,8 @@ class ChatTemplatePromptBuilder:
         env.globals["raise_exception"] = self._raise_exception
         env.globals["strftime_now"] = lambda fmt: datetime.now().strftime(fmt)
         self._template = env.from_string(template)
+        # Rendered instead of `template` when a request has no tools (see _LLAMA3_COMPACT_TEMPLATE).
+        self._no_tools_template = env.from_string(no_tools_template) if no_tools_template else None
         self._bos_token = bos_token
         self._eos_token = eos_token
         self._add_bos = add_bos
@@ -79,11 +105,13 @@ class ChatTemplatePromptBuilder:
             token_id = metadata.get(key)
             return tokens[token_id] if token_id is not None and token_id < len(tokens) else ""
 
+        is_llama3 = all(marker in template for marker in _LLAMA3_TEMPLATE_MARKERS)
         return cls(
             template,
             token_text("tokenizer.ggml.bos_token_id"),
             token_text("tokenizer.ggml.eos_token_id"),
             add_bos,
+            _LLAMA3_COMPACT_TEMPLATE if is_llama3 else None,
         )
 
     @staticmethod
@@ -111,8 +139,10 @@ class ChatTemplatePromptBuilder:
         return data
 
     def build(self, messages: list[ChatMessage], tools: list[dict] | None = None) -> str:
+        compact = self._no_tools_template is not None and not tools
+        template = self._no_tools_template if compact else self._template
         try:
-            return self._template.render(
+            return template.render(
                 messages=[self._message_dict(m) for m in messages],
                 tools=tools or None,
                 add_generation_prompt=True,

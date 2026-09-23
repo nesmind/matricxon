@@ -108,3 +108,39 @@ def test_image_markers_lead_the_content_for_vision_fusion() -> None:
     )
     prompt = builder.build([ChatMessage(role="user", content="What?", images=["a", "b"])])
     assert prompt == "[IMG][IMG]What?|What?"
+
+
+# The real Llama 3.x template's always-on system block, reduced to what the compact switch keys on.
+_LLAMA3_WITH_DATE_BLOCK = (
+    "{{- bos_token }}<|start_header_id|>system<|end_header_id|>\n\n"
+    "Cutting Knowledge Date: December 2023\n"
+    "{% if tools %}TOOLS{% endif %}<|eot_id|>"
+    "{% for m in messages %}"
+    "<|start_header_id|>{{ m.role }}<|end_header_id|>\n\n{{ m.content }}<|eot_id|>"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>\n\n{% endif %}"
+)
+
+
+def test_llama3_without_tools_skips_the_date_system_block_like_ollama() -> None:
+    builder = PromptBuilderFactory.for_metadata(_metadata("llama", _LLAMA3_WITH_DATE_BLOCK))
+
+    prompt = builder.build(
+        [ChatMessage(role="system", content="Be brief."), ChatMessage(role="user", content="Hi")]
+    )
+
+    assert prompt == (
+        "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nBe brief.<|eot_id|>"
+        "<|start_header_id|>user<|end_header_id|>\n\nHi<|eot_id|>"
+        "<|start_header_id|>assistant<|end_header_id|>\n\n"
+    )
+    assert builder.wants_bos(prompt) is False
+
+
+def test_llama3_with_tools_keeps_the_models_own_template() -> None:
+    builder = PromptBuilderFactory.for_metadata(_metadata("llama", _LLAMA3_WITH_DATE_BLOCK))
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
+
+    prompt = builder.build([ChatMessage(role="user", content="Hi")], tools=tools)
+
+    assert "Cutting Knowledge Date" in prompt and "TOOLS" in prompt

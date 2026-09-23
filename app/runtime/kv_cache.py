@@ -4,12 +4,12 @@ from app.server.errors import PromptTooLongError
 
 
 class KVCache:
-    """Pre-allocated per-layer key/value cache for one autoregressive
-    generation call.
+    """Pre-allocated per-layer key/value cache for autoregressive generation.
 
-    Lifetime is a single `/api/chat` call - pAIring resends full history
-    every call and matricxon has no cross-request prompt caching (see
-    ROADMAP.md), so every call starts from a fresh, empty cache.
+    pAIring resends the full history every call; `PromptCache`
+    (app/runtime/prompt_cache.py) keeps one of these alive between calls and
+    `truncate()`s it back to the prefix the next prompt shares, so only the
+    new tokens get computed.
 
     Writes are keyed by absolute position via `update()`, but the cache's
     committed length only moves forward on `advance()` - every layer in one
@@ -69,3 +69,10 @@ class KVCache:
 
     def advance(self, n_new_tokens: int) -> None:
         self._length += n_new_tokens
+
+    def truncate(self, length: int) -> None:
+        """Rolls the committed length back to `length` (<= the current length) - positions past it
+        are simply overwritten by the next `update()`, nothing needs clearing."""
+        if not 0 <= length <= self._length:
+            raise ValueError(f"can't truncate a cache of length {self._length} to {length}")
+        self._length = length

@@ -13,6 +13,18 @@ _GPT2_SPLIT_PATTERN = regex.compile(
     r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"
 )
 
+# Split patterns for other `tokenizer.ggml.pre` values, from llama.cpp's llama-vocab.cpp. Llama 3's
+# ("llama-bpe") keeps a newline run together (`\s*[\r\n]+`) and caps digit runs at 3 - under the
+# GPT-2 pattern "\n\nSay" split into two "\n" tokens instead of Llama 3's single "\n\n" token
+# (found 2026-09-23 comparing a chat prompt's token count with Ollama's). Any other value keeps the
+# GPT-2 pattern, which is today's behavior.
+_SPLIT_PATTERNS_BY_PRE = {
+    "llama-bpe": regex.compile(
+        r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?\p{L}+"
+        r"|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+    ),
+}
+
 _CONTROL_TOKEN_TYPE = 3
 
 
@@ -61,6 +73,9 @@ class GGUFTokenizer:
         merges: list[str] = metadata.require("tokenizer.ggml.merges")
         token_types: list[int] = metadata.require("tokenizer.ggml.token_type")
 
+        self._split_pattern = _SPLIT_PATTERNS_BY_PRE.get(
+            metadata.get("tokenizer.ggml.pre"), _GPT2_SPLIT_PATTERN
+        )
         self._token_to_id = {token: i for i, token in enumerate(tokens)}
         self._id_to_token = tokens
         self._control_tokens = regex.compile(
@@ -96,7 +111,7 @@ class GGUFTokenizer:
             if span in self._token_to_id and self._control_tokens.fullmatch(span):
                 token_ids.append(self._token_to_id[span])
                 continue
-            for chunk in _GPT2_SPLIT_PATTERN.findall(span):
+            for chunk in self._split_pattern.findall(span):
                 byte_chunk = "".join(self._byte_encoder[b] for b in chunk.encode("utf-8"))
                 token_ids.extend(self._token_to_id[piece] for piece in self._bpe(byte_chunk))
 

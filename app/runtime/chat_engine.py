@@ -6,18 +6,20 @@ import torch
 
 from app.architectures.base import GenerationCancelledError, ModelArchitecture
 from app.runtime.generation_request import GenerationRequest, GenerationResult
+from app.runtime.prompt_cache import PromptCache
 from app.runtime.sampler import Sampler
 
 logger = logging.getLogger(__name__)
 
 
 class ChatEngine:
-    """Runs one autoregressive generation call: prefill the prompt against a
-    fresh cache, then sample and decode one token at a time.
+    """Runs one autoregressive generation call: prefill the prompt, then sample and decode one
+    token at a time.
 
-    Lifetime is a single call - matricxon has no cross-request prompt
-    caching (see ROADMAP.md), so every call builds its own cache and
-    Sampler from scratch. `architecture` must be a decoder (built via its own
+    Lifetime is a single call, but the KV cache can outlive it: given the model's `PromptCache`
+    (see its docstring), prefill only computes the tokens past the prefix the previous call already
+    has in the cache. Without one, every call builds a fresh cache. The Sampler is always built from
+    scratch. `architecture` must be a decoder (built via its own
     `build_cache()` - see `ModelArchitecture.build_cache`'s own docstring for
     why this is a hook rather than a `KVCache` built directly here: every
     architecture but `nemotron_h`'s hybrid Mamba-2/attention/MLP layers gets
@@ -25,9 +27,15 @@ class ChatEngine:
     architectures go through EmbeddingEngine instead.
     """
 
-    def __init__(self, architecture: ModelArchitecture, eos_token_ids: set[int]) -> None:
+    def __init__(
+        self,
+        architecture: ModelArchitecture,
+        eos_token_ids: set[int],
+        prompt_cache: PromptCache | None = None,
+    ) -> None:
         self._architecture = architecture
         self._eos_token_ids = eos_token_ids
+        self._prompt_cache = prompt_cache or PromptCache()
 
     def stream(
         self, request: GenerationRequest, stop_check: Callable[[], bool] | None = None
@@ -47,28 +55,40 @@ class ChatEngine:
         """
         sampling = request.sampling
         model_dtype = next(self._architecture.parameters()).dtype
-        kv_cache = self._architecture.build_cache(max_seq_len=sampling.num_ctx, dtype=model_dtype)
+        prompt_ids = request.input_ids[0].tolist()
+        prompt_len = len(prompt_ids)
+        kv_cache, reused = self._prompt_cache.acquire(
+            self._architecture,
+            prompt_ids,
+            sampling.num_ctx,
+            model_dtype,
+            reusable=request.image_embeddings is None,
+        )
         sampler = Sampler(sampling)
-
-        input_ids = request.input_ids
-        prompt_len = input_ids.shape[1]
         max_new_tokens = (
             sampling.num_predict if sampling.num_predict >= 0 else sampling.num_ctx - prompt_len
         )
 
         try:
             with torch.no_grad():
-                position_ids = torch.arange(prompt_len, dtype=torch.long)
+                position_ids = torch.arange(reused, prompt_len, dtype=torch.long)
                 forward_started = time.monotonic()
                 logits = self._architecture.forward(
-                    input_ids, kv_cache, position_ids, stop_check, request.image_embeddings
+                    request.input_ids[:, reused:],
+                    kv_cache,
+                    position_ids,
+                    stop_check,
+                    request.image_embeddings,
+                    last_logits_only=True,
                 )
                 logger.info(
-                    "prefill forward: %d prompt tokens in %.2fs",
+                    "prefill forward: %d prompt tokens (%d reused from the cache) in %.2fs",
                     prompt_len,
+                    reused,
                     time.monotonic() - forward_started,
                 )
-                kv_cache.advance(prompt_len)
+                kv_cache.advance(prompt_len - reused)
+                self._prompt_cache.advanced(prompt_ids[reused:])
 
                 generated_ids: list[int] = []
                 for step in range(max_new_tokens):
@@ -82,7 +102,7 @@ class ChatEngine:
                     position_ids = torch.tensor([kv_cache.length], dtype=torch.long)
                     forward_started = time.monotonic()
                     logits = self._architecture.forward(
-                        next_input, kv_cache, position_ids, stop_check
+                        next_input, kv_cache, position_ids, stop_check, last_logits_only=True
                     )
                     logger.info(
                         "decode step %d forward: %.2fs",
@@ -90,6 +110,7 @@ class ChatEngine:
                         time.monotonic() - forward_started,
                     )
                     kv_cache.advance(1)
+                    self._prompt_cache.advanced([next_token])
         except GenerationCancelledError as exc:
             logger.info("generation cancelled mid-forward-pass: %s", exc)
             return

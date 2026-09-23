@@ -136,3 +136,18 @@ def test_quantized_linear_native_matches_numba_path(
 
     assert result.shape == expected.shape == (1, seq_len, out_f)
     assert torch.linalg.norm(result - expected) / torch.linalg.norm(expected) < 1e-2
+
+
+@pytest.mark.parametrize("ggml_type", list(_BLOCKS))
+def test_decode_kernel_is_bit_identical_to_the_prefill_path(gemm: NativeGemm, ggml_type: T) -> None:
+    """One token takes the fused per-token kernel (with SSSE3), several tokens the unpack-once
+    path - every token must come out bit-identical either way, or a reply would depend on whether
+    a token happened to be computed in prefill or decode."""
+    out_f, in_f = 9, 768
+    raw = memoryview(_weight(ggml_type, out_f, in_f, seed=77))
+    x = torch.randn(6, in_f, generator=torch.Generator().manual_seed(5))
+
+    prefill = gemm.matmul(ggml_type, raw, x, out_f, in_f)
+
+    for t in range(6):
+        assert torch.equal(gemm.matmul(ggml_type, raw, x[t : t + 1], out_f, in_f)[0], prefill[t])

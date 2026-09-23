@@ -84,7 +84,11 @@ class GenerateRequestHandler:
         prompt_eval_count: int,
         load_duration: float,
     ) -> AsyncIterator[dict]:
-        engine = ChatEngine(handle.architecture, eos_token_ids={handle.tokenizer.eos_token_id})
+        engine = ChatEngine(
+            handle.architecture,
+            eos_token_ids={handle.tokenizer.eos_token_id},
+            prompt_cache=handle.prompt_cache,
+        )
         decoder = IncrementalTextDecoder(handle.tokenizer)
         results = handle.worker.stream(lambda: engine.stream(generation_request))
 

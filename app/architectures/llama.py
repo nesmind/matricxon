@@ -7,8 +7,9 @@ import torch.nn.functional as F
 from torch import nn
 
 from app.architectures.base import GenerationCancelledError, ModelArchitecture
-from app.architectures.layers import RMSNorm, unpermute_rope_rows
+from app.architectures.layers import RMSNorm
 from app.architectures.mistral3_layers import Mistral3DecoderLayer
+from app.architectures.quantized_embedding import QuantizedEmbedding
 from app.architectures.rope import RotaryEmbedding
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
@@ -53,11 +54,11 @@ class LlamaArchitecture(ModelArchitecture):
         tied_embeddings: bool = False,
     ) -> None:
         super().__init__()
-        # See Mistral3TextArchitecture.__init__'s identical comment - q_proj/k_proj stay on
-        # today's path here too (same real unpermute_rope_rows need); v_proj/o_proj/gate_proj/
-        # up_proj/down_proj go quantized-native when this is on. `lm_head` does too, but only for
-        # a real (non-tied) checkpoint - a tied one has no separate lm_head tensor to route,
-        # exactly like mistral3.
+        # When this is on, every per-layer projection goes quantized-native - q_proj/k_proj too,
+        # with unpermute_rope_rows applied to their packed rows (see
+        # PackedWeightLoading._load_projection) - and so does token_embd (QuantizedEmbedding).
+        # `lm_head` is `output.weight` for an untied checkpoint, or that same packed embedding
+        # table for a tied one (QuantizedEmbedding.as_linear), exactly like mistral3.
         self._enable_quantized_native = enable_quantized_native
         self._dtype = dtype
         self._tied_embeddings = tied_embeddings
@@ -145,12 +146,15 @@ class LlamaArchitecture(ModelArchitecture):
         self, loader: GGUFModelLoader, stop_check: Callable[[], bool] | None = None
     ) -> None:
         stage_started = time.monotonic()
-        self.token_embd.weight.copy_(loader.load_tensor("token_embd.weight"))
+        enabled = self._enable_quantized_native
+        self.token_embd = self._load_token_embedding(loader, self.token_embd, self._dtype, enabled)
         self.output_norm.weight.copy_(loader.load_tensor("output_norm.weight"))
         if not self._tied_embeddings:
             self.lm_head = self._load_projection(
-                loader, "output.weight", self.lm_head, self._dtype, self._enable_quantized_native
+                loader, "output.weight", self.lm_head, self._dtype, enabled
             )
+        elif isinstance(self.token_embd, QuantizedEmbedding):
+            self.lm_head = self.token_embd.as_linear()
         logger.debug(
             "materializing: token_embd + output_norm + lm_head in %.1fs",
             time.monotonic() - stage_started,
@@ -163,14 +167,22 @@ class LlamaArchitecture(ModelArchitecture):
             layer.post_attention_layernorm.weight.copy_(
                 loader.load_tensor(prefix + "ffn_norm.weight")
             )
-            # q_proj/k_proj always take today's path - see __init__'s own comment.
-            layer.self_attn.q_proj.weight.copy_(
-                unpermute_rope_rows(loader.load_tensor(prefix + "attn_q.weight"), self.n_head)
+            layer.self_attn.q_proj = self._load_projection(
+                loader,
+                prefix + "attn_q.weight",
+                layer.self_attn.q_proj,
+                self._dtype,
+                enabled,
+                rope_heads=self.n_head,
             )
-            layer.self_attn.k_proj.weight.copy_(
-                unpermute_rope_rows(loader.load_tensor(prefix + "attn_k.weight"), self.n_head_kv)
+            layer.self_attn.k_proj = self._load_projection(
+                loader,
+                prefix + "attn_k.weight",
+                layer.self_attn.k_proj,
+                self._dtype,
+                enabled,
+                rope_heads=self.n_head_kv,
             )
-            enabled = self._enable_quantized_native
             layer.self_attn.v_proj = self._load_projection(
                 loader, prefix + "attn_v.weight", layer.self_attn.v_proj, self._dtype, enabled
             )
@@ -246,11 +258,14 @@ class LlamaArchitecture(ModelArchitecture):
                 raise GenerationCancelledError(f"stopped after layer {i + 1}/{self.n_layer}")
 
         stage_started = time.monotonic()
+        if self._last_logits_only:
+            x = x[:, -1:, :]
         x = self.output_norm(x)
-        if self._tied_embeddings:
-            logits = F.linear(x.to(self.token_embd.weight.dtype), self.token_embd.weight)
+        lm_head = getattr(self, "lm_head", None)
+        if lm_head is not None:
+            logits = lm_head(x)
         else:
-            logits = self.lm_head(x)
+            logits = F.linear(x.to(self.token_embd.weight.dtype), self.token_embd.weight)
         logger.debug(
             "output_norm + lm_head: %.1fms (logits shape=%s)",
             (time.monotonic() - stage_started) * 1000,
