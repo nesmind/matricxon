@@ -220,6 +220,47 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 ```
 
+### Setup on macOS
+
+pAIring's "Install from GitHub" button only runs on Linux, so on a Mac Matricxon is installed by
+hand. Mac support for the native C kernels was added after `v1.2`, so use a newer tag, or `main`.
+It follows Apple's and Homebrew's documented compiler flags.
+
+**Quick way:** clone the repo, then run the install script. It does steps 1-3 below: it checks the
+prerequisites, offers to install `libomp`, creates `.venv`, installs the dependencies, writes a
+starter `.env` if there isn't one, and builds the native kernels once so you see straight away
+whether they built.
+
+```bash
+git clone https://github.com/nesmind/matricxon.git
+cd matricxon
+scripts/install_mac.sh          # add --yes to install libomp without asking
+scripts/start.sh
+```
+
+**Step by step** (what the script does):
+
+1. **Prerequisites**: Xcode's command-line tools, which provide `git` and the C compiler `cc`,
+   and Python 3.11 or newer:
+
+   ```bash
+   xcode-select --install
+   python3 --version            # 3.11+; otherwise: brew install python@3.13
+   ```
+
+   Optional but recommended: `brew install libomp`. With it the native kernels use every CPU core
+   you allow; without it they still build, but run on a single thread.
+
+2. **Get the code and install the dependencies:**
+
+   ```bash
+   git clone https://github.com/nesmind/matricxon.git
+   cd matricxon
+   python3 -m venv .venv
+   .venv/bin/pip install -r requirements.txt
+   ```
+
+
 ## Running
 
 matricxon defaults to port **8420**

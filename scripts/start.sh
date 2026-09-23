@@ -20,19 +20,36 @@ fi
 
 rm -f "$PID_FILE"
 
-LAUNCHER=()
-command -v setsid >/dev/null 2>&1 && LAUNCHER=(setsid)
+if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+    echo "port $PORT is already in use - is another matricxon running (e.g. pAIring's external/matricxon)?"
+    echo "Stop that one first, or start this one on another port: MATRICXON_PORT=8421 scripts/start.sh"
+    exit 1
+fi
+
+if command -v setsid >/dev/null 2>&1; then
+    LAUNCHER=(setsid)
+else
+    LAUNCHER=(nohup)
+fi
 
 MATRICXON_PID_FILE="$PROJECT_DIR/$PID_FILE" "${LAUNCHER[@]}" .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT" >> "$LOG_FILE" 2>&1 < /dev/null &
+SERVER_PID=$!
 disown
 
 for _ in $(seq 1 40); do
     [[ -f "$PID_FILE" ]] && break
+    # Died during startup (bad config, port taken after all, import error...) - stop waiting.
+    kill -0 "$SERVER_PID" 2>/dev/null || break
     sleep 0.25
 done
 
 if [[ ! -f "$PID_FILE" ]]; then
-    echo "matricxon failed to start within 10s — check $LOG_FILE"
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo "matricxon did not finish starting within 10s (pid $SERVER_PID still running) - check $LOG_FILE"
+    else
+        echo "matricxon exited during startup - last lines of $LOG_FILE:"
+        tail -n 5 "$LOG_FILE"
+    fi
     exit 1
 fi
 
