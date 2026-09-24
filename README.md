@@ -1,8 +1,8 @@
-# matricxon
+# Matricxon
 
 A self-hosted, from-scratch Python + PyTorch inference runtime that implements
 Ollama's HTTP API closely enough to be a drop-in replacement for
-[pAIring]
+pAIring.
 
 Intended for ML students who want to learn how inference runtimes work
 under the hood, and for private/personal use. **Not ready for production
