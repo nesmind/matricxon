@@ -185,6 +185,17 @@ def estimate_quantized_native_bytes(
     return total
 
 
+# Keyed by (path, mtime, size, ...) rather than just path so a file replaced in place (a re-pull
+# landing at the same path) invalidates automatically instead of serving a stale answer forever -
+# cheap to check (a single os.stat) next to the real cost this avoids, GGUFReader parsing the
+# tensor_infos section fresh on every call. Added because GET /api/tags recomputes this for every
+# installed model on every single request with no caching at all (confirmed live, 2026-09-27: with
+# several models installed this made /api/tags slow enough, under GIL contention from an in-flight
+# chat/model-load on the same process, to intermittently blow past pAIring's own request timeout
+# and surface as a bodyless "Service Unavailable" even though the machine itself was idle).
+_ram_estimate_cache: dict[tuple[str, int, int, float, bool, str], float] = {}
+
+
 def estimate_ram_gb(
     gguf_path: str | Path,
     safety_margin: float,
@@ -209,12 +220,32 @@ def estimate_ram_gb(
     `quantized_native_enabled` closes a second, later real gap (2026-09-21): this used to always
     call `exact_bf16_bytes` regardless of `Settings.enable_quantized_native_compute`, so the
     displayed number never moved even once that real, lower-RAM path existed and was turned on -
-    the caller (see show_router.py/tags_router.py) passes the live setting through."""
-    tensor_infos = GGUFReader(Path(gguf_path)).read().tensor_infos
+    the caller (see show_router.py/tags_router.py) passes the live setting through.
+
+    Cached per-file (see `_ram_estimate_cache` above) - the GGUFReader parse this does is the
+    expensive part, and a file's own tensor shapes never change without the file itself
+    changing."""
+    path = Path(gguf_path)
+    stat = path.stat()
+    cache_key = (
+        str(path),
+        stat.st_mtime_ns,
+        stat.st_size,
+        safety_margin,
+        quantized_native_enabled,
+        architecture_name,
+    )
+    cached = _ram_estimate_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    tensor_infos = GGUFReader(path).read().tensor_infos
     real_bytes = estimate_quantized_native_bytes(
         tensor_infos, quantized_native_enabled, architecture_name
     )
-    return round(real_bytes * safety_margin / 1e9, 2)
+    result = round(real_bytes * safety_margin / 1e9, 2)
+    _ram_estimate_cache[cache_key] = result
+    return result
 
 
 def group_bytes_by_layer(tensor_infos: list[GGUFTensorInfo]) -> dict[str, int]:

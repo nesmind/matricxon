@@ -1,5 +1,9 @@
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 
 class MatricxonError(Exception):
@@ -74,3 +78,17 @@ class ErrorHandlerRegistrar:
         @app.exception_handler(MatricxonError)
         async def handle_matricxon_error(_: Request, exc: MatricxonError) -> JSONResponse:
             return JSONResponse(status_code=exc.status_code, content={"error": exc.message})
+
+        # Catches anything that isn't one of our own typed errors above - a real bug (a bad GGUF
+        # metadata shape, a mmap lifecycle issue, etc.) that would otherwise fall through to
+        # Starlette's own ServerErrorMiddleware, which returns a bare, non-JSON "Internal Server
+        # Error" body (confirmed live, 2026-09-27: pAIring's own matricxon_client.py expects
+        # `{"error": ...}` and had nothing to parse, surfacing as "Matricxon returned HTTP 500
+        # with no error detail" even though the real traceback was sitting right here in this
+        # server's own log). Logged explicitly with the traceback before responding, since
+        # registering this handler intercepts the exception before it would otherwise reach
+        # Starlette's own default logging.
+        @app.exception_handler(Exception)
+        async def handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
+            logger.exception("Unhandled exception in request")
+            return JSONResponse(status_code=500, content={"error": f"Internal error: {exc}"})

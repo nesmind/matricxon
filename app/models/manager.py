@@ -257,7 +257,7 @@ class ModelManager:
                     loader, dtype=dtype, **quantized_native_kwargs
                 )
             tokenizer = build_tokenizer(loader.metadata)
-            prompt_builder = PromptBuilderFactory.for_metadata(loader.metadata)
+            prompt_builder = PromptBuilderFactory.for_metadata(loader.metadata, tag=tag)
         except Exception:
             loader.close()
             raise

@@ -9,8 +9,13 @@ from app.runtime.chat_template import (
     ChatTemplateError,
     ChatTemplatePromptBuilder,
     PromptBuilderFactory,
+    _has_confirmed_template,
 )
-from app.runtime.prompt_builder import Mistral3PromptBuilder
+from app.runtime.prompt_builder import (
+    LegacyMistralPromptBuilder,
+    Mistral3PromptBuilder,
+    VicunaPromptBuilder,
+)
 from app.schemas.chat import ChatMessage
 
 # A trimmed-down version of Llama 3's real template structure.
@@ -71,9 +76,44 @@ def test_mistral3_keeps_its_hand_verified_builder() -> None:
     assert isinstance(builder, Mistral3PromptBuilder)
 
 
-def test_a_model_without_a_template_falls_back_to_the_old_builder() -> None:
+def test_no_template_and_not_mistral3_architecture_gets_the_legacy_builder() -> None:
+    """Not Mistral3PromptBuilder - that format's [SYSTEM_PROMPT] tag is Mistral3-tokenizer-only
+    and broke a real older Mistral fine-tune the same way [INST]-for-everything broke Llama 3.2
+    (see app/runtime/prompt_builder.py:LegacyMistralPromptBuilder's own docstring)."""
     builder = PromptBuilderFactory.for_metadata(_metadata("phi2", None))
-    assert isinstance(builder, Mistral3PromptBuilder)
+    assert isinstance(builder, LegacyMistralPromptBuilder)
+
+
+_LLAVA_VICUNA_TAG = "hf.co/second-state/Llava-v1.6-Vicuna-7B-GGUF:llava-v1.6-vicuna-7b-Q4_K_M"
+
+
+def test_a_vicuna_tag_gets_the_vicuna_builder_instead_of_the_legacy_guess() -> None:
+    """A tag-name match, not metadata - llava-v1.6-vicuna-7b's own GGUF gives no metadata-only
+    way to detect this (see VicunaPromptBuilder's own docstring: LegacyMistralPromptBuilder's
+    Mistral-shaped guess produced a real, empty, immediate-EOS reply for this exact model)."""
+    builder = PromptBuilderFactory.for_metadata(_metadata("llama", None), tag=_LLAVA_VICUNA_TAG)
+    assert isinstance(builder, VicunaPromptBuilder)
+
+
+def test_vicuna_tag_match_is_case_insensitive() -> None:
+    tag = "hf.co/org/repo:VICUNA-13b"
+    builder = PromptBuilderFactory.for_metadata(_metadata("llama", None), tag=tag)
+    assert isinstance(builder, VicunaPromptBuilder)
+
+
+def test_a_non_vicuna_tag_still_gets_the_legacy_builder() -> None:
+    tag = "hf.co/org/repo:some-model"
+    builder = PromptBuilderFactory.for_metadata(_metadata("llama", None), tag=tag)
+    assert isinstance(builder, LegacyMistralPromptBuilder)
+
+
+def test_has_confirmed_template_is_true_for_a_vicuna_tag_match() -> None:
+    assert _has_confirmed_template(_metadata("llama", None), tag=_LLAVA_VICUNA_TAG) is True
+
+
+def test_has_confirmed_template_is_false_without_a_vicuna_tag_match() -> None:
+    tag = "hf.co/org/some-model:Q4_K_M"
+    assert _has_confirmed_template(_metadata("llama", None), tag=tag) is False
 
 
 def test_raise_exception_in_a_template_becomes_a_400_error() -> None:

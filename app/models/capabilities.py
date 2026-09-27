@@ -1,4 +1,5 @@
 from app.models.installed_model import InstalledModel
+from app.runtime.chat_template import has_confirmed_chat_format
 
 _THINKING_MARKERS = ("thinking", "reasoning")
 _ENCODER_ARCHITECTURES = ("bert", "nomic-bert")
@@ -71,8 +72,20 @@ def effective_capabilities(installed: InstalledModel, has_paired_mmproj: bool) -
     "vision" into the stored sidecar at pull time would miss it for every model already
     installed before its sibling exists - this is computed fresh by the caller (see
     `tags_router.py`/`show_router.py`) against the *current* catalog state instead.
-    """
+
+    Also adds `"chat_format_unverified"` for a "completion"-capable model with no confirmed real
+    chat template (see `app.runtime.chat_template.has_confirmed_chat_format` - True for a genuine
+    mistral3 model or one with its own real/builtin template, False for anything landing in
+    `LegacyMistralPromptBuilder`'s generic guess). Surfaced so a caller (pAIring's model list) can
+    flag "we don't actually know this model's real instruction format" - real, confirmed-live
+    gap this closes (2026-09-27): Hebrew-Mistral-7B-Q5_K_M produced incoherent, non-chat-like
+    output no matter which prompt format it was given, with nothing distinguishing it from a
+    normal, well-behaved chat model in the model list."""
+    capabilities = installed.capabilities
     has_real_fusion = has_paired_mmproj and installed.architecture in _VISION_FUSION_ARCHITECTURES
-    if has_real_fusion and "vision" not in installed.capabilities:
-        return [*installed.capabilities, "vision"]
-    return installed.capabilities
+    if has_real_fusion and "vision" not in capabilities:
+        capabilities = [*capabilities, "vision"]
+    format_confirmed = has_confirmed_chat_format(installed.path, tag=installed.tag)
+    if "completion" in capabilities and not format_confirmed:
+        capabilities = [*capabilities, "chat_format_unverified"]
+    return capabilities

@@ -6,22 +6,44 @@ answered with empty replies or echoed `</s>[INST]...[/INST]` turns as plain text
 emitted its real `<|eot_id|>` stop token.
 
 `mistral3` keeps `Mistral3PromptBuilder` (hand-verified against its real template, including
-tool calling); a model without any template falls back to it too, which is exactly the old
-behavior, so nothing that worked before changes.
+tool calling). A model without any template and without that real mistral3 architecture falls
+back to `LegacyMistralPromptBuilder` instead (see its own docstring) - Mistral3PromptBuilder's
+`[SYSTEM_PROMPT]` tag is specific to Mistral's newer tokenizer and broke older Mistral-based
+fine-tunes the same way `[INST]`-for-everything broke Llama 3.2 (Hebrew-Mistral-7B-Q5_K_M,
+2026-09-27: echoed `[/SYSTEM_PROMPT]` back and invented its own closing tags). A tag/filename
+matching "vicuna" gets `VicunaPromptBuilder` instead of that same Legacy-Mistral guess - its own
+GGUF metadata gives no way to detect the format otherwise (llava-v1.6-vicuna-7b, 2026-09-27:
+`general.architecture == "llama"`, no chat_template, `general.name == "LLaMA v2"` -
+indistinguishable from countless other llama-arch models by metadata alone - and the wrong
+Mistral-shaped guess produced a real, empty, immediate-EOS reply once a real system prompt was
+included).
 """
 
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 from jinja2 import TemplateError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from app.gguf.metadata import GGUFMetadata
-from app.runtime.prompt_builder import Mistral3PromptBuilder
+from app.gguf.reader import GGUFReader
+from app.runtime.prompt_builder import (
+    LegacyMistralPromptBuilder,
+    Mistral3PromptBuilder,
+    VicunaPromptBuilder,
+)
 from app.runtime.vision_fusion import IMAGE_MARKER
 from app.schemas.chat import ChatMessage
 from app.server.errors import MatricxonError
+
+# Matched against a model's own tag/filename (see PromptBuilderFactory.for_metadata) - a Vicuna
+# fine-tune's GGUF metadata gives no way to detect this (confirmed live, 2026-09-27,
+# llava-v1.6-vicuna-7b: no tokenizer.chat_template, general.name = "LLaMA v2", general.architecture
+# = "llama" same as countless non-Vicuna llama-arch models), so this is a name-based heuristic,
+# same spirit as app.models.capabilities._THINKING_MARKERS' own repo/filename substring match.
+_VICUNA_TAG_MARKER = "vicuna"
 
 # Built-in templates for real models whose GGUF ships no `tokenizer.chat_template`, keyed by
 # `general.name`: (template, always add BOS). moondream2's own reference format
@@ -161,9 +183,61 @@ class ChatTemplatePromptBuilder:
 
 class PromptBuilderFactory:
     @staticmethod
-    def for_metadata(metadata: GGUFMetadata) -> PromptBuilder:
-        if metadata.architecture != "mistral3":
-            builder = ChatTemplatePromptBuilder.from_metadata(metadata)
-            if builder is not None:
-                return builder
-        return Mistral3PromptBuilder()
+    def for_metadata(metadata: GGUFMetadata, tag: str = "") -> PromptBuilder:
+        if metadata.architecture == "mistral3":
+            return Mistral3PromptBuilder()
+        builder = ChatTemplatePromptBuilder.from_metadata(metadata)
+        if builder is not None:
+            return builder
+        if _VICUNA_TAG_MARKER in tag.lower():
+            return VicunaPromptBuilder()
+        # No template and not a real mistral3-tokenizer model - e.g. an older Mistral-7B
+        # v0.1/v0.2 fine-tune converted as general.architecture=="llama" with no chat_template
+        # metadata (see LegacyMistralPromptBuilder's own docstring: Mistral3PromptBuilder's
+        # [SYSTEM_PROMPT] tag isn't something these ever saw in training).
+        return LegacyMistralPromptBuilder()
+
+
+def _has_confirmed_template(metadata: GGUFMetadata, tag: str = "") -> bool:
+    """True for exactly the cases PromptBuilderFactory.for_metadata above actually trusts - real
+    mistral3, a real/builtin chat template, or a tag-matched Vicuna model - False whenever it
+    would fall back to LegacyMistralPromptBuilder, our best-effort guess for a model we have no
+    real confirmation about. Kept in sync with for_metadata by hand (a few lines of duplication,
+    not worth a forced shared code path) rather than by construction - if that logic changes,
+    change this too."""
+    return (
+        metadata.architecture == "mistral3"
+        or ChatTemplatePromptBuilder.from_metadata(metadata) is not None
+        or _VICUNA_TAG_MARKER in tag.lower()
+    )
+
+
+# Keyed by (path, mtime, size) - same reasoning and pattern as
+# app.models.load_dtype.estimate_ram_gb's own cache: this parses the same GGUF header
+# has_confirmed_chat_format below is called against on every GET /api/tags, and a file's own
+# metadata never changes without the file itself changing.
+_confirmed_chat_format_cache: dict[tuple[str, int, int, str], bool] = {}
+
+
+def has_confirmed_chat_format(gguf_path: str | Path, tag: str = "") -> bool:
+    """Whether `gguf_path` gets a chat template we actually know matches its real training format
+    (see _has_confirmed_template above), for a caller that only has a path, not an already-parsed
+    GGUFMetadata (see app.models.capabilities.effective_capabilities, the "chat_format_unverified"
+    capability this powers) - PromptBuilderFactory.for_metadata itself never needs this since its
+    caller already has the metadata parsed for other reasons.
+
+    False is not proof the model is actually a base/non-chat model - only that Matricxon has no
+    real confirmation of its chat format and is falling back to a generic guess, which a real,
+    confirmed-live case (Hebrew-Mistral-7B-Q5_K_M, 2026-09-27) showed can still produce incoherent,
+    non-chat-like output regardless of which guess is used."""
+    path = Path(gguf_path)
+    stat = path.stat()
+    cache_key = (str(path), stat.st_mtime_ns, stat.st_size, tag)
+    cached = _confirmed_chat_format_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    metadata = GGUFReader(path).read().metadata
+    result = _has_confirmed_template(metadata, tag)
+    _confirmed_chat_format_cache[cache_key] = result
+    return result
