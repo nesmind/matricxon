@@ -36,6 +36,18 @@ def _f16(rng: random.Random, lo: float, hi: float) -> bytes:
     return struct.pack("<e", rng.uniform(lo, hi))
 
 
+def _iq1m_sc(rng: random.Random) -> bytes:
+    """IQ1_M has no `d` field - the scale is reassembled from the top nibble of each `sc` word
+    (see mx_vec_dot_iq1_m_f32). Forcing sc2/sc3's top nibble keeps the reassembled fp16 exponent
+    away from 0/31 (denormal/inf/nan) so the reference comparison stays finite; sc0/sc1's top
+    nibbles and every word's low 12 bits (the real dl1/dl2 fields) stay fully random."""
+    sc0 = rng.randrange(0x10000)
+    sc1 = rng.randrange(0x10000)
+    sc2 = (rng.randrange(0x10000) & 0x0FFF) | 0x3000
+    sc3 = (rng.randrange(0x10000) & 0x0FFF) | 0x3000
+    return struct.pack("<4H", sc0, sc1, sc2, sc3)
+
+
 # One random, structurally valid block per type (field order = ggml's struct / *Strategy).
 _BLOCKS = {
     T.Q3_K: lambda r: _rand(r, 32 + 64 + 12) + _f16(r, 0.01, 1.0),
@@ -47,8 +59,19 @@ _BLOCKS = {
         + _f16(r, 0.01, 1.0)
     ),
     T.Q8_0: lambda r: _f16(r, 0.01, 1.0) + _rand(r, 32),
+    T.IQ4_NL: lambda r: _f16(r, 0.01, 1.0) + _rand(r, 16),
+    T.IQ4_XS: lambda r: _f16(r, 0.01, 1.0) + _rand(r, 2 + 4 + 128),
+    T.TQ1_0: lambda r: _rand(r, 48 + 4) + _f16(r, 0.01, 1.0),
+    T.TQ2_0: lambda r: _rand(r, 64) + _f16(r, 0.01, 1.0),
+    T.IQ2_XXS: lambda r: _f16(r, 0.01, 1.0) + _rand(r, 64),
+    T.IQ2_XS: lambda r: _f16(r, 0.01, 1.0) + _rand(r, 64 + 8),
+    T.IQ2_S: lambda r: _f16(r, 0.01, 1.0) + _rand(r, 32 + 32 + 8 + 8),
+    T.IQ3_XXS: lambda r: _f16(r, 0.01, 1.0) + _rand(r, 96),
+    T.IQ3_S: lambda r: _f16(r, 0.01, 1.0) + _rand(r, 64 + 8 + 32 + 4),
+    T.IQ1_S: lambda r: _f16(r, 0.01, 1.0) + _rand(r, 32 + 16),
+    T.IQ1_M: lambda r: _rand(r, 32 + 16) + _iq1m_sc(r),
 }
-_BLOCKS_PER_256 = {T.Q8_0: 8}
+_BLOCKS_PER_256 = {T.Q8_0: 8, T.IQ4_NL: 8}
 
 
 @pytest.fixture(scope="module")
@@ -109,6 +132,19 @@ def test_supports_only_implemented_types_and_block_multiples(gemm: NativeGemm) -
     assert gemm.supports(T.Q4_K, 3072)
     assert not gemm.supports(T.Q4_K, 3000)  # not a multiple of 256
     assert not gemm.supports(T.Q2_K, 3072)  # no native kernel yet - numba keeps it
+    # IQ4_NL's real block is 32, not 256 like every other native-kernel type here.
+    assert gemm.supports(T.IQ4_NL, 3072)
+    assert not gemm.supports(T.IQ4_NL, 3000)  # not a multiple of 32
+    assert gemm.supports(T.IQ4_XS, 3072)
+    assert gemm.supports(T.TQ1_0, 3072)
+    assert gemm.supports(T.TQ2_0, 3072)
+    assert gemm.supports(T.IQ2_XXS, 3072)
+    assert gemm.supports(T.IQ2_XS, 3072)
+    assert gemm.supports(T.IQ2_S, 3072)
+    assert gemm.supports(T.IQ3_XXS, 3072)
+    assert gemm.supports(T.IQ3_S, 3072)
+    assert gemm.supports(T.IQ1_S, 3072)
+    assert gemm.supports(T.IQ1_M, 3072)
 
 
 def test_configure_numba_leaves_native_inactive() -> None:

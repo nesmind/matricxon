@@ -19,13 +19,18 @@ typedef float (*mx_vec_dot_fn)(const uint8_t *row, const mx_block_q8_k *y, int n
 #endif
 
 /* How one GGML type is computed: K-quants set `unpack` (and `has_min` for Q4_K/Q5_K), plus
- * `fused` where SSSE3 is available; Q8_0 sets only `dot`. */
+ * `fused` where SSSE3 is available; Q8_0 sets only `dot`. Every I-quant/T-quant (IQ4_NL/XS,
+ * TQ1_0/TQ2_0, the IQ1/IQ2/IQ3 grid family) sets only `dot_f32` (see mx_common.h) -
+ * `block_size` defaults to MX_QK_K (every K-quant/Q8_0 case below overrides it to whatever its
+ * own real block size actually is; IQ4_NL's real block is 32, not 256). */
 typedef struct {
     size_t row_bytes;
+    int block_size;
     mx_unpack_fn unpack;
     int has_min;
     mx_vec_dot_fn fused;
     mx_vec_dot_fn dot;
+    mx_vec_dot_f32_fn dot_f32;
 } mx_kernel;
 
 #if defined(__SSSE3__)
@@ -36,11 +41,13 @@ typedef struct {
 
 /* Fills `k` for one GGML type; 0 when unsupported. */
 static int mx_kernel_for(int ggml_type, int in_features, mx_kernel *k) {
-    const size_t nb = (size_t)in_features / MX_QK_K;
+    k->block_size = MX_QK_K;
     k->unpack = NULL;
     k->has_min = 0;
     k->fused = NULL;
     k->dot = NULL;
+    k->dot_f32 = NULL;
+    const size_t nb = (size_t)in_features / MX_QK_K;
     switch (ggml_type) {
     case MX_TYPE_Q3_K:
         k->row_bytes = nb * MX_Q3_K_BYTES;
@@ -68,6 +75,51 @@ static int mx_kernel_for(int ggml_type, int in_features, mx_kernel *k) {
         k->row_bytes = nb * (MX_QK_K / MX_QK8_0) * MX_Q8_0_BYTES;
         k->dot = mx_vec_dot_q8_0;
         return 1;
+    case MX_TYPE_IQ4_NL:
+        k->block_size = MX_IQ4_NL_BLOCK;
+        k->row_bytes = (size_t)(in_features / MX_IQ4_NL_BLOCK) * MX_IQ4_NL_BYTES;
+        k->dot_f32 = mx_vec_dot_iq4_nl_f32;
+        return 1;
+    case MX_TYPE_IQ4_XS:
+        k->row_bytes = nb * MX_IQ4_XS_BYTES;
+        k->dot_f32 = mx_vec_dot_iq4_xs_f32;
+        return 1;
+    case MX_TYPE_TQ1_0:
+        k->row_bytes = nb * MX_TQ1_0_BYTES;
+        k->dot_f32 = mx_vec_dot_tq1_0_f32;
+        return 1;
+    case MX_TYPE_TQ2_0:
+        k->row_bytes = nb * MX_TQ2_0_BYTES;
+        k->dot_f32 = mx_vec_dot_tq2_0_f32;
+        return 1;
+    case MX_TYPE_IQ2_XXS:
+        k->row_bytes = nb * MX_IQ2_XXS_BYTES;
+        k->dot_f32 = mx_vec_dot_iq2_xxs_f32;
+        return 1;
+    case MX_TYPE_IQ2_XS:
+        k->row_bytes = nb * MX_IQ2_XS_BYTES;
+        k->dot_f32 = mx_vec_dot_iq2_xs_f32;
+        return 1;
+    case MX_TYPE_IQ2_S:
+        k->row_bytes = nb * MX_IQ2_S_BYTES;
+        k->dot_f32 = mx_vec_dot_iq2_s_f32;
+        return 1;
+    case MX_TYPE_IQ3_XXS:
+        k->row_bytes = nb * MX_IQ3_XXS_BYTES;
+        k->dot_f32 = mx_vec_dot_iq3_xxs_f32;
+        return 1;
+    case MX_TYPE_IQ3_S:
+        k->row_bytes = nb * MX_IQ3_S_BYTES;
+        k->dot_f32 = mx_vec_dot_iq3_s_f32;
+        return 1;
+    case MX_TYPE_IQ1_S:
+        k->row_bytes = nb * MX_IQ1_S_BYTES;
+        k->dot_f32 = mx_vec_dot_iq1_s_f32;
+        return 1;
+    case MX_TYPE_IQ1_M:
+        k->row_bytes = nb * MX_IQ1_M_BYTES;
+        k->dot_f32 = mx_vec_dot_iq1_m_f32;
+        return 1;
     default:
         return 0;
     }
@@ -77,8 +129,10 @@ static int mx_kernel_for(int ggml_type, int in_features, mx_kernel *k) {
  * and keeps the Numba kernel otherwise. */
 int mx_supports(int ggml_type, int in_features) {
     mx_kernel k;
-    return in_features > 0 && in_features % MX_QK_K == 0 &&
-           mx_kernel_for(ggml_type, in_features, &k);
+    if (!mx_kernel_for(ggml_type, in_features, &k)) {
+        return 0;
+    }
+    return in_features > 0 && in_features % k.block_size == 0;
 }
 
 /* w: out_features packed rows; x: (n_tokens, in_features) f32; y: (n_tokens, out_features) f32.
@@ -90,6 +144,22 @@ int mx_gemm(int ggml_type, const uint8_t *w, const float *x, float *y, int n_tok
         return -1;
     }
     mx_kernel_for(ggml_type, in_features, &k);
+
+    /* IQ4_NL/IQ4_XS/TQ1_0/TQ2_0: no mx_block_q8_k involved at all - dot_f32 reads the raw
+     * activation row directly (see mx_common.h's own comment on why). */
+    if (k.dot_f32 != NULL) {
+        const int nb_f32 = in_features / k.block_size;
+#pragma omp parallel for schedule(static) num_threads(n_threads)
+        for (int o = 0; o < out_features; ++o) {
+            const uint8_t *row = w + (size_t)o * k.row_bytes;
+            for (int t = 0; t < n_tokens; ++t) {
+                y[(size_t)t * out_features + o] =
+                    k.dot_f32(row, x + (size_t)t * in_features, nb_f32);
+            }
+        }
+        return 0;
+    }
+
     const int nb = in_features / MX_QK_K;
 
     mx_block_q8_k *xq = malloc((size_t)n_tokens * nb * sizeof(mx_block_q8_k));

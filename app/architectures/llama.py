@@ -78,7 +78,16 @@ class LlamaArchitecture(ModelArchitecture):
         # type(s) for *: 'NoneType' and 'int'` before this fallback (same real convention HF/
         # llama.cpp use: no key present means "no grouping", not "malformed file").
         self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
-        self.head_dim = self.n_embd // self.n_head
+        # Real, confirmed gap (2026-09-28): a real DictaLM-3.0-24B-Thinking GGUF has
+        # `embedding_length=5120, head_count=32` but real `attention.key_length=128` - the naive
+        # `n_embd // n_head` derivation gives 160, silently wrong (not every real GQA layout keeps
+        # head_dim * head_count == n_embd - same real trap qwen3's own docstring already
+        # documents for a different architecture). Crashed every `.view(batch, seq_len, n_head,
+        # head_dim)` reshape downstream with a real shape-mismatch RuntimeError, not a crash at
+        # load time - only surfaced once a real forward pass actually ran. Falls back to the
+        # derived value for a real file with no such key (e.g. TinyLlama), matching
+        # `CommandRArchitecture`'s own identical fallback for the same metadata key.
+        self.head_dim = metadata.get_u32(arch("attention.key_length"), self.n_embd // self.n_head)
         self.n_layer = metadata.get_u32(arch("block_count"))
         self.ffn_len = metadata.get_u32(arch("feed_forward_length"))
         self.rms_eps = metadata.get_f32(arch("attention.layer_norm_rms_epsilon"))

@@ -35,6 +35,17 @@
 #define MX_TYPE_Q4_K 12
 #define MX_TYPE_Q5_K 13
 #define MX_TYPE_Q6_K 14
+#define MX_TYPE_IQ4_NL 20
+#define MX_TYPE_IQ4_XS 23
+#define MX_TYPE_TQ1_0 34
+#define MX_TYPE_TQ2_0 35
+#define MX_TYPE_IQ2_XXS 16
+#define MX_TYPE_IQ2_XS 17
+#define MX_TYPE_IQ3_XXS 18
+#define MX_TYPE_IQ1_S 19
+#define MX_TYPE_IQ3_S 21
+#define MX_TYPE_IQ2_S 22
+#define MX_TYPE_IQ1_M 29
 
 /* On-disk block sizes in bytes, per 256 (K-quants) or 32 (Q8_0) weights. */
 #define MX_Q3_K_BYTES 110
@@ -42,6 +53,20 @@
 #define MX_Q5_K_BYTES 176
 #define MX_Q6_K_BYTES 210
 #define MX_Q8_0_BYTES 34
+/* IQ4_NL is a plain 32-value block (like Q8_0); IQ4_XS/TQ1_0/TQ2_0 are 256-value superblocks. */
+#define MX_IQ4_NL_BLOCK 32
+#define MX_IQ4_NL_BYTES 18
+#define MX_IQ4_XS_BYTES 136
+#define MX_TQ1_0_BYTES 54
+#define MX_TQ2_0_BYTES 66
+/* Grid-based I-quants (256-value superblocks, like the K-quants above). */
+#define MX_IQ2_XXS_BYTES 66
+#define MX_IQ2_XS_BYTES 74
+#define MX_IQ2_S_BYTES 82
+#define MX_IQ3_XXS_BYTES 98
+#define MX_IQ3_S_BYTES 110
+#define MX_IQ1_S_BYTES 50
+#define MX_IQ1_M_BYTES 56
 
 /* The quantized activation block: one f32 scale per 256 values, plus 16-value partial sums so
  * a K-quant's per-sub-block "min" term collapses to one multiply per sub-block. */
@@ -195,5 +220,31 @@ float mx_vec_dot_q4_k(const uint8_t *row, const mx_block_q8_k *y, int nb);
 float mx_vec_dot_q5_k(const uint8_t *row, const mx_block_q8_k *y, int nb);
 float mx_vec_dot_q6_k(const uint8_t *row, const mx_block_q8_k *y, int nb);
 #endif
+
+/* mx_dot_f32.c: IQ4_NL/IQ4_XS/TQ1_0/TQ2_0 - ported directly from their own already-oracle-
+ * validated Numba kernels (app/gguf/dequant/quantized_gemv_iq_ternary.py), which compute
+ * against the raw float activation row directly rather than mx_block_q8_k - these types don't
+ * fit that convention (IQ4_NL/XS use a real 16-entry non-linear value LUT, TQ1_0/TQ2_0 are
+ * base-3/base-4 ternary codes, neither is a simple signed-integer-times-scale sum a Q8_K dot
+ * product could compute), so mx_gemm calls these against `x` unchanged instead of quantizing it
+ * first - real, deliberate, not a shortcut: quantizing to Q8_K here would need re-deriving a new
+ * integer formulation for both, unvalidated anywhere. */
+typedef float (*mx_vec_dot_f32_fn)(const uint8_t *row, const float *x, int nb);
+
+float mx_vec_dot_iq4_nl_f32(const uint8_t *row, const float *x, int nb);
+float mx_vec_dot_iq4_xs_f32(const uint8_t *row, const float *x, int nb);
+float mx_vec_dot_tq1_0_f32(const uint8_t *row, const float *x, int nb);
+float mx_vec_dot_tq2_0_f32(const uint8_t *row, const float *x, int nb);
+
+/* mx_dot_iq2.c/mx_dot_iq3.c/mx_dot_iq1.c: grid-codebook I-quants (IQ2_XXS/XS/S, IQ3_XXS/S,
+ * IQ1_S/M) - same "raw float x" reasoning as above, ported from quantized_gemv_iq{1,2,3}.py.
+ * Grid/sign tables live in the generated mx_iq_grids.h (scripts/generate_iq_grids_c.py). */
+float mx_vec_dot_iq2_xxs_f32(const uint8_t *row, const float *x, int nb);
+float mx_vec_dot_iq2_xs_f32(const uint8_t *row, const float *x, int nb);
+float mx_vec_dot_iq2_s_f32(const uint8_t *row, const float *x, int nb);
+float mx_vec_dot_iq3_xxs_f32(const uint8_t *row, const float *x, int nb);
+float mx_vec_dot_iq3_s_f32(const uint8_t *row, const float *x, int nb);
+float mx_vec_dot_iq1_s_f32(const uint8_t *row, const float *x, int nb);
+float mx_vec_dot_iq1_m_f32(const uint8_t *row, const float *x, int nb);
 
 #endif
