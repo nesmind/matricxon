@@ -1,5 +1,14 @@
 from app.gguf.constants import GGMLQuantizationType
 from app.gguf.dequant.base import QuantStrategy
+from app.gguf.dequant.iq1_family import IQ1_MStrategy, IQ1_SStrategy
+from app.gguf.dequant.iq2_family import IQ2_SStrategy, IQ2_XSStrategy, IQ2_XXSStrategy
+from app.gguf.dequant.iq3_family import IQ3_SStrategy, IQ3_XXSStrategy
+from app.gguf.dequant.iq_ternary import (
+    IQ4_NLStrategy,
+    IQ4_XSStrategy,
+    TQ1_0Strategy,
+    TQ2_0Strategy,
+)
 from app.gguf.dequant.kquants import Q4_KStrategy, Q5_KStrategy, Q6_KStrategy
 from app.gguf.dequant.kquants_extended import Q2_KStrategy, Q3_KStrategy, Q8_KStrategy
 from app.gguf.dequant.legacy import (
@@ -31,6 +40,17 @@ class QuantStrategyRegistry:
         GGMLQuantizationType.Q5_K: Q5_KStrategy(),
         GGMLQuantizationType.Q6_K: Q6_KStrategy(),
         GGMLQuantizationType.Q8_K: Q8_KStrategy(),
+        GGMLQuantizationType.IQ4_NL: IQ4_NLStrategy(),
+        GGMLQuantizationType.IQ4_XS: IQ4_XSStrategy(),
+        GGMLQuantizationType.TQ1_0: TQ1_0Strategy(),
+        GGMLQuantizationType.TQ2_0: TQ2_0Strategy(),
+        GGMLQuantizationType.IQ2_XXS: IQ2_XXSStrategy(),
+        GGMLQuantizationType.IQ2_XS: IQ2_XSStrategy(),
+        GGMLQuantizationType.IQ2_S: IQ2_SStrategy(),
+        GGMLQuantizationType.IQ3_XXS: IQ3_XXSStrategy(),
+        GGMLQuantizationType.IQ3_S: IQ3_SStrategy(),
+        GGMLQuantizationType.IQ1_S: IQ1_SStrategy(),
+        GGMLQuantizationType.IQ1_M: IQ1_MStrategy(),
     }
 
     def get(self, ggml_type: int) -> QuantStrategy:

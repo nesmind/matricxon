@@ -53,3 +53,7 @@ class GGMLQuantizationType(IntEnum):
     F64 = 28
     IQ1_M = 29
     BF16 = 30
+    # 31-33 are ggml's deprecated Q4_0_4_4/Q4_0_4_8/Q4_0_8_8 - intentionally skipped, same as
+    # every other unimplemented gap in this enum.
+    TQ1_0 = 34
+    TQ2_0 = 35

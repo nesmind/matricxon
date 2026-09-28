@@ -207,11 +207,14 @@ would get the wrong prompt structure - per-architecture prompt-builder
 dispatch is real follow-up work, not yet implemented.
 
 **GGUF quantization types:** `F32`, `F16`, `BF16`, `Q8_0`, `Q4_0`, `Q4_1`,
-`Q5_0`, `Q5_1`, `Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`, `Q8_K`. Not yet
-supported: the I-quants (`IQ*`, codebook/grid-based - a genuinely different
-and larger undertaking than bit-unpacking) and ternary types - reading one of
-these fails closed with `UnsupportedQuantTypeError` rather than
-misinterpreting the bytes.
+`Q5_0`, `Q5_1`, `Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`, `Q8_K`, `IQ4_NL`,
+`IQ4_XS`, `TQ1_0`, `TQ2_0`, `IQ2_XXS`, `IQ2_XS`, `IQ2_S`, `IQ3_XXS`, `IQ3_S`,
+`IQ1_S`, `IQ1_M` - including the full grid-based I-quant family (codebook
+tables extracted verbatim from ggml's own source via
+`scripts/extract_iq_grids.py`, not hand-transcribed). Not yet supported:
+`Q8_1` and the raw integer/index types (`I8`/`I16`/`I32`/`I64`) and `F64` -
+reading one of these fails closed with `UnsupportedQuantTypeError` rather
+than misinterpreting the bytes.
 
 ## Setup
 
