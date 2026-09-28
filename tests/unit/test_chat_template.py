@@ -177,6 +177,72 @@ def test_llama3_without_tools_skips_the_date_system_block_like_ollama() -> None:
     assert builder.wants_bos(prompt) is False
 
 
+# A trimmed-down version of the real ggml-org/SmolVLM2-2.2B-Instruct-GGUF template - expects
+# `content` as a real list of {"type": ...} parts, not a flat string (confirmed live, 2026-09-30:
+# a flat string either crashed on empty content or silently rendered as if the message had none).
+_SMOLVLM2_TEMPLATE = (
+    "{% for message in messages %}"
+    "{{ message['role'] | capitalize }}"
+    "{% if message['content'][0]['type'] == 'image' %}{{ ':' }}{% else %}{{ ': ' }}{% endif %}"
+    "{% for part in message['content'] %}"
+    "{% if part['type'] == 'text' %}{{ part['text'] }}"
+    "{% elif part['type'] == 'image' %}{{ '<image>' }}{% endif %}"
+    "{% endfor %}"
+    "<eot>\n"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
+)
+
+
+def test_structured_content_template_renders_real_text_not_silently_empty() -> None:
+    """Before this fix: a flat `content` string meant `content[0]` indexed its first *character*
+
+    (not a dict), so every `{% if part['type'] == ... %}` branch silently never matched - the
+    real message text vanished from the prompt with no error at all."""
+    builder = PromptBuilderFactory.for_metadata(_metadata("llama", _SMOLVLM2_TEMPLATE))
+    prompt = builder.build([ChatMessage(role="user", content="hi")])
+    assert prompt == "User: hi<eot>\nAssistant:"
+
+
+def test_structured_content_template_does_not_crash_on_empty_content() -> None:
+    """Before this fix: `content[0]` on an empty string raised `IndexError`, surfaced to the
+
+    user as "could not render this model's chat template: str object has no element 0"."""
+    builder = PromptBuilderFactory.for_metadata(_metadata("llama", _SMOLVLM2_TEMPLATE))
+    prompt = builder.build([ChatMessage(role="user", content="")])
+    assert prompt == "User: <eot>\nAssistant:"
+
+
+def test_structured_content_template_puts_the_real_image_marker_before_text() -> None:
+    """Real `[IMG]` (vision_fusion.IMAGE_MARKER), not the template's own `<image>` literal - see
+
+    _message_dict's own docstring: a real `{"type": "image"}` part can never carry our marker
+    through (the template ignores it and renders its own hardcoded literal instead), so every
+    part here is `{"type": "text", ...}`, including the image one. Real, accepted cost: the
+    template's own `content[0]['type'] == 'image'` punctuation check now takes its no-image
+    path (a space after "User:") instead of its image one - cosmetic, not structural."""
+    builder = PromptBuilderFactory.for_metadata(_metadata("llama", _SMOLVLM2_TEMPLATE))
+    prompt = builder.build([ChatMessage(role="user", content="describe", images=["b64"])])
+    assert prompt == "User: [IMG]describe<eot>\nAssistant:"
+
+
+def test_structured_content_template_marker_lands_inside_the_turn_not_after_it() -> None:
+    """Real, confirmed-live bug this guards: before _message_dict carried IMAGE_MARKER through a
+
+    text-type part, a structured-content template's rendered prompt never contained `[IMG]` at
+    all, so vision_fusion.build_prompt_with_images's own `prompt.split(IMAGE_MARKER)` found
+    nothing to split on and appended the real image embeddings *after* the whole prompt
+    (including the generation-prompt suffix) instead of inside the user's turn - a real,
+    confirmed cause of an empty first reply (the model's next-token position was mid-image-patch,
+    not right after "Assistant:")."""
+    from app.runtime.vision_fusion import IMAGE_MARKER
+
+    builder = PromptBuilderFactory.for_metadata(_metadata("llama", _SMOLVLM2_TEMPLATE))
+    prompt = builder.build([ChatMessage(role="user", content="Hi", images=["b64"])])
+    assert IMAGE_MARKER in prompt
+    assert prompt.index(IMAGE_MARKER) < prompt.index("Assistant:")
+
+
 def test_llama3_with_tools_keeps_the_models_own_template() -> None:
     builder = PromptBuilderFactory.for_metadata(_metadata("llama", _LLAMA3_WITH_DATE_BLOCK))
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]

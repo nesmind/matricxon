@@ -8,6 +8,7 @@ from torch import nn
 
 from app.architectures.base import GenerationCancelledError, ModelArchitecture
 from app.architectures.layers import RMSNorm
+from app.architectures.llama_moe import build_ffn, detect_moe, materialize_moe_ffn
 from app.architectures.mistral3_layers import Mistral3DecoderLayer
 from app.architectures.quantized_embedding import QuantizedEmbedding
 from app.architectures.rope import RotaryEmbedding
@@ -42,6 +43,11 @@ class LlamaArchitecture(ModelArchitecture):
     `loader.has_tensor("output.weight")`) now takes the same tied path
     `mistral3` always does instead of assuming every llama-arch file has a
     separate projection.
+
+    **Mixtral (2026-09-30)**: real Mixtral GGUFs share this same `"llama"` architecture string
+    (no separate `mixtral` one exists) - `self.is_moe` detects it per real metadata presence and
+    injects a sparse MoE FFN into each `Mistral3DecoderLayer` instead of a plain `SwiGLUMLP` - see
+    `app.architectures.llama_moe`'s own module docstring for the full real-source verification.
     """
 
     NAME = "llama"
@@ -65,11 +71,21 @@ class LlamaArchitecture(ModelArchitecture):
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
-        self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"))
+        # Real, confirmed gap (2026-09-29): a real SmolVLM2-2.2B-Instruct text-half GGUF (SmolLM2
+        # backbone, plain MHA, no GQA) omits `attention.head_count_kv` entirely - llama.cpp's own
+        # writer only emits it when it differs from `head_count`. Crashed every `_load_projection`/
+        # `nn.Linear(..., n_head_kv * head_dim, ...)` call downstream with `unsupported operand
+        # type(s) for *: 'NoneType' and 'int'` before this fallback (same real convention HF/
+        # llama.cpp use: no key present means "no grouping", not "malformed file").
+        self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
         self.head_dim = self.n_embd // self.n_head
         self.n_layer = metadata.get_u32(arch("block_count"))
         self.ffn_len = metadata.get_u32(arch("feed_forward_length"))
         self.rms_eps = metadata.get_f32(arch("attention.layer_norm_rms_epsilon"))
+        # Mixtral detection - see llama_moe.py's own module docstring for why there's no
+        # separate "mixtral" architecture string to dispatch on instead.
+        self.num_experts, self.num_experts_per_tok = detect_moe(metadata, metadata.architecture)
+        self.is_moe = self.num_experts is not None
         # Real, confirmed gap (2026-09-21): a real LLaVA-v1.6-Vicuna GGUF pull has no
         # `llama.vocab_size` metadata key at all - falls back to the real tokenizer vocab's own
         # length, the same fallback `BertArchitecture`/`NomicBertArchitecture`/`Gemma4Architecture`/
@@ -96,8 +112,10 @@ class LlamaArchitecture(ModelArchitecture):
                     self.n_head,
                     self.n_head_kv,
                     self.head_dim,
-                    self.ffn_len,
                     self.rms_eps,
+                    mlp=build_ffn(
+                        self.n_embd, self.ffn_len, self.num_experts, self.num_experts_per_tok, dtype
+                    ),
                     dtype=dtype,
                 )
                 for _ in range(self.n_layer)
@@ -189,15 +207,18 @@ class LlamaArchitecture(ModelArchitecture):
             layer.self_attn.o_proj = self._load_projection(
                 loader, prefix + "attn_output.weight", layer.self_attn.o_proj, self._dtype, enabled
             )
-            layer.mlp.gate_proj = self._load_projection(
-                loader, prefix + "ffn_gate.weight", layer.mlp.gate_proj, self._dtype, enabled
-            )
-            layer.mlp.up_proj = self._load_projection(
-                loader, prefix + "ffn_up.weight", layer.mlp.up_proj, self._dtype, enabled
-            )
-            layer.mlp.down_proj = self._load_projection(
-                loader, prefix + "ffn_down.weight", layer.mlp.down_proj, self._dtype, enabled
-            )
+            if self.is_moe:
+                materialize_moe_ffn(layer.mlp, loader, prefix)
+            else:
+                layer.mlp.gate_proj = self._load_projection(
+                    loader, prefix + "ffn_gate.weight", layer.mlp.gate_proj, self._dtype, enabled
+                )
+                layer.mlp.up_proj = self._load_projection(
+                    loader, prefix + "ffn_up.weight", layer.mlp.up_proj, self._dtype, enabled
+                )
+                layer.mlp.down_proj = self._load_projection(
+                    loader, prefix + "ffn_down.weight", layer.mlp.down_proj, self._dtype, enabled
+                )
             logger.debug(
                 "loading weights: layer %d/%d (not computing yet) in %.1fs",
                 i + 1,

@@ -37,7 +37,7 @@ _LAYER_PREFIX_RE = re.compile(r"^blk\.(\d+)\.")
 # per-layer-type suffix bookkeeping this file's own flat-suffix-list design would need to stay
 # correct for a hybrid model, so left off rather than partially wired.
 QUANTIZED_NATIVE_WIRED_ARCHITECTURES = frozenset(
-    {"mistral3", "llama", "gemma4", "phi2", "granite", "qwen2", "qwen3", "command-r"}
+    {"mistral3", "llama", "gemma4", "phi2", "granite", "qwen2", "qwen3", "command-r", "starcoder2"}
 )
 
 # The exact 5 (of 7) real per-layer tensor names Mistral3TextArchitecture._load_projection routes
@@ -89,6 +89,17 @@ _QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH: dict[str, tuple[str, ...]] = {
     "qwen2": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
     "qwen3": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
     "command-r": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
+    # starcoder2's real MLP is plain (non-gated) - no ffn_gate tensor exists at all, so its own
+    # explicit list omits that suffix rather than reusing _QUANTIZED_NATIVE_TENSOR_SUFFIXES
+    # unchanged (harmless either way per this function's own real tensor-name matching, but this
+    # is clearer about what this architecture's real tensors actually are).
+    "starcoder2": (
+        "attn_v.weight",
+        "attn_output.weight",
+        "ffn_up.weight",
+        "ffn_down.weight",
+        "output.weight",
+    ),
 }
 
 

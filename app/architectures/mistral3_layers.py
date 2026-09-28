@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from app.architectures.layers import RMSNorm, SwiGLUMLP
+from app.architectures.layers import RMSNorm, SwiGLUMLP  # noqa: F401 - re-exported, see mistral3.py
 from app.architectures.rope import apply_rotary_pos_emb
 from app.runtime.kv_cache import KVCache
 
@@ -87,21 +87,34 @@ class GroupedQueryAttention(nn.Module):
 
 
 class Mistral3DecoderLayer(nn.Module):
+    """Same pre-norm two-block layout `GraniteDecoderLayer` (`granite_layers.py`) shares - `mlp`
+
+    is built by the caller, not this class (dependency injection), for the identical real reason
+    that class's own docstring gives: dense `Mistral3TextArchitecture`/`LlamaArchitecture` inject
+    a plain `SwiGLUMLP`, a real Mixtral-style MoE `llama`-arch checkpoint (confirmed via
+    llama.cpp's own real converter, 2026-09-30: `MixtralForCausalLM` registers onto the exact
+    same `LlamaModel` conversion class as plain Llama, `general.architecture` stays `"llama"` -
+    there is no separate `mixtral` GGUF architecture string at all) injects a `GraniteMoeFFN`
+    instead (`llama.py`'s own docstring has the full real-source verification) - this class has
+    zero MoE-awareness either way, so the attention block is written and tested exactly once for
+    both.
+    """
+
     def __init__(
         self,
         n_embd: int,
         n_head: int,
         n_head_kv: int,
         head_dim: int,
-        ffn_len: int,
         rms_eps: float,
+        mlp: nn.Module,
         dtype: torch.dtype = torch.float32,
     ) -> None:
         super().__init__()
         self.input_layernorm = RMSNorm(n_embd, rms_eps, dtype=dtype)
         self.self_attn = GroupedQueryAttention(n_embd, n_head, n_head_kv, head_dim, dtype=dtype)
         self.post_attention_layernorm = RMSNorm(n_embd, rms_eps, dtype=dtype)
-        self.mlp = SwiGLUMLP(n_embd, ffn_len, dtype=dtype)
+        self.mlp = mlp
 
     def forward(
         self,
@@ -119,7 +132,5 @@ class Mistral3DecoderLayer(nn.Module):
 
         stage_started = time.monotonic()
         x = x + self.mlp(self.post_attention_layernorm(x))
-        logger.debug(
-            "  layer %s: ffn %.1fms", layer_idx, (time.monotonic() - stage_started) * 1000
-        )
+        logger.debug("  layer %s: ffn %.1fms", layer_idx, (time.monotonic() - stage_started) * 1000)
         return x

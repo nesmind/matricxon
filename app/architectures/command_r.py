@@ -69,7 +69,9 @@ class CommandRArchitecture(ModelArchitecture):
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
-        self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"))
+        # Falls back to n_head when absent (no GQA) - see LlamaArchitecture's own docstring for
+        # the real file that confirmed this gap.
+        self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
         self.head_dim = metadata.get_u32(arch("attention.key_length"), self.n_embd // self.n_head)
         self.n_layer = metadata.get_u32(arch("block_count"))
         self.ffn_len = metadata.get_u32(arch("feed_forward_length"))

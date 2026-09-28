@@ -1,6 +1,7 @@
 from app.architectures.base import ModelArchitecture
 from app.architectures.bert import BertArchitecture
 from app.architectures.command_r import CommandRArchitecture
+from app.architectures.falcon import FalconArchitecture
 from app.architectures.gemma4 import Gemma4Architecture
 from app.architectures.granite import GraniteArchitecture
 from app.architectures.granitemoe import GraniteMoeArchitecture
@@ -11,6 +12,7 @@ from app.architectures.nomic_bert import NomicBertArchitecture
 from app.architectures.phi2 import Phi2Architecture
 from app.architectures.qwen2 import Qwen2Architecture
 from app.architectures.qwen3 import Qwen3Architecture
+from app.architectures.starcoder2 import Starcoder2Architecture
 from app.gguf.metadata import GGUFMetadata
 from app.server.errors import UnsupportedArchitectureError
 
@@ -34,6 +36,8 @@ class ArchitectureRegistry:
         Qwen2Architecture,
         Qwen3Architecture,
         CommandRArchitecture,
+        Starcoder2Architecture,
+        FalconArchitecture,
     ]
 
     def resolve(self, metadata: GGUFMetadata) -> type[ModelArchitecture]:

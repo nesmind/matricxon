@@ -7,8 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from app.architectures.base import GenerationCancelledError, ModelArchitecture
-from app.architectures.layers import RMSNorm
-from app.architectures.qwen_layers import QwenDecoderLayer
+from app.architectures.falcon_layers import FalconDecoderLayer
 from app.architectures.rope import RotaryEmbedding
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
@@ -17,38 +16,35 @@ from app.runtime.kv_cache import KVCache
 logger = logging.getLogger(__name__)
 
 
-class Qwen3Architecture(ModelArchitecture):
-    """Alibaba Qwen3 - `qwen2`'s shape (plain GQA/RoPE/SwiGLU) with no bias anywhere (confirmed:
-    real Qwen3 GGUFs have no `attn_*.bias` tensors at all, not just zeroed - `config.attention_bias
-    = False` on every real small checkpoint) plus one real structural addition confirmed against
-    HF `transformers`' own `modeling_qwen3.py` (2026-09-22): **QK-norm** - a per-head-dim `RMSNorm`
-    applied to both q and k right after the reshape-to-heads split, before RoPE (see
-    `QwenAttention`'s own docstring for the exact placement).
+class FalconArchitecture(ModelArchitecture):
+    """TII Falcon (real `tiiuae/falcon-7b` shape, confirmed 2026-09-30 against a real downloaded
 
-    `head_dim` **must** be read from real GGUF metadata (`qwen3.attention.key_length`) rather than
-    derived from `n_embd // n_head` - real Qwen3-0.6B has `hidden_size=1024, num_attention_heads
-    =16` (naive division gives 64) but a real `head_dim=128`, confirmed via both HF's own
-    config.json and live GGUF metadata bytes range-read from a real downloaded file. This
-    architecture's own version of Granite's HF-vs-GGUF naming trap - the same defensive
-    `get_u32(..., default=...)` read this project already uses handles both this case (falls
-    through to the real value, present) and `qwen2`'s (falls back to the derived value, since the
-    key is typically absent there) with the identical code.
+    GGUF header) - a parallel-residual GQA/MQA decoder (see `FalconDecoderLayer`'s own docstring
+    for the exact real formula/verification). Real, confirmed deltas from every other
+    architecture here:
+    - Real fused `attn_qkv` tensor (no separate `attn_q`/`attn_k`/`attn_v`) - real MQA layout
+      (`head_count_kv=1`), split at materialize time into contiguous
+      `[q rows | k rows | v rows]` blocks (llama.cpp's own real converter rearranges HF's native
+      per-head-interleaved layout into exactly this - confirmed via the real file's own
+      `falcon.tensor_data_layout = "jploski"` metadata key, which names that rearrangement). No
+      bias on it (`config.bias = False`) - see `FalconMLP`'s own docstring for the same real
+      finding on the MLP side.
+    - Real biased `attn_norm` (the ONE shared parallel-residual norm) despite `config.bias`
+      being unrelated to it - `nn.LayerNorm`'s own bias is gated by nothing but its own default,
+      confirmed via a real `attn_norm.bias` tensor.
+    - No `rope.freq_base`/`vocab_size` metadata key on this real file - falls back to HF's own
+      real RoPE default (10000.0) and to `len(tokenizer.ggml.tokens)` respectively, the same
+      fallback pattern `Phi2Architecture`/`LlamaArchitecture` already established.
 
-    **None of `attn_q.weight`/`attn_k.weight`/`attn_q_norm.weight`/`attn_k_norm.weight` need
-    `unpermute_rope_rows`** - the reasoning that they would (llama.cpp's own C++ pipeline applies
-    `q_norm` and RoPE directly to the still-GGUF-native-ordered tensor, so matricxon undoing that
-    ordering would need `q_norm`'s weight undone identically) turned out to rest on a false
-    premise: real-weight oracle validation on `qwen2` (this architecture's sibling, same shared
-    `unpermute_rope_rows`-listing docstring claim) proved empirically that real Qwen weights don't
-    need this reordering at all - applying it silently turned a working model into one that only
-    ever generated garbage (confirmed live: never predicted "Paris" after "The capital of France
-    is", despite every other check - tokenizer round-trip, KV-cache self-consistency, rope_theta -
-    passing cleanly). `unpermute_rope_rows`'s own docstring listing Qwen as a model that needs it
-    was simply wrong for this architecture family. Fixed the same way here, verified against
-    `scripts/oracle/validate_qwen3.py`.
+    Deliberately out of scope for this pass, not silently assumed to be the same shape: the
+    newer `new_decoder_architecture` variant (a real second `attn_norm_2` tensor, independent
+    norms per branch instead of one shared one) and the older `tiiuae/falcon-rw-*` variant
+    (`parallel_attn=False` - sequential, not parallel - and real ALiBi instead of RoPE, a
+    genuinely different positional-encoding mechanism not implemented anywhere in this repo) -
+    both real, confirmed-via-source variants, tracked as separate future work.
     """
 
-    NAME = "qwen3"
+    NAME = "falcon"
 
     def __init__(
         self,
@@ -64,41 +60,37 @@ class Qwen3Architecture(ModelArchitecture):
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
-        # Falls back to n_head when absent (no GQA) - see LlamaArchitecture's own docstring for
-        # the real file that confirmed this gap.
         self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
-        self.head_dim = metadata.get_u32(arch("attention.key_length"), self.n_embd // self.n_head)
+        self.head_dim = self.n_embd // self.n_head
         self.n_layer = metadata.get_u32(arch("block_count"))
         self.ffn_len = metadata.get_u32(arch("feed_forward_length"))
-        self.rms_eps = metadata.get_f32(arch("attention.layer_norm_rms_epsilon"))
+        self.layer_norm_eps = metadata.get_f32(arch("attention.layer_norm_epsilon"))
         vocab_size = metadata.get_u32(arch("vocab_size"))
         self.vocab_size = (
             vocab_size if vocab_size is not None else len(metadata.require("tokenizer.ggml.tokens"))
         )
 
         self._rope_kwargs = dict(
-            head_dim=self.head_dim, rope_theta=metadata.get_f32(arch("rope.freq_base"))
+            head_dim=self.head_dim, rope_theta=metadata.get_f32(arch("rope.freq_base"), 10000.0)
         )
         self.rope = RotaryEmbedding(**self._rope_kwargs)
 
         self.token_embd = nn.Embedding(self.vocab_size, self.n_embd, dtype=dtype)
         self.layers = nn.ModuleList(
             [
-                QwenDecoderLayer(
+                FalconDecoderLayer(
                     self.n_embd,
                     self.n_head,
                     self.n_head_kv,
                     self.head_dim,
                     self.ffn_len,
-                    self.rms_eps,
-                    qkv_bias=False,
-                    qk_norm_eps=self.rms_eps,
+                    self.layer_norm_eps,
                     dtype=dtype,
                 )
                 for _ in range(self.n_layer)
             ]
         )
-        self.output_norm = RMSNorm(self.n_embd, self.rms_eps, dtype=dtype)
+        self.output_norm = nn.LayerNorm(self.n_embd, eps=self.layer_norm_eps, dtype=dtype)
         if not tied_embeddings:
             self.lm_head = nn.Linear(self.n_embd, self.vocab_size, bias=False, dtype=dtype)
 
@@ -119,7 +111,7 @@ class Qwen3Architecture(ModelArchitecture):
         loader: GGUFModelLoader,
         dtype: torch.dtype = torch.float32,
         enable_quantized_native: bool = False,
-    ) -> "Qwen3Architecture":
+    ) -> "FalconArchitecture":
         model = cls._construct_without_init(
             loader.metadata,
             dtype=dtype,
@@ -136,6 +128,7 @@ class Qwen3Architecture(ModelArchitecture):
         stage_started = time.monotonic()
         self.token_embd.weight.copy_(loader.load_tensor("token_embd.weight"))
         self.output_norm.weight.copy_(loader.load_tensor("output_norm.weight"))
+        self.output_norm.bias.copy_(loader.load_tensor("output_norm.bias"))
         if not self._tied_embeddings:
             self.lm_head = self._load_projection(
                 loader, "output.weight", self.lm_head, self._dtype, self._enable_quantized_native
@@ -145,26 +138,28 @@ class Qwen3Architecture(ModelArchitecture):
             time.monotonic() - stage_started,
         )
 
+        q_rows = self.n_head * self.head_dim
+        kv_rows = self.n_head_kv * self.head_dim
         for i, layer in enumerate(self.layers):
             layer_started = time.monotonic()
             prefix = f"blk.{i}."
             layer.input_layernorm.weight.copy_(loader.load_tensor(prefix + "attn_norm.weight"))
-            layer.post_attention_layernorm.weight.copy_(
-                loader.load_tensor(prefix + "ffn_norm.weight")
-            )
-            layer.self_attn.q_proj.weight.copy_(loader.load_tensor(prefix + "attn_q.weight"))
-            layer.self_attn.k_proj.weight.copy_(loader.load_tensor(prefix + "attn_k.weight"))
-            layer.self_attn.q_norm.weight.copy_(loader.load_tensor(prefix + "attn_q_norm.weight"))
-            layer.self_attn.k_norm.weight.copy_(loader.load_tensor(prefix + "attn_k_norm.weight"))
+            layer.input_layernorm.bias.copy_(loader.load_tensor(prefix + "attn_norm.bias"))
+
+            # attn_qkv is one real fused, bias-free (out_rows, n_embd) tensor - llama.cpp's own
+            # converter already rearranges it into contiguous [q rows | k rows | v rows] blocks
+            # (real `falcon.tensor_data_layout = "jploski"` metadata names this) rather than HF's
+            # native per-head-interleaved layout - a plain row-range split, no per-head reshuffle
+            # needed. Always today's exact path, same reasoning Phi2Architecture's own comment
+            # gives for not attempting to split a packed/quantized tensor's raw bytes this round.
+            qkv_weight = loader.load_tensor(prefix + "attn_qkv.weight")
+            layer.self_attn.q_proj.weight.copy_(qkv_weight[:q_rows])
+            layer.self_attn.k_proj.weight.copy_(qkv_weight[q_rows : q_rows + kv_rows])
+            layer.self_attn.v_proj.weight.copy_(qkv_weight[q_rows + kv_rows : q_rows + 2 * kv_rows])
+
             enabled = self._enable_quantized_native
-            layer.self_attn.v_proj = self._load_projection(
-                loader, prefix + "attn_v.weight", layer.self_attn.v_proj, self._dtype, enabled
-            )
             layer.self_attn.o_proj = self._load_projection(
                 loader, prefix + "attn_output.weight", layer.self_attn.o_proj, self._dtype, enabled
-            )
-            layer.mlp.gate_proj = self._load_projection(
-                loader, prefix + "ffn_gate.weight", layer.mlp.gate_proj, self._dtype, enabled
             )
             layer.mlp.up_proj = self._load_projection(
                 loader, prefix + "ffn_up.weight", layer.mlp.up_proj, self._dtype, enabled
@@ -189,7 +184,7 @@ class Qwen3Architecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # no real vision-language Qwen3 checkpoint exists yet to fuse
+        del image_embeddings  # no real vision-language Falcon checkpoint exists to fuse
         _, seq_len = input_ids.shape
         if position_ids is None:
             position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)

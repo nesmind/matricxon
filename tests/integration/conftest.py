@@ -12,14 +12,17 @@ from app.models.manager import ModelManager
 from tests.tiny_gguf import build_tiny_mistral3_gguf
 from tests.tiny_gguf_bert import build_tiny_bert_gguf
 from tests.tiny_gguf_command_r import build_tiny_command_r_gguf
+from tests.tiny_gguf_falcon import build_tiny_falcon_gguf
 from tests.tiny_gguf_gemma4 import build_tiny_gemma4_gguf
 from tests.tiny_gguf_granite import build_tiny_granite_gguf
 from tests.tiny_gguf_granitemoe import build_tiny_granitemoe_gguf
 from tests.tiny_gguf_llama import build_tiny_llama_gguf
+from tests.tiny_gguf_llama_moe import build_tiny_llama_moe_gguf
 from tests.tiny_gguf_nemotron_h import build_tiny_nemotron_h_gguf
 from tests.tiny_gguf_phi2 import build_tiny_phi2_gguf
 from tests.tiny_gguf_qwen2 import build_tiny_qwen2_gguf
 from tests.tiny_gguf_qwen3 import build_tiny_qwen3_gguf
+from tests.tiny_gguf_starcoder2 import build_tiny_starcoder2_gguf
 
 # The real, already-downloaded ministral-3:3b GGUF from pAIring's Ollama blob
 # store - see tests/fixtures/README.md. Symlinked (never copied) into a test
@@ -572,6 +575,138 @@ def tiny_command_r_tied_embeddings_model(models_dir: Path) -> InstalledModel:
         capabilities=["completion"],
         size_bytes=gguf_path.stat().st_size,
         family="command-r",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_starcoder2_model(models_dir: Path) -> InstalledModel:
+    """A tiny but complete, valid, real `starcoder2` GGUF (see tests/tiny_gguf_starcoder2.py) -
+    exercises the real biased q/k/v/o + biased plain (non-gated) tanh-GELU MLP, biased LayerNorm,
+    and the real "no unpermute_rope_rows" finding, for fast/safe `/api/chat` tests against the
+    real `Starcoder2Architecture`/`GGUFTokenizer` pipeline."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-starcoder2"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_starcoder2_gguf(gguf_path, seed=1)
+
+    installed = InstalledModel(
+        tag="tiny-starcoder2:latest",
+        path=str(gguf_path),
+        architecture="starcoder2",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="starcoder2",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_starcoder2_tied_embeddings_model(models_dir: Path) -> InstalledModel:
+    """Same as `tiny_starcoder2_model`, but with no separate `output.weight` tensor - real
+    `bigcode/starcoder2-3b/-7b/-15b` checkpoints all tie embeddings (`tie_word_embeddings=True`),
+    detected dynamically (`loader.has_tensor("output.weight")`), same as every other architecture
+    here, not assumed."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-starcoder2-tied"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_starcoder2_gguf(gguf_path, tied_embeddings=True)
+
+    installed = InstalledModel(
+        tag="tiny-starcoder2-tied:latest",
+        path=str(gguf_path),
+        architecture="starcoder2",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="starcoder2",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_llama_moe_model(models_dir: Path) -> InstalledModel:
+    """A tiny but complete, valid, real Mixtral-style `llama` GGUF (see tiny_gguf_llama_moe.py) -
+
+    exercises the real sparse MoE FFN dispatch through `LlamaArchitecture`'s own MoE detection,
+    for fast/safe `/api/chat` tests. Real `general.architecture` stays `"llama"` (no separate
+    `mixtral` GGUF architecture string exists - see app/architectures/llama_moe.py)."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-llama-moe"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_llama_moe_gguf(gguf_path)
+
+    installed = InstalledModel(
+        tag="tiny-llama-moe:latest",
+        path=str(gguf_path),
+        architecture="llama",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="llama",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_falcon_model(models_dir: Path) -> InstalledModel:
+    """A tiny but complete, valid, real `falcon` GGUF (see tests/tiny_gguf_falcon.py) - exercises
+
+    the real fused, bias-free, MQA-shaped `attn_qkv` split and the real single biased
+    parallel-residual norm, for fast/safe `/api/chat` tests against the real
+    `FalconArchitecture`/`GGUFTokenizer` pipeline."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-falcon"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_falcon_gguf(gguf_path, seed=1)
+
+    installed = InstalledModel(
+        tag="tiny-falcon:latest",
+        path=str(gguf_path),
+        architecture="falcon",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="falcon",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_falcon_tied_embeddings_model(models_dir: Path) -> InstalledModel:
+    """Same as `tiny_falcon_model`, but with no separate `output.weight` tensor - real
+    `tiiuae/falcon-7b` always ships one (confirmed via a real downloaded GGUF header, untied),
+    so this is the edge case, not the common one - detected dynamically
+    (`loader.has_tensor("output.weight")`), same as every other architecture here."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-falcon-tied"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_falcon_gguf(gguf_path, tied_embeddings=True)
+
+    installed = InstalledModel(
+        tag="tiny-falcon-tied:latest",
+        path=str(gguf_path),
+        architecture="falcon",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="falcon",
         parameter_size="0.001B",
         context_length=32,
     )

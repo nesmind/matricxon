@@ -29,6 +29,11 @@ class QwenAttention(nn.Module):
     `apply_rotary_pos_emb` - RMSNorm's last-dim reduction makes applying it before or after the
     transpose used here mathematically identical, so this applies it after, matching every other
     call in this class). `None` for Qwen2 (no QK-norm at all).
+
+    `o_proj_bias` - Qwen2/Qwen3/Command-R all confirm `o_proj` never has a bias regardless of
+    `qkv_bias` (the default, `False`); StarCoder2 is the first real reuse case where it does
+    (`config.use_bias` gates all four projections identically, confirmed via HF's own
+    `modeling_starcoder2.py` - see `Starcoder2Attention`).
     """
 
     def __init__(
@@ -40,6 +45,7 @@ class QwenAttention(nn.Module):
         qkv_bias: bool,
         qk_norm_eps: float | None,
         dtype: torch.dtype = torch.float32,
+        o_proj_bias: bool = False,
     ) -> None:
         super().__init__()
         self.n_head = n_head
@@ -48,7 +54,7 @@ class QwenAttention(nn.Module):
         self.q_proj = nn.Linear(n_embd, n_head * head_dim, bias=qkv_bias, dtype=dtype)
         self.k_proj = nn.Linear(n_embd, n_head_kv * head_dim, bias=qkv_bias, dtype=dtype)
         self.v_proj = nn.Linear(n_embd, n_head_kv * head_dim, bias=qkv_bias, dtype=dtype)
-        self.o_proj = nn.Linear(n_head * head_dim, n_embd, bias=False, dtype=dtype)
+        self.o_proj = nn.Linear(n_head * head_dim, n_embd, bias=o_proj_bias, dtype=dtype)
         if qk_norm_eps is not None:
             self.q_norm = RMSNorm(head_dim, qk_norm_eps, dtype=dtype)
             self.k_norm = RMSNorm(head_dim, qk_norm_eps, dtype=dtype)

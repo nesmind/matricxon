@@ -2,21 +2,17 @@
 every modern instruct GGUF carries (the same template Hugging Face's `apply_chat_template`,
 llama.cpp and Ollama all render). Replaces the old "every model gets Mistral's `[INST]` format"
 behavior: a real Llama-3.2 chat through pAIring (2026-09-23) got `[INST]`-formatted prompts,
-answered with empty replies or echoed `</s>[INST]...[/INST]` turns as plain text, and never
-emitted its real `<|eot_id|>` stop token.
+answered with empty replies or echoed `</s>[INST]...[/INST]` as plain text, never emitting its
+real `<|eot_id|>` stop token.
 
-`mistral3` keeps `Mistral3PromptBuilder` (hand-verified against its real template, including
-tool calling). A model without any template and without that real mistral3 architecture falls
-back to `LegacyMistralPromptBuilder` instead (see its own docstring) - Mistral3PromptBuilder's
-`[SYSTEM_PROMPT]` tag is specific to Mistral's newer tokenizer and broke older Mistral-based
-fine-tunes the same way `[INST]`-for-everything broke Llama 3.2 (Hebrew-Mistral-7B-Q5_K_M,
-2026-09-27: echoed `[/SYSTEM_PROMPT]` back and invented its own closing tags). A tag/filename
-matching "vicuna" gets `VicunaPromptBuilder` instead of that same Legacy-Mistral guess - its own
-GGUF metadata gives no way to detect the format otherwise (llava-v1.6-vicuna-7b, 2026-09-27:
-`general.architecture == "llama"`, no chat_template, `general.name == "LLaMA v2"` -
-indistinguishable from countless other llama-arch models by metadata alone - and the wrong
-Mistral-shaped guess produced a real, empty, immediate-EOS reply once a real system prompt was
-included).
+`mistral3` keeps `Mistral3PromptBuilder` (hand-verified, including tool calling). No template and
+not mistral3 falls back to `LegacyMistralPromptBuilder` (see its own docstring) -
+Mistral3PromptBuilder's `[SYSTEM_PROMPT]` tag is Mistral-newer-tokenizer-specific and broke an
+older Mistral fine-tune the same way `[INST]`-for-everything broke Llama 3.2
+(Hebrew-Mistral-7B-Q5_K_M, 2026-09-27). A tag/filename matching "vicuna" gets
+`VicunaPromptBuilder` instead - its own GGUF gives no metadata-only way to detect the format
+(llava-v1.6-vicuna-7b: indistinguishable from countless other llama-arch models by metadata alone
+- the wrong Mistral-shaped guess produced a real, empty, immediate-EOS reply).
 """
 
 import json
@@ -38,19 +34,15 @@ from app.runtime.vision_fusion import IMAGE_MARKER
 from app.schemas.chat import ChatMessage
 from app.server.errors import MatricxonError
 
-# Matched against a model's own tag/filename (see PromptBuilderFactory.for_metadata) - a Vicuna
-# fine-tune's GGUF metadata gives no way to detect this (confirmed live, 2026-09-27,
-# llava-v1.6-vicuna-7b: no tokenizer.chat_template, general.name = "LLaMA v2", general.architecture
-# = "llama" same as countless non-Vicuna llama-arch models), so this is a name-based heuristic,
-# same spirit as app.models.capabilities._THINKING_MARKERS' own repo/filename substring match.
+# Name-based heuristic (see PromptBuilderFactory.for_metadata) - a Vicuna fine-tune's GGUF gives
+# no metadata-only way to detect this (see module docstring), same spirit as
+# app.models.capabilities._THINKING_MARKERS' own repo/filename substring match.
 _VICUNA_TAG_MARKER = "vicuna"
 
 # Built-in templates for real models whose GGUF ships no `tokenizer.chat_template`, keyed by
-# `general.name`: (template, always add BOS). moondream2's own reference format
-# (vikhyatk/moondream2's answer_question: "<image>\n\nQuestion: {q}\n\nAnswer:", BOS first) -
-# under the old Mistral `[INST]` fallback its very first generated token was end-of-text (a real
-# empty reply, 2026-09-23). System messages are skipped, as Ollama's own moondream template does -
-# they only confuse a 1.9B model.
+# `general.name`: (template, always add BOS). moondream2's own reference format (BOS first,
+# system messages skipped - only confuse a 1.9B model) - the old Mistral fallback's first
+# generated token was EOS here (empty reply, 2026-09-23).
 _MOONDREAM_TEMPLATE = (
     "{% for m in messages %}"
     "{% if m.role == 'user' %}{{ m.image_markers + '\n\nQuestion: ' + m.text }}"
@@ -60,13 +52,10 @@ _MOONDREAM_TEMPLATE = (
 )
 _BUILTIN_TEMPLATES = {"moondream2": (_MOONDREAM_TEMPLATE, True)}
 
-# Llama 3.x's own template always opens with a system block ("Cutting Knowledge Date: December
-# 2023 / Today Date: ..."), even with no system message and no tools. Ollama's llama3 template
-# only writes a system block when there is a system message (or tools), so for "Say hi." Ollama
-# prefilled 13 tokens and Matricxon 40 (measured 2026-09-23) - three times the prefill work, which
-# on this project's CPU is most of a short reply's latency. Used instead of the GGUF template
-# whenever there are no tools; with tools, the model's own template (which Ollama's also matches
-# there) still renders the tool-calling instructions.
+# Llama 3.x's own template always opens with a system block, even with no system message/tools;
+# Ollama's llama3 template only writes one when there is a system message (or tools) - for "Say
+# hi." Ollama prefilled 13 tokens, Matricxon 40 (2026-09-23), most of a short reply's CPU latency.
+# Used whenever there are no tools; with tools, the model's own template still renders them.
 _LLAMA3_COMPACT_TEMPLATE = (
     "{{ bos_token }}"
     "{% for m in messages %}"
@@ -78,6 +67,14 @@ _LLAMA3_COMPACT_TEMPLATE = (
     "{% endif %}"
 )
 _LLAMA3_TEMPLATE_MARKERS = ("<|start_header_id|>", "Cutting Knowledge Date")
+
+# Real marker (`ggml-org/SmolVLM2-2.2B-Instruct-GGUF`'s own template:
+# `message['content'][0]['type']`) for a template expecting `content` as a real list of
+# `{"type": ...}` parts (HF's own multi-modal convention), not a flat string. Confirmed live: a
+# flat string crashes on empty content (`content[0]` - "str object has no element 0") or, worse,
+# silently renders empty on non-empty content (`content[0]` returns a 1-char string, not a dict,
+# so `['type']` is Jinja `Undefined` - every `{% if line['type'] == ... %}` never matches).
+_STRUCTURED_CONTENT_MARKERS = ("content'][0]", 'content"][0]')
 
 
 class PromptBuilder(Protocol):
@@ -98,9 +95,9 @@ class ChatTemplatePromptBuilder:
         eos_token: str,
         add_bos: bool = False,
         no_tools_template: str | None = None,
+        structured_content: bool = False,
     ) -> None:
-        # Same Jinja settings Hugging Face's own apply_chat_template uses - templates are written
-        # against them (whitespace control in particular).
+        # Same Jinja settings HF's own apply_chat_template uses (whitespace control in particular).
         env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True)
         env.filters["tojson"] = self._tojson
         env.globals["raise_exception"] = self._raise_exception
@@ -111,6 +108,7 @@ class ChatTemplatePromptBuilder:
         self._bos_token = bos_token
         self._eos_token = eos_token
         self._add_bos = add_bos
+        self._structured_content = structured_content
 
     @classmethod
     def from_metadata(cls, metadata: GGUFMetadata) -> "ChatTemplatePromptBuilder | None":
@@ -128,12 +126,14 @@ class ChatTemplatePromptBuilder:
             return tokens[token_id] if token_id is not None and token_id < len(tokens) else ""
 
         is_llama3 = all(marker in template for marker in _LLAMA3_TEMPLATE_MARKERS)
+        structured_content = any(marker in template for marker in _STRUCTURED_CONTENT_MARKERS)
         return cls(
             template,
             token_text("tokenizer.ggml.bos_token_id"),
             token_text("tokenizer.ggml.eos_token_id"),
             add_bos,
             _LLAMA3_COMPACT_TEMPLATE if is_llama3 else None,
+            structured_content,
         )
 
     @staticmethod
@@ -146,18 +146,30 @@ class ChatTemplatePromptBuilder:
     def _raise_exception(message: str) -> None:
         raise ChatTemplateError(f"chat template rejected the conversation: {message}")
 
-    @staticmethod
-    def _message_dict(message: ChatMessage) -> dict[str, Any]:
+    def _message_dict(self, message: ChatMessage) -> dict[str, Any]:
         """`content` gets one `[IMG]` marker per attached image in front, exactly like
-        Mistral3PromptBuilder - app.runtime.vision_fusion splits the rendered prompt on them to
-        splice in image embeddings. `text`/`image_markers` are the same two parts separately, for a
-        template (like moondream's) that places the image somewhere other than right before the
-        text."""
+        Mistral3PromptBuilder - vision_fusion splits the *rendered* prompt on this literal
+        substring, so it must survive rendering verbatim no matter what shape the real template
+        expects. With `self._structured_content` (see `_STRUCTURED_CONTENT_MARKERS`), every part
+        is still `{"type": "text", ...}`, even the image ones (`text: IMAGE_MARKER`) - never a
+        real `{"type": "image"}`: a template's own image branch renders its *own* hardcoded
+        literal (e.g. SmolVLM2's `'<image>'`), ignoring whatever we put there, so only the
+        text branch (which always echoes `text` back verbatim) can carry our marker through.
+        Real, confirmed-live cost: the prompt shows `[IMG]` instead of the template's own image
+        literal, and a `content[0]['type']=='image'` punctuation check (SmolVLM2 has one) takes
+        its no-image path - cosmetic, outweighed by the alternative (image embeddings landing
+        after the generation prompt instead of in the turn at all, confirmed live).
+        """
         data = message.model_dump(exclude_none=True, exclude={"images"})
         markers = IMAGE_MARKER * len(message.images or [])
-        data["text"] = message.content or ""
+        text = message.content or ""
+        data["text"] = text
         data["image_markers"] = markers
-        data["content"] = markers + data["text"]
+        if self._structured_content:
+            image_parts = [{"type": "text", "text": IMAGE_MARKER} for _ in (message.images or [])]
+            data["content"] = [*image_parts, {"type": "text", "text": text}]
+        else:
+            data["content"] = markers + text
         return data
 
     def build(self, messages: list[ChatMessage], tools: list[dict] | None = None) -> str:
@@ -221,15 +233,12 @@ _confirmed_chat_format_cache: dict[tuple[str, int, int, str], bool] = {}
 
 def has_confirmed_chat_format(gguf_path: str | Path, tag: str = "") -> bool:
     """Whether `gguf_path` gets a chat template we actually know matches its real training format
-    (see _has_confirmed_template above), for a caller that only has a path, not an already-parsed
-    GGUFMetadata (see app.models.capabilities.effective_capabilities, the "chat_format_unverified"
-    capability this powers) - PromptBuilderFactory.for_metadata itself never needs this since its
-    caller already has the metadata parsed for other reasons.
 
-    False is not proof the model is actually a base/non-chat model - only that Matricxon has no
-    real confirmation of its chat format and is falling back to a generic guess, which a real,
-    confirmed-live case (Hebrew-Mistral-7B-Q5_K_M, 2026-09-27) showed can still produce incoherent,
-    non-chat-like output regardless of which guess is used."""
+    (see _has_confirmed_template above), for a caller with only a path, not already-parsed
+    GGUFMetadata (see app.models.capabilities.effective_capabilities's "chat_format_unverified").
+    False isn't proof of a base/non-chat model - just that this is a generic guess, which can
+    still produce incoherent output regardless of which guess is used (Hebrew-Mistral-7B-Q5_K_M,
+    2026-09-27)."""
     path = Path(gguf_path)
     stat = path.stat()
     cache_key = (str(path), stat.st_mtime_ns, stat.st_size, tag)

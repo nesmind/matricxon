@@ -1,6 +1,7 @@
 from app.architectures.base import ModelArchitecture
 from app.architectures.bert import BertArchitecture
 from app.architectures.command_r import CommandRArchitecture
+from app.architectures.falcon import FalconArchitecture
 from app.architectures.gemma4 import Gemma4Architecture
 from app.architectures.granite import GraniteArchitecture
 from app.architectures.granitemoe import GraniteMoeArchitecture
@@ -12,6 +13,7 @@ from app.architectures.phi2 import Phi2Architecture
 from app.architectures.qwen2 import Qwen2Architecture
 from app.architectures.qwen3 import Qwen3Architecture
 from app.architectures.registry import ArchitectureRegistry
+from app.architectures.starcoder2 import Starcoder2Architecture
 
 
 class TestNameMatchesSupports:
@@ -46,6 +48,8 @@ class TestNameMatchesSupports:
             Qwen2Architecture,
             Qwen3Architecture,
             CommandRArchitecture,
+            Starcoder2Architecture,
+            FalconArchitecture,
         ):
             assert architecture_cls.supports(_FakeMetadata(architecture_cls.NAME)) is True
             assert architecture_cls.supports(_FakeMetadata("not-a-real-architecture")) is False
@@ -68,6 +72,8 @@ class TestSupportedNames:
             Qwen2Architecture.NAME,
             Qwen3Architecture.NAME,
             CommandRArchitecture.NAME,
+            Starcoder2Architecture.NAME,
+            FalconArchitecture.NAME,
         ]
 
     def test_every_name_is_a_real_string_not_a_class_object(self) -> None:

@@ -52,7 +52,9 @@ class Mistral3TextArchitecture(ModelArchitecture):
         self._enable_quantized_native = enable_quantized_native
         self.n_embd = metadata.get_u32(metadata.arch_key("embedding_length"))
         self.n_head = metadata.get_u32(metadata.arch_key("attention.head_count"))
-        self.n_head_kv = metadata.get_u32(metadata.arch_key("attention.head_count_kv"))
+        # Falls back to n_head when absent (no GQA) - see LlamaArchitecture's own docstring for
+        # the real file that confirmed this gap.
+        self.n_head_kv = metadata.get_u32(metadata.arch_key("attention.head_count_kv"), self.n_head)
         self.head_dim = metadata.get_u32(metadata.arch_key("attention.key_length"))
         self.n_layer = metadata.get_u32(metadata.arch_key("block_count"))
         self.ffn_len = metadata.get_u32(metadata.arch_key("feed_forward_length"))
@@ -106,8 +108,8 @@ class Mistral3TextArchitecture(ModelArchitecture):
                     self.n_head,
                     self.n_head_kv,
                     self.head_dim,
-                    self.ffn_len,
                     self.rms_eps,
+                    mlp=SwiGLUMLP(self.n_embd, self.ffn_len, dtype=self._layer_dtypes[i]),
                     dtype=self._layer_dtypes[i],
                 )
                 for i in range(self.n_layer)

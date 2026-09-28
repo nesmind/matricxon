@@ -4,91 +4,35 @@ from torch import nn
 
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
+from app.vision.clip_vision_encoder_layer import ClipVisionEncoderLayer
+from app.vision.idefics3_projector import (
+    build_projector,
+    compute_num_patches,
+    load_projector_weights,
+    pixel_shuffle,
+)
 
-
-class ClipVisionEncoderLayer(nn.Module):
-    """A standard pre-norm ViT block - plain (non-causal, non-grouped)
-
-    multi-head self-attention with real biases on every projection
-    (confirmed via this GGUF's real tensor list, unlike matricxon's
-    bias-free text decoders), then a 2-layer GELU MLP. Pre-norm (LN before
-    each sub-block), not `BertArchitecture`'s post-norm - confirmed by the
-    real tensor names (`ln1`/`ln2` feed into, not out of, their sub-block).
-
-    `fc1`/`fc2` (expand then contract) are named generically on purpose,
-    not `ffn_up`/`ffn_down` - a real, confirmed surprise (via the tensors'
-    own bias lengths, not assumed from the names) is that this GGUF's
-    actual `ffn_up.weight`/`ffn_up.bias` is the *contracting* projection
-    (bias has `n_embd` elements) and `ffn_down` is the *expanding* one
-    (bias has `ffn_len` elements) - the opposite of what those names would
-    suggest. See `ClipVisionEncoder.from_gguf`'s loading code for exactly
-    which real tensor feeds which of `fc1`/`fc2`.
-    """
-
-    def __init__(
-        self, n_embd: int, n_head: int, ffn_len: int, eps: float, dtype: torch.dtype = torch.float32
-    ) -> None:
-        super().__init__()
-        self.n_head = n_head
-        self.head_dim = n_embd // n_head
-        self.ln1 = nn.LayerNorm(n_embd, eps=eps, dtype=dtype)
-        self.q_proj = nn.Linear(n_embd, n_embd, dtype=dtype)
-        self.k_proj = nn.Linear(n_embd, n_embd, dtype=dtype)
-        self.v_proj = nn.Linear(n_embd, n_embd, dtype=dtype)
-        self.out_proj = nn.Linear(n_embd, n_embd, dtype=dtype)
-        self.ln2 = nn.LayerNorm(n_embd, eps=eps, dtype=dtype)
-        self.fc1 = nn.Linear(n_embd, ffn_len, dtype=dtype)
-        self.fc2 = nn.Linear(ffn_len, n_embd, dtype=dtype)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch, seq_len, n_embd = x.shape
-
-        residual = x
-        h = self.ln1(x)
-        q = self.q_proj(h).view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
-        k = self.k_proj(h).view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
-        v = self.v_proj(h).view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
-        attn = F.scaled_dot_product_attention(
-            q, k, v
-        )  # no causal mask - a full image, not a sequence
-        attn = attn.transpose(1, 2).reshape(batch, seq_len, n_embd)
-        x = residual + self.out_proj(attn)
-
-        residual = x
-        h = self.ln2(x)
-        h = self.fc2(F.gelu(self.fc1(h)))
-        return residual + h
+_PROJECTOR_MLP = "mlp"
+_PROJECTOR_IDEFICS3 = "idefics3"
 
 
 class ClipVisionEncoder(nn.Module):
-    """The real `clip`-architecture vision tower + MLP projector
+    """The real `clip`-architecture vision tower + projector llama.cpp's
 
-    llama.cpp's `clip.cpp`/mmproj GGUF format packages. Originally built and
-    validated against a real `moondream/moondream2-gguf` mmproj pull (a
-    SigLIP-shaped ViT: learned absolute position embeddings, no CLS token,
-    no pre-transformer LayerNorm, a final `post_ln` applied to the whole
-    patch sequence) followed by a real 2-layer MLP projector (`mm.0`/`mm.2`,
-    `clip.projector_type = "mlp"`) into the paired text model's embedding
-    space.
-
-    Extended (2026-09-21, real `second-state/Llava-v1.6-Vicuna-7B-GGUF`
-    mmproj pull) to also handle real OpenAI-CLIP-shaped vision towers, which
-    differ in three confirmed, real ways from SigLIP - each made
-    conditional on the corresponding tensor's real presence, so the
-    already-validated moondream2/SigLIP path (none of the three tensors
-    exist there) is completely unchanged:
-    - a real CLS token (`v.class_embd`, prepended before the patch sequence;
-      `v.position_embd.weight`'s real shape is `num_patches + 1` here, not
-      `num_patches`) - dropped again before the projector, since LLaVA's
-      own real usage feeds only patch features forward, not the CLS token
-      (the one design choice here not directly read off metadata - flagged
-      for empirical verification against real output, not certain);
-    - a real pre-transformer LayerNorm (`v.pre_ln`), applied once right
-      after the position embedding add, before the first encoder layer;
-    - **no** final `post_ln` at all on this file (confirmed: `v.post_ln.*`
-      simply isn't in this GGUF's real tensor list - the original code
-      loaded it unconditionally, which would have crashed outright on this
-      file) - skipped (identity) when absent rather than assumed present.
+    `clip.cpp`/mmproj GGUF format packages. Validated against three real
+    mmproj pulls, each conditional on real tensor presence so earlier paths
+    stay unchanged:
+    - `moondream/moondream2-gguf`: SigLIP-shaped (no CLS token, no pre_ln, a
+      real post_ln) + a 2-layer MLP projector (`mm.0`/`mm.2`,
+      `clip.projector_type = "mlp"`).
+    - `second-state/Llava-v1.6-Vicuna-7B-GGUF` (2026-09-21): OpenAI-CLIP-
+      shaped towers add a CLS token (`v.class_embd`, dropped again before
+      the projector), a pre-transformer LayerNorm (`v.pre_ln`), and may omit
+      `post_ln` entirely (skipped when the tensor is absent).
+    - `ggml-org/SmolVLM-256M-Instruct-GGUF` (2026-09-28): Idefics3's
+      `idefics3` projector (pixel-shuffle merge + a single bias-free linear)
+      - see `app.vision.idefics3_projector.pixel_shuffle`'s own docstring
+      for the full history and real-file verification detail.
 
     Still deliberately **not** a `ModelArchitecture` subclass / not
     registered in `ArchitectureRegistry` - this stays a standalone component
@@ -100,12 +44,14 @@ class ClipVisionEncoder(nn.Module):
     def __init__(
         self,
         metadata: GGUFMetadata,
-        projector_hidden: int,
         projection_dim: int,
         has_class_embd: bool,
         has_pre_ln: bool,
         has_post_ln: bool,
         has_patch_embd_bias: bool = True,
+        projector_type: str = _PROJECTOR_MLP,
+        projector_hidden: int | None = None,
+        scale_factor: int = 1,
         dtype: torch.dtype = torch.float32,
     ) -> None:
         super().__init__()
@@ -119,8 +65,16 @@ class ClipVisionEncoder(nn.Module):
         self.projection_dim = projection_dim
         self.image_mean: list[float] = metadata.require("clip.vision.image_mean")
         self.image_std: list[float] = metadata.require("clip.vision.image_std")
-        self.num_patches = (self.image_size // self.patch_size) ** 2
         self.has_class_embd = has_class_embd
+        self.projector_type = projector_type
+        self.scale_factor = scale_factor
+
+        # Position embeddings apply at the raw (pre-pixel-shuffle) patch resolution.
+        self.raw_num_patches = (self.image_size // self.patch_size) ** 2
+        if projector_type == _PROJECTOR_IDEFICS3:
+            self.num_patches = compute_num_patches(self.raw_num_patches, scale_factor)
+        else:
+            self.num_patches = self.raw_num_patches
 
         self.patch_embd = nn.Conv2d(
             3,
@@ -133,7 +87,7 @@ class ClipVisionEncoder(nn.Module):
         self.class_embd = (
             nn.Parameter(torch.zeros(self.n_embd, dtype=dtype)) if has_class_embd else None
         )
-        position_len = self.num_patches + 1 if has_class_embd else self.num_patches
+        position_len = self.raw_num_patches + 1 if has_class_embd else self.raw_num_patches
         self.position_embd = nn.Parameter(torch.zeros(position_len, self.n_embd, dtype=dtype))
         self.pre_ln = nn.LayerNorm(self.n_embd, eps=self.eps, dtype=dtype) if has_pre_ln else None
         self.layers = nn.ModuleList(
@@ -147,8 +101,19 @@ class ClipVisionEncoder(nn.Module):
         self.post_ln = (
             nn.LayerNorm(self.n_embd, eps=self.eps, dtype=dtype) if has_post_ln else None
         )
-        self.projector_up = nn.Linear(self.n_embd, projector_hidden, dtype=dtype)
-        self.projector_down = nn.Linear(projector_hidden, self.projection_dim, dtype=dtype)
+
+        self.projector_up: nn.Linear | None = None
+        self.projector_down: nn.Linear | None = None
+        self.mm_fc: nn.Linear | None = None
+        if projector_type == _PROJECTOR_IDEFICS3:
+            self.mm_fc = build_projector(self.n_embd, scale_factor, self.projection_dim, dtype)
+        elif projector_type == _PROJECTOR_MLP:
+            if projector_hidden is None:
+                raise ValueError("projector_hidden is required for the mlp projector type")
+            self.projector_up = nn.Linear(self.n_embd, projector_hidden, dtype=dtype)
+            self.projector_down = nn.Linear(projector_hidden, self.projection_dim, dtype=dtype)
+        else:
+            raise ValueError(f"Unsupported clip.projector_type: {projector_type!r}")
 
     @classmethod
     def supports(cls, metadata: GGUFMetadata) -> bool:
@@ -160,48 +125,51 @@ class ClipVisionEncoder(nn.Module):
     def from_gguf(
         cls, loader: GGUFModelLoader, dtype: torch.dtype = torch.float32
     ) -> "ClipVisionEncoder":
-        """Eager loading (unlike the text decoders' on-the-fly dequant) -
+        """Eager loading - unlike the text decoders' on-the-fly dequant, this
 
-        this component isn't part of `ModelManager`'s load/evict lifecycle
-        at all (see this class's own docstring on why), so there's no
-        request-latency or memory-pressure motivation to defer it.
+        component isn't part of `ModelManager`'s load/evict lifecycle, so
+        there's no latency/memory motivation to defer it.
         """
-        # The MLP projector's hidden width isn't exposed via any `clip.*` metadata key (confirmed
-        # on the real moondream2 mmproj GGUF) - only derivable from `mm.0.weight`'s own real shape
-        # (1152->8192->2048 on that file), so it's read here before construction rather than
-        # hardcoded, letting a differently-sized real (or tiny synthetic test) projector still work.
-        projector_up_weight = loader.load_tensor("mm.0.weight")
-        projector_hidden = projector_up_weight.shape[0]
-        # Same reasoning, extended: `clip.vision.projection_dim` is confirmed *wrong* on the real
-        # LLaVA mmproj file (metadata says 768 - CLIP's own native contrastive-projection width,
-        # unrelated to this file's real mm-projector output - while `mm.2.weight`'s real shape is
-        # 4096, matching the paired Vicuna-7B text model's actual hidden size). Trusting the
-        # metadata here would silently build a projector with the wrong output width and crash on
-        # the very next `.copy_()` - real tensor shape wins, same as `projector_hidden` above.
-        projection_dim = loader.load_tensor("mm.2.weight").shape[0]
+        projector_type = loader.metadata.get_str("clip.projector_type", _PROJECTOR_MLP)
         has_class_embd = loader.has_tensor("v.class_embd")
         has_pre_ln = loader.has_tensor("v.pre_ln.weight")
         has_post_ln = loader.has_tensor("v.post_ln.weight")
         has_patch_embd_bias = loader.has_tensor("v.patch_embd.bias")
 
+        projector_up_weight: torch.Tensor | None = None
+        projector_hidden: int | None = None
+        idefics3_fc_weight: torch.Tensor | None = None
+        scale_factor = 1
+        if projector_type == _PROJECTOR_IDEFICS3:
+            idefics3_fc_weight, projection_dim, scale_factor = load_projector_weights(loader)
+        else:
+            # mm.0/mm.2's real shapes win over metadata: the MLP hidden width has no `clip.*`
+            # metadata key at all, and `clip.vision.projection_dim` is confirmed *wrong* on the
+            # real LLaVA mmproj file (768 = CLIP's native contrastive-projection width, not this
+            # file's real mm-projector output of 4096) - trusting it would crash on `.copy_()`.
+            projector_up_weight = loader.load_tensor("mm.0.weight")
+            projector_hidden = projector_up_weight.shape[0]
+            projection_dim = loader.load_tensor("mm.2.weight").shape[0]
+
         model = cls(
             loader.metadata,
-            projector_hidden,
             projection_dim,
             has_class_embd,
             has_pre_ln,
             has_post_ln,
             has_patch_embd_bias=has_patch_embd_bias,
+            projector_type=projector_type,
+            projector_hidden=projector_hidden,
+            scale_factor=scale_factor,
             dtype=dtype,
         )
         with torch.no_grad():
-            model.projector_up.weight.copy_(projector_up_weight)
             model.patch_embd.weight.copy_(loader.load_tensor("v.patch_embd.weight"))
             if model.patch_embd.bias is not None:
                 model.patch_embd.bias.copy_(loader.load_tensor("v.patch_embd.bias"))
             if model.class_embd is not None:
                 model.class_embd.copy_(loader.load_tensor("v.class_embd"))
-            position_len = model.num_patches + 1 if has_class_embd else model.num_patches
+            position_len = model.raw_num_patches + 1 if has_class_embd else model.raw_num_patches
             model.position_embd.copy_(
                 loader.load_tensor("v.position_embd.weight").reshape(position_len, model.n_embd)
             )
@@ -232,22 +200,22 @@ class ClipVisionEncoder(nn.Module):
             if model.post_ln is not None:
                 model.post_ln.weight.copy_(loader.load_tensor("v.post_ln.weight"))
                 model.post_ln.bias.copy_(loader.load_tensor("v.post_ln.bias"))
-            model.projector_up.bias.copy_(loader.load_tensor("mm.0.bias"))
-            model.projector_down.weight.copy_(loader.load_tensor("mm.2.weight"))
-            model.projector_down.bias.copy_(loader.load_tensor("mm.2.bias"))
+            if model.mm_fc is not None:
+                model.mm_fc.weight.copy_(idefics3_fc_weight)
+            else:
+                model.projector_up.weight.copy_(projector_up_weight)
+                model.projector_up.bias.copy_(loader.load_tensor("mm.0.bias"))
+                model.projector_down.weight.copy_(loader.load_tensor("mm.2.weight"))
+                model.projector_down.bias.copy_(loader.load_tensor("mm.2.bias"))
         return model.eval()
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """pixel_values: (batch, 3, image_size, image_size) -> projected
+        """pixel_values (batch, 3, image_size, image_size) -> projected
 
-        embeddings (batch, num_patches, projection_dim) - one "soft token"
-        per real image patch, in the paired text model's embedding space
-        (see `app.routers.chat_router.ChatRequestHandler` for where these
-        get spliced into a real chat request's input embeddings). The CLS
-        token, when this file has one, is used internally (it's a real part
-        of the pre-trained position/attention structure) but dropped from
-        the returned sequence - LLaVA's own real usage feeds only patch
-        features onward, never the CLS token itself.
+        embeddings (batch, num_patches, projection_dim), one soft token per
+        real image patch (see `ChatRequestHandler` for the splice into a
+        chat request's input embeddings). A CLS token, when present, is used
+        internally but dropped before the projector.
         """
         x = self.patch_embd(pixel_values)  # (batch, n_embd, grid, grid)
         x = x.flatten(2).transpose(1, 2)  # (batch, num_patches, n_embd)
@@ -268,5 +236,9 @@ class ClipVisionEncoder(nn.Module):
         if self.class_embd is not None:
             x = x[:, 1:, :]  # drop the CLS position - see this method's own docstring
 
-        x = self.projector_down(F.gelu(self.projector_up(x)))
+        if self.mm_fc is not None:
+            x = pixel_shuffle(x, self.scale_factor)
+            x = self.mm_fc(x)
+        else:
+            x = self.projector_down(F.gelu(self.projector_up(x)))
         return x
