@@ -149,8 +149,14 @@ class VicunaPromptBuilder:
     )
 
     def build(self, messages: list[ChatMessage], tools: list[dict] | None = None) -> str:
+        # Falls back to _DEFAULT_SYSTEM only when the caller sent no system message at all - a
+        # caller that explicitly sends one with empty content (see pAIring's
+        # app.services.chat_service, which always sends a system message specifically so this
+        # distinction is possible) means "genuinely no preamble," not "no opinion," and must be
+        # honored as blank rather than silently overridden.
+        has_system_message = any(m.role == "system" for m in messages)
         system_parts = [m.content for m in messages if m.role == "system"]
-        system = "\n\n".join(system_parts) if system_parts else self._DEFAULT_SYSTEM
+        system = "\n\n".join(system_parts) if has_system_message else self._DEFAULT_SYSTEM
         parts = [system, "\n\n"]
         for message in messages:
             content = ("[IMG]" * len(message.images or [])) + message.content

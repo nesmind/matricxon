@@ -269,6 +269,20 @@ class TestVicunaPromptBuilder:
 
         assert prompt == "Be terse.\n\nUSER: hi\n\nASSISTANT:"
 
+    def test_an_explicit_empty_system_message_is_honored(self) -> None:
+        """A caller that sends a system message with empty content (see pAIring's
+        app.services.chat_service, which always sends one) means "genuinely no preamble" -
+        distinct from sending no system message at all, which still falls back to
+        _DEFAULT_SYSTEM (see test_uses_the_default_system_preamble_when_none_is_given)."""
+        messages = [
+            ChatMessage(role="system", content=""),
+            ChatMessage(role="user", content="hi"),
+        ]
+
+        prompt = VicunaPromptBuilder().build(messages)
+
+        assert prompt == "\n\nUSER: hi\n\nASSISTANT:"
+
     def test_multiple_system_messages_are_joined(self) -> None:
         messages = [
             ChatMessage(role="system", content="Be terse."),
