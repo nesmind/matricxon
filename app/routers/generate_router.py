@@ -11,6 +11,7 @@ from app.models.handle import ModelHandle
 from app.models.manager import ModelManager
 from app.runtime.chat_engine import ChatEngine
 from app.runtime.generation_request import GenerationRequest, SamplingConfig
+from app.runtime.special_token_filter import SpecialTokenTextFilter
 from app.runtime.tokenizer import IncrementalTextDecoder
 from app.schemas.generate import GenerateChunk, GenerateDoneChunk, GenerateRequest
 from app.server.errors import PromptTooLongError
@@ -84,12 +85,14 @@ class GenerateRequestHandler:
         prompt_eval_count: int,
         load_duration: float,
     ) -> AsyncIterator[dict]:
+        eos_token_ids = {handle.tokenizer.eos_token_id} | handle.extra_eos_token_ids
         engine = ChatEngine(
             handle.architecture,
-            eos_token_ids={handle.tokenizer.eos_token_id},
+            eos_token_ids=eos_token_ids,
             prompt_cache=handle.prompt_cache,
         )
         decoder = IncrementalTextDecoder(handle.tokenizer)
+        special_token_filter = SpecialTokenTextFilter()
         results = handle.worker.stream(lambda: engine.stream(generation_request))
 
         eval_count = 0
@@ -101,11 +104,15 @@ class GenerateRequestHandler:
             if isinstance(item, Exception):
                 raise item
             eval_count += 1
-            if item == handle.tokenizer.eos_token_id:
+            if item in eos_token_ids:
                 continue
-            text = decoder.push(item)
+            text = special_token_filter.feed(decoder.push(item))
             if text:
                 yield GenerateChunk(response=text).to_ndjson_dict()
+
+        tail = special_token_filter.flush()
+        if tail:
+            yield GenerateChunk(response=tail).to_ndjson_dict()
 
         eval_duration = time.monotonic() - generation_started
         yield GenerateDoneChunk(

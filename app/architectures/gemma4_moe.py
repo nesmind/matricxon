@@ -29,14 +29,20 @@ validation gap in ROADMAP.md, same category as command-r/falcon's own unvalidate
 generation.
 """
 
+from collections.abc import Callable
+from functools import partial
+
 import torch
 import torch.nn.functional as F
 from torch import nn
 
 from app.architectures.gemma4_layers import rms_norm_no_scale
 from app.architectures.layers import RMSNorm
+from app.architectures.moe_experts import QuantizedMoEExperts, materialize_quantized_moe_experts
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
+
+_GELU_TANH = partial(F.gelu, approximate="tanh")
 
 
 def detect_moe(metadata: GGUFMetadata, arch: str) -> tuple[int | None, int | None, int | None]:
@@ -82,35 +88,6 @@ class Gemma4Router(nn.Module):
         return top_k_weights.to(x.dtype), top_k_idx
 
 
-class Gemma4Experts(nn.Module):
-    """Same sparse per-expert dispatch as `GraniteMoeFFN`'s own expert loop (gather routed
-    tokens, apply that expert, scale, scatter back) - see that class's own docstring for why
-    sparse dispatch over dense-then-mask, still true here."""
-
-    def __init__(
-        self, n_embd: int, ffn_len: int, num_experts: int, dtype: torch.dtype = torch.float32
-    ) -> None:
-        super().__init__()
-        self.gate_exps = nn.Parameter(torch.empty(num_experts, ffn_len, n_embd, dtype=dtype))
-        self.up_exps = nn.Parameter(torch.empty(num_experts, ffn_len, n_embd, dtype=dtype))
-        self.down_exps = nn.Parameter(torch.empty(num_experts, n_embd, ffn_len, dtype=dtype))
-
-    def forward(
-        self, x: torch.Tensor, top_k_weights: torch.Tensor, top_k_idx: torch.Tensor
-    ) -> torch.Tensor:
-        seq_len, n_embd = x.shape
-        out = torch.zeros(seq_len, n_embd, dtype=torch.float32)
-        for expert_id in top_k_idx.unique().tolist():
-            token_idx, k_idx = (top_k_idx == expert_id).nonzero(as_tuple=True)
-            x_e = x.index_select(0, token_idx)
-            gate = F.gelu(x_e @ self.gate_exps[expert_id].T, approximate="tanh")
-            up = x_e @ self.up_exps[expert_id].T
-            down = (gate * up) @ self.down_exps[expert_id].T
-            weight = top_k_weights[token_idx, k_idx].unsqueeze(-1)
-            out.index_add_(0, token_idx, (down * weight).to(torch.float32))
-        return out.to(x.dtype)
-
-
 class Gemma4MoEBlock(nn.Module):
     """Combines a real, always-computed dense MLP output with a sparse expert branch by
     addition - real op order (confirmed from both HF `modular_gemma4.py` and llama.cpp's
@@ -129,7 +106,7 @@ class Gemma4MoEBlock(nn.Module):
     ) -> None:
         super().__init__()
         self.router = Gemma4Router(n_embd, num_experts, num_experts_per_tok, rms_eps, dtype=dtype)
-        self.experts = Gemma4Experts(n_embd, ffn_len, num_experts, dtype=dtype)
+        self.experts = QuantizedMoEExperts(n_embd, ffn_len, num_experts, _GELU_TANH, dtype=dtype)
         self.post_norm_1 = RMSNorm(n_embd, rms_eps, dtype=dtype)
         self.pre_norm_2 = RMSNorm(n_embd, rms_eps, dtype=dtype)
         self.post_norm_2 = RMSNorm(n_embd, rms_eps, dtype=dtype)
@@ -146,15 +123,21 @@ class Gemma4MoEBlock(nn.Module):
         return hidden_states_1 + hidden_states_2
 
 
-def materialize_moe(moe: Gemma4MoEBlock, loader: GGUFModelLoader, prefix: str) -> None:
-    """MoE tensors: always a plain `.copy_()`, same reasoning as `llama_moe.materialize_moe_ffn`
-    - a real 3D per-expert tensor never goes through `_load_projection`."""
+def materialize_moe(
+    moe: Gemma4MoEBlock,
+    loader: GGUFModelLoader,
+    prefix: str,
+    enabled: bool,
+    mark_used: Callable[[GGUFModelLoader], None],
+) -> None:
+    """Router/norms: always a plain `.copy_()` (small, real per-model/per-expert scalars and
+    vectors - packing them wouldn't meaningfully help). Experts: `QuantizedMoEExperts`
+    (`app/architectures/moe_experts.py`) - real per-expert `QuantizedLinear`s when `enabled` and
+    a real GEMV kernel exists for this checkpoint's own expert-tensor type."""
     moe.router.proj.weight.copy_(loader.load_tensor(prefix + "ffn_gate_inp.weight"))
     moe.router.scale.data.copy_(loader.load_tensor(prefix + "ffn_gate_inp.scale"))
     moe.router.per_expert_scale.data.copy_(loader.load_tensor(prefix + "ffn_down_exps.scale"))
-    moe.experts.gate_exps.copy_(loader.load_tensor(prefix + "ffn_gate_exps.weight"))
-    moe.experts.up_exps.copy_(loader.load_tensor(prefix + "ffn_up_exps.weight"))
-    moe.experts.down_exps.copy_(loader.load_tensor(prefix + "ffn_down_exps.weight"))
+    materialize_quantized_moe_experts(moe.experts, loader, prefix, enabled, mark_used)
     moe.post_norm_1.weight.copy_(loader.load_tensor(prefix + "ffn_post_norm_1.weight"))
     moe.pre_norm_2.weight.copy_(loader.load_tensor(prefix + "ffn_pre_norm_2.weight"))
     moe.post_norm_2.weight.copy_(loader.load_tensor(prefix + "ffn_post_norm_2.weight"))

@@ -45,6 +45,11 @@ class ModelHandle:
     # This model's KV cache kept between calls, so a chat's next turn only prefills its new tokens
     # (see PromptCache). Freed with the handle when the model is evicted/unloaded.
     prompt_cache: PromptCache = field(default_factory=PromptCache)
+    # Real stop-token ids beyond tokenizer.eos_token_id (see app.runtime.chat_stop_tokens) -
+    # computed once at load time from this model's own real metadata, empty for anything not
+    # ChatML-shaped. Routers union this with {tokenizer.eos_token_id} for both ChatEngine's own
+    # stop condition and hiding the closing token's text from the visible stream.
+    extra_eos_token_ids: frozenset[int] = frozenset()
 
     @property
     def expires_at(self) -> float:

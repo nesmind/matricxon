@@ -18,6 +18,7 @@ from app.models.load_dtype import (
 from app.models.memory_guard import ensure_enough_memory_to_load
 from app.models.tokenizer_dispatch import build_tokenizer
 from app.models.worker import ModelWorker
+from app.runtime.chat_stop_tokens import extra_eos_token_ids
 from app.runtime.chat_template import PromptBuilderFactory
 
 
@@ -277,4 +278,5 @@ class ModelManager:
             ),
             last_used_at=now,
             prompt_builder=prompt_builder,
+            extra_eos_token_ids=extra_eos_token_ids(loader.metadata),
         )

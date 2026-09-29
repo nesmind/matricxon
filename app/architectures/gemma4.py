@@ -295,7 +295,9 @@ class Gemma4Architecture(ModelArchitecture):
                 loader, prefix + "ffn_down.weight", layer.mlp.down_proj, self._dtype, enabled
             )
             if layer.moe is not None:
-                materialize_moe(layer.moe, loader, prefix)
+                materialize_moe(
+                    layer.moe, loader, prefix, enabled, self._mark_quantized_native_used
+                )
             layer.post_feedforward_layernorm.weight.copy_(
                 loader.load_tensor(prefix + "post_ffw_norm.weight")
             )

@@ -28,9 +28,9 @@ def _random_ffn(num_experts: int, num_experts_per_tok: int, seed: int = 0) -> Gr
     ffn = GraniteMoeFFN(N_EMBD, FFN_LEN, num_experts, num_experts_per_tok, dtype=torch.float32)
     with torch.no_grad():
         ffn.router.weight.copy_(torch.randn_like(ffn.router.weight))
-        ffn.gate_exps.copy_(torch.randn_like(ffn.gate_exps))
-        ffn.up_exps.copy_(torch.randn_like(ffn.up_exps))
-        ffn.down_exps.copy_(torch.randn_like(ffn.down_exps))
+        ffn.experts.gate_exps.copy_(torch.randn_like(ffn.experts.gate_exps))
+        ffn.experts.up_exps.copy_(torch.randn_like(ffn.experts.up_exps))
+        ffn.experts.down_exps.copy_(torch.randn_like(ffn.experts.down_exps))
     return ffn
 
 
@@ -53,7 +53,10 @@ class TestSparseDispatchMatchesBruteForcePerToken:
             for k in range(num_experts_per_tok):
                 e = top_k_idx[k].item()
                 out_e = _expert_forward(
-                    x[0, t : t + 1], ffn.gate_exps[e], ffn.up_exps[e], ffn.down_exps[e]
+                    x[0, t : t + 1],
+                    ffn.experts.gate_exps[e],
+                    ffn.experts.up_exps[e],
+                    ffn.experts.down_exps[e],
                 )
                 expected[t] += weights[k] * out_e[0]
 
@@ -73,7 +76,9 @@ class TestSparseDispatchMatchesBruteForcePerToken:
         expected = torch.zeros(1, N_EMBD)
         for k in range(num_experts_per_tok):
             e = top_k_idx[k].item()
-            out_e = _expert_forward(x[0], ffn.gate_exps[e], ffn.up_exps[e], ffn.down_exps[e])
+            out_e = _expert_forward(
+                x[0], ffn.experts.gate_exps[e], ffn.experts.up_exps[e], ffn.experts.down_exps[e]
+            )
             expected += weights[k] * out_e
 
         assert torch.allclose(actual[0], expected, atol=1e-5)
@@ -101,7 +106,9 @@ class TestTopKThenSoftmaxOrder:
         weights = F.softmax(router_logits, dim=-1)  # (T, num_experts)
         expected = torch.zeros(3, N_EMBD)
         for e in range(num_experts):
-            out_e = _expert_forward(x_flat, ffn.gate_exps[e], ffn.up_exps[e], ffn.down_exps[e])
+            out_e = _expert_forward(
+                x_flat, ffn.experts.gate_exps[e], ffn.experts.up_exps[e], ffn.experts.down_exps[e]
+            )
             expected += weights[:, e : e + 1] * out_e
 
         assert torch.allclose(actual[0], expected, atol=1e-5)

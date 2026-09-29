@@ -218,7 +218,9 @@ class LlamaArchitecture(ModelArchitecture):
                 loader, prefix + "attn_output.weight", layer.self_attn.o_proj, self._dtype, enabled
             )
             if self.is_moe:
-                materialize_moe_ffn(layer.mlp, loader, prefix)
+                materialize_moe_ffn(
+                    layer.mlp, loader, prefix, enabled, self._mark_quantized_native_used
+                )
             else:
                 layer.mlp.gate_proj = self._load_projection(
                     loader, prefix + "ffn_gate.weight", layer.mlp.gate_proj, self._dtype, enabled

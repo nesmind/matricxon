@@ -10,6 +10,7 @@ from app.architectures.base import GenerationCancelledError, ModelArchitecture
 from app.architectures.granite_layers import GraniteDecoderLayer
 from app.architectures.granitemoe_layers import GraniteMoeFFN
 from app.architectures.layers import RMSNorm, unpermute_rope_rows
+from app.architectures.moe_experts import materialize_quantized_moe_experts
 from app.architectures.rope import RotaryEmbedding
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
@@ -28,16 +29,12 @@ class GraniteMoeArchitecture(ModelArchitecture):
     (`num_local_experts`) and `granitemoe.expert_used_count` (`num_experts_per_tok`) - llama.cpp's
     standard generic MoE key pair, the same one Mixtral/DeepSeek-MoE/Qwen-MoE etc. all use.
 
-    Deliberately **not** wired into quantized-native compute (`_load_projection`) for its expert
-    tensors: `QuantizedLinear`/the fused GEMV kernels are hard-assumed 2D `(out_features,
-    in_features)` throughout (confirmed by reading `app/architectures/base.py`'s
-    `_load_projection` - a real 3D `(num_experts, ...)` tensor crashes its `out_features,
-    in_features = shape` unpack), so every MoE tensor here (router included, for one consistent
-    code path rather than mixed logic) goes through a plain `loader.load_tensor()` `.copy_()`,
-    same as it would with quantized-native compute off anyway. `"granitemoe"` is deliberately not
-    added to `QUANTIZED_NATIVE_WIRED_ARCHITECTURES`/`_QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH`
-    (`app/models/load_dtype.py`) - a real, permanent scope boundary until a batched/grouped
-    quantized MoE kernel exists, not an oversight.
+    Expert tensors go through `QuantizedMoEExperts` (`app/architectures/moe_experts.py`,
+    2026-09-29) when quantized-native compute is on - real per-expert `QuantizedLinear`s over a
+    contiguous 2D slice of the bigger 3D tensor's own raw bytes, not a new kernel. The router
+    (`ffn_gate_inp.weight`, real 2D `(num_experts, hidden_size)`) still goes through a plain
+    `.copy_()` - it's small enough that packing it wouldn't meaningfully help, and every real MoE
+    router in this project (Gemma4's included) already treats its own router the same way.
     """
 
     NAME = "granitemoe"
@@ -171,12 +168,10 @@ class GraniteMoeArchitecture(ModelArchitecture):
             layer.self_attn.o_proj = self._load_projection(
                 loader, prefix + "attn_output.weight", layer.self_attn.o_proj, self._dtype, enabled
             )
-            # MoE tensors: always a plain .copy_() - see this class's own docstring for why
-            # _load_projection (the quantized-native-eligible path) never applies here.
             layer.mlp.router.weight.copy_(loader.load_tensor(prefix + "ffn_gate_inp.weight"))
-            layer.mlp.gate_exps.copy_(loader.load_tensor(prefix + "ffn_gate_exps.weight"))
-            layer.mlp.up_exps.copy_(loader.load_tensor(prefix + "ffn_up_exps.weight"))
-            layer.mlp.down_exps.copy_(loader.load_tensor(prefix + "ffn_down_exps.weight"))
+            materialize_quantized_moe_experts(
+                layer.mlp.experts, loader, prefix, enabled, self._mark_quantized_native_used
+            )
             logger.debug(
                 "loading weights: layer %d/%d (not computing yet) in %.1fs",
                 i + 1,

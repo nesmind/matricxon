@@ -2,6 +2,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from app.architectures.moe_experts import QuantizedMoEExperts
+
 
 class GraniteMoeFFN(nn.Module):
     """GraniteMoE's real sparse Mixture-of-Experts FFN block, replacing dense Granite's
@@ -16,23 +18,14 @@ class GraniteMoeFFN(nn.Module):
     the selected experts). This is the opposite order from softmax-over-all-experts-then-select,
     an easy, real mistake to make and get numerically wrong in a way that still "runs."
 
-    Experts: each is a standard SwiGLU FFN (`down(silu(gate(x)) * up(x))`), stored as one 3D
-    tensor per projection type (llama.cpp's Mixtral-style MoE convention) rather than N separate
-    2D tensors - `blk.N.ffn_gate_exps.weight`/`ffn_up_exps.weight` shape `(num_experts, ffn_dim,
-    hidden_size)`, `ffn_down_exps.weight` shape `(num_experts, hidden_size, ffn_dim)`. No shared/
-    always-on expert - the real small checkpoints this was built against
-    (`granite-3.0-1b-a400m-instruct`, `granite-3.0-3b-a800m-instruct`) both use the plain
-    `GraniteMoeForCausalLM` HF class, confirmed via live `config.json` to have no
-    `shared_intermediate_size` field (that's a separate `GraniteMoeSharedForCausalLM` HF class,
-    out of scope here).
-
-    Forward pass uses **sparse dispatch** (loop only over the experts actually selected this
-    call, never all `num_experts`) rather than densely computing every expert for every token
-    then masking - matricxon's real call shape is always `batch == 1` (either prefill
-    `seq_len > 1` or decode `seq_len == 1`, confirmed project-wide invariant, see
-    `QuantizedLinear`'s own docstring), and the dominant real workload is decode - one token at a
-    time - where sparse dispatch does exactly `num_experts_per_tok` expert matmuls instead of
-    `num_experts`, not a micro-optimization (e.g. 8 vs 32 for `granite-3.0-1b-a400m-instruct`).
+    Experts: `QuantizedMoEExperts` (`app/architectures/moe_experts.py`) - a standard SwiGLU FFN
+    (`down(silu(gate(x)) * up(x))`), real 3D per-projection tensors (llama.cpp's Mixtral-style
+    MoE convention), quantized-native-aware. No shared/always-on expert - the real small
+    checkpoints this was built against (`granite-3.0-1b-a400m-instruct`,
+    `granite-3.0-3b-a800m-instruct`) both use the plain `GraniteMoeForCausalLM` HF class,
+    confirmed via live `config.json` to have no `shared_intermediate_size` field (that's a
+    separate `GraniteMoeSharedForCausalLM` HF class, out of scope here). Reused unchanged for
+    Mixtral (see `llama_moe.py`'s own docstring for the proven router-math equivalence).
     """
 
     def __init__(
@@ -46,9 +39,7 @@ class GraniteMoeFFN(nn.Module):
         super().__init__()
         self.num_experts_per_tok = num_experts_per_tok
         self.router = nn.Linear(n_embd, num_experts, bias=False, dtype=dtype)
-        self.gate_exps = nn.Parameter(torch.empty(num_experts, ffn_len, n_embd, dtype=dtype))
-        self.up_exps = nn.Parameter(torch.empty(num_experts, ffn_len, n_embd, dtype=dtype))
-        self.down_exps = nn.Parameter(torch.empty(num_experts, n_embd, ffn_len, dtype=dtype))
+        self.experts = QuantizedMoEExperts(n_embd, ffn_len, num_experts, F.silu, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, n_embd = x.shape
@@ -60,18 +51,5 @@ class GraniteMoeFFN(nn.Module):
         # regardless of the surrounding activation dtype.
         top_k_weights = F.softmax(top_k_logits.float(), dim=-1).to(x.dtype)
 
-        # Accumulate in float32 regardless of `x`'s own dtype - `index_add_` summing up to
-        # `num_experts_per_tok` per-expert contributions in a lower-precision dtype (e.g. bf16)
-        # is a real, plausible source of extra rounding error beyond ordinary quantization noise;
-        # cheap to avoid by accumulating wide and casting back once at the end.
-        out = torch.zeros(seq_len, n_embd, dtype=torch.float32)
-        for expert_id in top_k_idx.unique().tolist():
-            token_idx, k_idx = (top_k_idx == expert_id).nonzero(as_tuple=True)
-            x_e = x_flat.index_select(0, token_idx)
-            gate = F.silu(x_e @ self.gate_exps[expert_id].T)
-            up = x_e @ self.up_exps[expert_id].T
-            down = (gate * up) @ self.down_exps[expert_id].T
-            weight = top_k_weights[token_idx, k_idx].unsqueeze(-1)
-            out.index_add_(0, token_idx, (down * weight).to(torch.float32))
-
-        return out.to(x.dtype).reshape(batch, seq_len, n_embd)
+        out = self.experts(x_flat, top_k_weights, top_k_idx)
+        return out.reshape(batch, seq_len, n_embd)

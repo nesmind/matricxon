@@ -20,15 +20,13 @@ _LAYER_PREFIX_RE = re.compile(r"^blk\.(\d+)\.")
 # today - shared by ModelManager._load (build one or not) and estimate_ram_gb's callers (report
 # the smaller number or not); reporting a smaller estimate for an unwired architecture would be
 # live-misleading. `bert`/`nomic-bert` excluded: encoder-only, always prefill-shaped, and
-# QuantizedLinear's fast path only helps decode - wiring them would make embed calls slower for
-# no steady-state RAM win. `granitemoe` excluded: 3D expert tensors bypass `_load_projection`
-# entirely, so wiring would only touch a couple of non-expert projections (marginal - expert
-# tensors dominate its real memory). `nemotron_h` *used* to be excluded on the same theory - wrong
-# on a real installed 12B checkpoint (2026-09-29): MLP tensors are 47.7% of real elements there,
-# SSM only 38.3%, so wiring attn_v/attn_output/ffn_up/ffn_down/output.weight (below) is a real,
-# non-marginal saving - the flat suffix-list design already handles a hybrid per-layer-type model
-# correctly with no extra bookkeeping (a tensor simply isn't in the file for a layer type that
-# doesn't have it).
+# QuantizedLinear's fast path only helps decode. `nemotron_h`/`granitemoe`/llama's own Mixtral
+# branch *used* to be excluded on a "these real tensors bypass _load_projection" theory - wrong
+# both times (2026-09-29): nemotron_h's ssm_in/ssm_out are plain 2D weights despite living in the
+# "SSM block" (MLP is 47.7% of a real 12B checkpoint's elements, SSM only 38.3%); a real 3D
+# per-expert MoE tensor is a contiguous 2D slice of the bigger one, needing no new kernel - see
+# `QuantizedMoEExperts` (`app/architectures/moe_experts.py`), now wired for every real MoE
+# architecture here (`granitemoe`, `llama`'s Mixtral branch, `gemma4`'s MoE variant).
 QUANTIZED_NATIVE_WIRED_ARCHITECTURES = frozenset(
     {
         "mistral3",
@@ -36,6 +34,7 @@ QUANTIZED_NATIVE_WIRED_ARCHITECTURES = frozenset(
         "gemma4",
         "phi2",
         "granite",
+        "granitemoe",
         "qwen2",
         "qwen3",
         "command-r",
@@ -64,13 +63,27 @@ _QUANTIZED_NATIVE_TENSOR_SUFFIXES = (
 # everyone would under-estimate whichever ones don't actually route q/k that way.
 _PACKED_QK_AND_EMBEDDING = ("attn_q.weight", "attn_k.weight", "token_embd.weight")
 
+# Real per-expert 3D tensors `QuantizedMoEExperts` packs (see `app/architectures/moe_experts.py`)
+# - the router (`ffn_gate_inp.weight`) is deliberately excluded: it's always a plain `.copy_()`,
+# never packed, so listing it here would under-estimate real memory need for any architecture
+# that doesn't get it packed - the one thing this guard must never do.
+_MOE_EXPERT_TENSOR_SUFFIXES = ("ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight")
+
 _QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH: dict[str, tuple[str, ...]] = {
     "mistral3": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, *_PACKED_QK_AND_EMBEDDING),
-    "llama": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, *_PACKED_QK_AND_EMBEDDING, "output.weight"),
+    # A real Mixtral GGUF (see llama_moe.py) adds the expert suffixes too - harmless no-op for a
+    # plain dense llama file, since those tensor names simply never exist there.
+    "llama": (
+        *_QUANTIZED_NATIVE_TENSOR_SUFFIXES,
+        *_PACKED_QK_AND_EMBEDDING,
+        *_MOE_EXPERT_TENSOR_SUFFIXES,
+        "output.weight",
+    ),
     "gemma4": (
         "attn_q.weight",
         "attn_k.weight",
         *_QUANTIZED_NATIVE_TENSOR_SUFFIXES,
+        *_MOE_EXPERT_TENSOR_SUFFIXES,
     ),
     "phi2": ("attn_output.weight", "ffn_up.weight", "ffn_down.weight", "output.weight"),
     # granite/qwen2/qwen3/command-r follow llama's exact _load_projection call list (attn_v/
@@ -105,6 +118,14 @@ _QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH: dict[str, tuple[str, ...]] = {
         "output.weight",
         "ssm_in.weight",
         "ssm_out.weight",
+    ),
+    # granitemoe has no ffn_gate/ffn_up/ffn_down at all (no shared/always-on expert, see
+    # GraniteMoeFFN's own docstring) - only attn_v/attn_output/the expert tensors/untied lm_head.
+    "granitemoe": (
+        "attn_v.weight",
+        "attn_output.weight",
+        *_MOE_EXPERT_TENSOR_SUFFIXES,
+        "output.weight",
     ),
 }
 

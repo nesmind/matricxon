@@ -100,9 +100,15 @@ bytes, covering all 11 packed GGUF quant types
 (`Q2_K`-`Q8_K`/`Q4_0`/`Q4_1`/`Q5_0`/`Q5_1`/`Q8_0`); prefill is unaffected
 and still dequantizes normally. Wired into `mistral3`, `llama`, `gemma4`,
 `phi2`, `granite`, `qwen2`, `qwen3`, and `command-r` (not `bert`/
-`nomic-bert`, which are always-prefill encoders, and not `granitemoe`/
-`nemotron_h` - their expert/SSM tensors aren't 2D `nn.Linear`-shaped the
-way the fused GEMV kernels need, a real structural gap, not an oversight).
+`nomic-bert`, which are always-prefill encoders). Every real MoE
+architecture's expert tensors are covered too - `granitemoe`, `llama`'s
+Mixtral branch, and `gemma4`'s MoE variant - via a shared
+`QuantizedMoEExperts` (`app/architectures/moe_experts.py`): a real
+per-expert 3D tensor is just a contiguous 2D byte slice of the bigger
+one, handed to the same `QuantizedLinear` unchanged, so it needed no new
+kernel at all. Not wired into `nemotron_h` - its SSM tensors aren't 2D
+`nn.Linear`-shaped the way the fused GEMV kernels need, a real
+structural gap, not an oversight.
 Off by default - real measurement on this project's CPU-only target
 hardware showed no speed benefit, but it's shipped as a real, permanent,
 user-selectable choice rather than removed, since results may differ on
@@ -113,14 +119,20 @@ parsed but its tensors are never read, per matricxon's v1
 "accept-and-ignore images" scope), `bert` and `nomic-bert` (non-causal
 encoders, embeddings only), `llama` (plain GQA decoder - RMSNorm/SwiGLU/
 un-scaled RoPE, the "simpler special case" of `mistral3` without YaRN
-scaling; validated against a real `TinyLlama-1.1B-Chat-v1.0` pull),
-`gemma4` (dense, non-MoE - sandwich normalization, QK-norm, alternating
-local/global attention layers with different head dims and RoPE bases,
-final-logit softcapping; built from the real `transformers` Gemma4 source
-against a real `google/gemma-4-12b-it` GGUF pull, but that model is too
-large - ~28GB in bf16 - to run on this project's 15GB-RAM target hardware,
-so only its wiring is validated against a tiny synthetic fixture, not its
-numerics against real weights - a real, open gap, see ROADMAP.md), `phi2`
+scaling; validated against a real `TinyLlama-1.1B-Chat-v1.0` pull; also
+covers Mixtral's real sparse MoE variant - plain top-k-then-softmax
+routing, no shared dense branch, reusing the same `QuantizedMoEExperts`
+core as `granitemoe`/`gemma4`'s MoE below),
+`gemma4` (sandwich normalization, QK-norm, alternating local/global
+attention layers with different head dims and RoPE bases, final-logit
+softcapping, plus a real optional sparse MoE variant - a dense MLP branch
+always runs and is summed with a routed expert branch, ported from the
+real `transformers`/llama.cpp Gemma4 source; built from the real
+`transformers` Gemma4 source against a real `google/gemma-4-12b-it` GGUF
+pull, but that model is too large - ~28GB in bf16 - to run on this
+project's 15GB-RAM target hardware, so only its wiring (dense and MoE
+alike) is validated against tiny synthetic fixtures, not its numerics
+against real weights - a real, open gap, see ROADMAP.md), `phi2`
 (parallel-residual decoder block - a single shared LayerNorm feeds both the
 attention and MLP branches, unlike every other decoder here - partial
 rotary embeddings, biases on every projection, and a fused `attn_qkv`
@@ -133,7 +145,10 @@ embedding lookup, each layer's residual branches, and the final logits;
 wiring validated against a synthetic fixture, real-weight oracle not yet
 run - see ROADMAP.md), `granitemoe` (Granite's sparse Mixture-of-Experts
 sibling - real top-k-then-softmax routing over real 3D per-expert GGUF
-tensors, the first MoE-shaped code in this project; same validation status
+tensors, the first MoE-shaped code in this project, now sharing its expert
+dispatch with every other real MoE architecture via `QuantizedMoEExperts`
+(`app/architectures/moe_experts.py`) so a future MoE architecture only
+needs its own router + activation function; same validation status
 as `granite`), `nemotron_h` (NVIDIA's hybrid design - three real
 interleaved layer types per real per-layer GGUF arrays, not a uniform
 stack: Mamba-2 state-space layers, plain GQA attention with no RoPE at

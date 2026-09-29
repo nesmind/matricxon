@@ -21,11 +21,14 @@ algebraically, not assumed from surface resemblance, before reusing the class as
 duplicating it.
 """
 
+from collections.abc import Callable
+
 import torch
 from torch import nn
 
 from app.architectures.granitemoe_layers import GraniteMoeFFN
 from app.architectures.layers import SwiGLUMLP
+from app.architectures.moe_experts import materialize_quantized_moe_experts
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
 
@@ -50,13 +53,17 @@ def build_ffn(
     return SwiGLUMLP(n_embd, ffn_len, dtype=dtype)
 
 
-def materialize_moe_ffn(mlp: GraniteMoeFFN, loader: GGUFModelLoader, prefix: str) -> None:
-    """MoE tensors: always a plain .copy_() - see `GraniteMoeArchitecture`'s own docstring for why
-
-    `_load_projection` (the quantized-native-eligible path) never applies to a real 3D per-expert
-    tensor.
-    """
+def materialize_moe_ffn(
+    mlp: GraniteMoeFFN,
+    loader: GGUFModelLoader,
+    prefix: str,
+    enabled: bool,
+    mark_used: Callable[[GGUFModelLoader], None],
+) -> None:
+    """Router: always a plain `.copy_()` (small enough that packing it wouldn't meaningfully
+    help). Experts: `QuantizedMoEExperts` (`app/architectures/moe_experts.py`) - real per-expert
+    `QuantizedLinear`s when `enabled` and a real GEMV kernel exists, the exact same real router
+    math proven algebraically identical to Mixtral's own (see this module's own docstring)
+    either way."""
     mlp.router.weight.copy_(loader.load_tensor(prefix + "ffn_gate_inp.weight"))
-    mlp.gate_exps.copy_(loader.load_tensor(prefix + "ffn_gate_exps.weight"))
-    mlp.up_exps.copy_(loader.load_tensor(prefix + "ffn_up_exps.weight"))
-    mlp.down_exps.copy_(loader.load_tensor(prefix + "ffn_down_exps.weight"))
+    materialize_quantized_moe_experts(mlp.experts, loader, prefix, enabled, mark_used)
