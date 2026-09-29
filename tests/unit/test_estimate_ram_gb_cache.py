@@ -3,8 +3,8 @@ recomputed this from scratch (a real GGUFReader parse) for every installed model
 request, with no caching at all, which could make /api/tags intermittently slow under load (see
 that cache's own docstring for the full, confirmed-live story). Asserted via a real GGUFReader.read
 call count rather than comparing estimated_ram_gb's own output values - a tiny test fixture's real
-tensor shapes are small enough that its rounded GB estimate is 0.0 regardless of layer count or
-safety margin, which would make an output-based assertion pass even with caching totally broken."""
+tensor shapes are small enough that its rounded GB estimate is 0.0 regardless of layer count,
+which would make an output-based assertion pass even with caching totally broken."""
 
 import os
 from pathlib import Path
@@ -34,25 +34,25 @@ def test_repeated_calls_for_the_same_unchanged_file_reuse_the_cached_result(
 ):
     gguf_path = build_tiny_mistral3_gguf(tmp_path / "model.gguf")
 
-    first = estimate_ram_gb(gguf_path, safety_margin=1.5)
-    second = estimate_ram_gb(gguf_path, safety_margin=1.5)
+    first = estimate_ram_gb(gguf_path)
+    second = estimate_ram_gb(gguf_path)
 
     assert first == second
     assert read_call_count["value"] == 1
 
 
-def test_a_different_safety_margin_triggers_its_own_real_read(tmp_path, read_call_count):
+def test_a_different_quantized_native_enabled_triggers_its_own_real_read(tmp_path, read_call_count):
     gguf_path = build_tiny_mistral3_gguf(tmp_path / "model.gguf")
 
-    estimate_ram_gb(gguf_path, safety_margin=1.1)
-    estimate_ram_gb(gguf_path, safety_margin=1.8)
+    estimate_ram_gb(gguf_path, quantized_native_enabled=False)
+    estimate_ram_gb(gguf_path, quantized_native_enabled=True)
 
     assert read_call_count["value"] == 2
 
 
 def test_a_file_replaced_at_the_same_path_invalidates_the_cache(tmp_path, read_call_count):
     gguf_path = build_tiny_mistral3_gguf(tmp_path / "model.gguf", n_layer=1)
-    estimate_ram_gb(gguf_path, safety_margin=1.5)
+    estimate_ram_gb(gguf_path)
 
     # A real re-pull landing at the same path won't usually collide mtimes down to the
     # nanosecond on a fast filesystem - nudge it forward so this test doesn't flake by coincidence
@@ -61,6 +61,6 @@ def test_a_file_replaced_at_the_same_path_invalidates_the_cache(tmp_path, read_c
     stat = Path(gguf_path).stat()
     os.utime(gguf_path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1))
 
-    estimate_ram_gb(gguf_path, safety_margin=1.5)
+    estimate_ram_gb(gguf_path)
 
     assert read_call_count["value"] == 2

@@ -84,6 +84,14 @@ _QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH: dict[str, tuple[str, ...]] = {
         "attn_k.weight",
         *_QUANTIZED_NATIVE_TENSOR_SUFFIXES,
         *_MOE_EXPERT_TENSOR_SUFFIXES,
+        # Real, confirmed gap (2026-09-30): unlike mistral3/llama (_PACKED_QK_AND_EMBEDDING),
+        # these two were never wired to QuantizedEmbedding at all - always the full dequantized
+        # table regardless of this setting. Both are pure embedding lookups (no untied lm_head
+        # here - token_embd is gemma4's own tied output projection too, see gemma4.py's own
+        # docstring), and per_layer_token_embd.weight is real, active on gemma-4-E2B-it, ~50.5%
+        # of that checkpoint's own total elements (see gemma4_ple.py).
+        "token_embd.weight",
+        "per_layer_token_embd.weight",
     ),
     "phi2": ("attn_output.weight", "ffn_up.weight", "ffn_down.weight", "output.weight"),
     # granite/qwen2/qwen3/command-r follow llama's exact _load_projection call list (attn_v/
@@ -231,21 +239,26 @@ def estimate_quantized_native_bytes(
 # several models installed this made /api/tags slow enough, under GIL contention from an in-flight
 # chat/model-load on the same process, to intermittently blow past pAIring's own request timeout
 # and surface as a bodyless "Service Unavailable" even though the machine itself was idle).
-_ram_estimate_cache: dict[tuple[str, int, int, float, bool, str], float] = {}
+_ram_estimate_cache: dict[tuple[str, int, int, bool, str], float] = {}
 
 
 def estimate_ram_gb(
     gguf_path: str | Path,
-    safety_margin: float,
     quantized_native_enabled: bool = False,
     architecture_name: str = "",
 ) -> float:
-    """The same real number `app.models.memory_guard.ensure_enough_memory_to_load` checks a real
-    chat/embed request against for `gguf_path` - `estimate_quantized_native_bytes` of its real
-    tensor shapes x `safety_margin`, in GB (see that function's own docstring - identical to
-    `exact_bf16_bytes` unless `quantized_native_enabled`). A cheap, header-only parse (see
-    `GGUFReader.read`'s own docstring, and `exact_bf16_bytes`'s own docstring for why this is
-    exact, not an on-disk-size approximation).
+    """The real, bare RAM `gguf_path` needs to load - `estimate_quantized_native_bytes` of its real
+    tensor shapes, in GB (see that function's own docstring - identical to `exact_bf16_bytes`
+    unless `quantized_native_enabled`). A cheap, header-only parse (see `GGUFReader.read`'s own
+    docstring, and `exact_bf16_bytes`'s own docstring for why this is exact, not an
+    on-disk-size approximation).
+
+    Deliberately does *not* apply `Settings.memory_safety_margin` (unlike
+    `app.models.memory_guard.ensure_enough_memory_to_load`'s own, separate real load-time gate,
+    which still does, via its own `safety_margin` param - see manager.py's own call to
+    `estimate_quantized_native_bytes` for that) - confirmed live, 2026-09-30: showing the padded
+    figure here read as "this architecture needs more RAM than it really does," when the padding
+    is this app's own conservative load-time cushion, not a real per-tensor requirement.
 
     Shared by `/api/show` (one tag) and `/api/tags` (every installed tag at once, see
     `tags_router.py`) so a caller asking "how much RAM does Matricxon really need for this" always
@@ -269,7 +282,6 @@ def estimate_ram_gb(
         str(path),
         stat.st_mtime_ns,
         stat.st_size,
-        safety_margin,
         quantized_native_enabled,
         architecture_name,
     )
@@ -281,7 +293,7 @@ def estimate_ram_gb(
     real_bytes = estimate_quantized_native_bytes(
         tensor_infos, quantized_native_enabled, architecture_name
     )
-    result = round(real_bytes * safety_margin / 1e9, 2)
+    result = round(real_bytes / 1e9, 2)
     _ram_estimate_cache[cache_key] = result
     return result
 

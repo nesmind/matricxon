@@ -11,6 +11,7 @@ from app.architectures.gemma4_layers import Gemma4DecoderLayer
 from app.architectures.gemma4_moe import Gemma4MoEBlock, detect_moe, materialize_moe
 from app.architectures.gemma4_ple import Gemma4PerLayerEmbedding
 from app.architectures.layers import RMSNorm
+from app.architectures.quantized_embedding import QuantizedEmbedding
 from app.architectures.rope import RotaryEmbedding
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
@@ -229,11 +230,29 @@ class Gemma4Architecture(ModelArchitecture):
         self, loader: GGUFModelLoader, stop_check: Callable[[], bool] | None = None
     ) -> None:
         stage_started = time.monotonic()
-        self.token_embd.weight.copy_(loader.load_tensor("token_embd.weight"))
+        enabled = self._enable_quantized_native
+        # Real, confirmed gap (2026-09-30): unlike llama/mistral3, this tensor (256K-vocab, one
+        # of the biggest in any real gemma4 checkpoint) was never routed through
+        # QuantizedEmbedding at all - always the full dequantized table, quantized-native setting
+        # or not. No separate output.weight ever exists here (tied lm_head - see this class's own
+        # docstring), so a packed table always gets its tied lm_head from as_linear() too.
+        self.token_embd = self._load_token_embedding(loader, self.token_embd, self._dtype, enabled)
+        if isinstance(self.token_embd, QuantizedEmbedding):
+            self.lm_head = self.token_embd.as_linear()
         self.output_norm.weight.copy_(loader.load_tensor("output_norm.weight"))
         if self.per_layer_dim:
-            self.per_layer_embedding.embed_tokens_per_layer.weight.copy_(
-                loader.load_tensor("per_layer_token_embd.weight")
+            # Real, confirmed gap (2026-09-30): per_layer_token_embd is the single biggest tensor
+            # in a real gemma-4-E2B-it checkpoint (packed n_layer * per_layer_dim wide, ~50% of
+            # the file's own real elements - see gemma4_ple.py's own docstring) and, like
+            # token_embd above, was never routed through QuantizedEmbedding either - purely a
+            # lookup table, no tied-output complication, so this is otherwise identical to the
+            # token_embd wiring above.
+            self.per_layer_embedding.embed_tokens_per_layer = self._load_token_embedding(
+                loader,
+                self.per_layer_embedding.embed_tokens_per_layer,
+                self._dtype,
+                enabled,
+                tensor_name="per_layer_token_embd.weight",
             )
             self.per_layer_embedding.per_layer_model_projection.weight.copy_(
                 loader.load_tensor("per_layer_model_proj.weight")
@@ -248,7 +267,7 @@ class Gemma4Architecture(ModelArchitecture):
             rope_freqs = loader.load_tensor("rope_freqs.weight")
             self.rope_global.inv_freq.copy_(self.rope_global.inv_freq / rope_freqs)
         logger.debug(
-            "materializing: token_embd + output_norm in %.1fs",
+            "materializing: token_embd + output_norm + lm_head in %.1fs",
             time.monotonic() - stage_started,
         )
 
@@ -373,7 +392,8 @@ class Gemma4Architecture(ModelArchitecture):
         stage_started = time.monotonic()
         x = self.output_norm(x)
 
-        logits = F.linear(x, self.token_embd.weight)
+        lm_head = getattr(self, "lm_head", None)
+        logits = lm_head(x) if lm_head is not None else F.linear(x, self.token_embd.weight)
         if self.final_logit_softcapping is not None:
             logits = logits / self.final_logit_softcapping
             logits = torch.tanh(logits)

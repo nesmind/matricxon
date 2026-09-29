@@ -32,7 +32,6 @@ class TagsRequestHandler:
                 ),
                 estimated_ram_gb=estimate_ram_gb(
                     installed.path,
-                    settings.memory_safety_margin,
                     settings.enable_quantized_native_compute
                     and installed.architecture in QUANTIZED_NATIVE_WIRED_ARCHITECTURES,
                     installed.architecture,

@@ -43,6 +43,18 @@ class NativeGemm:
             ctypes.c_int,
             ctypes.c_int,
         ]
+        lib.mx_supports_dequant_rows.argtypes = [ctypes.c_int, ctypes.c_int]
+        lib.mx_supports_dequant_rows.restype = ctypes.c_int
+        lib.mx_dequant_rows.argtypes = [
+            ctypes.c_int,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        lib.mx_dequant_rows.restype = ctypes.c_int
         lib.mx_gemm.restype = ctypes.c_int
 
     @classmethod
@@ -78,6 +90,36 @@ class NativeGemm:
                 in_features,
             )
         return supported
+
+    def supports_dequant_rows(self, ggml_type: int, row_width: int) -> bool:
+        """Whether `dequant_rows` can handle this (type, row_width) pair - only the K-quant family
+        with an `mx_unpack_*` function (Q3_K/Q4_K/Q5_K/Q6_K), block-aligned. `QuantizedEmbedding`
+        keeps the Python `QuantStrategy.dequantize` fallback (already correct, already used before
+        this existed) for everything this returns False for."""
+        return bool(self._lib.mx_supports_dequant_rows(int(ggml_type), row_width))
+
+    def dequant_rows(
+        self, ggml_type: int, raw: memoryview, row_indices: torch.Tensor, row_width: int
+    ) -> torch.Tensor:
+        """Dequantizes `row_indices` (1D, real row numbers into `raw`) straight to float32,
+        `(len(row_indices), row_width)` - never the full table. `raw` must hold whichever total
+        row count the caller's own tensor really has; only the requested rows are ever read."""
+        indices32 = row_indices.detach().to(torch.int32).contiguous()
+        n_rows = indices32.shape[0]
+        out = torch.empty((n_rows, row_width), dtype=torch.float32)
+        raw_ptr = np.frombuffer(raw, dtype=np.uint8).ctypes.data
+        status = self._lib.mx_dequant_rows(
+            int(ggml_type),
+            raw_ptr,
+            indices32.data_ptr(),
+            n_rows,
+            row_width,
+            out.data_ptr(),
+            self._n_threads,
+        )
+        if status != 0:
+            raise RuntimeError(f"mx_dequant_rows failed with status {status} for type {ggml_type}")
+        return out
 
     def take_stats(self) -> tuple[int, float]:
         """(calls, seconds) spent in native kernels since the last call - chat_router logs it per

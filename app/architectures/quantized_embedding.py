@@ -4,6 +4,7 @@ from torch import nn
 from app.architectures.quantized_linear import QuantizedLinear
 from app.gguf.dequant.registry import QuantStrategyRegistry
 from app.gguf.packed_rows import PackedRows
+from app.native.gemm import NativeGemm
 
 
 class QuantizedEmbedding(nn.Module):
@@ -16,6 +17,13 @@ class QuantizedEmbedding(nn.Module):
     same packed table as its output projection: `as_linear()` wraps the same bytes in a
     `QuantizedLinear`, so the lm_head runs on the quantized kernels instead of a float32 matmul
     against the full dequantized table (which read all 1.5 GB for every generated token).
+
+    Two real row-dequantize paths, same "real kernel when available, already-correct Python
+    fallback otherwise" split `QuantizedLinear` uses: `NativeGemm.dequant_rows` (real C, the
+    K-quant family only - see `mx_dequant_rows.c`'s own docstring) when available, else this
+    class's own original per-row `QuantStrategy.dequantize` (every real quant type this project
+    supports, just never benchmarked against a native kernel - a real, permanent fallback, not a
+    stopgap).
 
     Like `QuantizedLinear`, `raw` must stay a live view into its source GGUF mmap until
     `release()` - see `ModelArchitecture.close`.
@@ -37,6 +45,10 @@ class QuantizedEmbedding(nn.Module):
         self._raw = raw
         self._rows = PackedRows(raw, num_embeddings)
         self._strategy = QuantStrategyRegistry().get(ggml_type)
+        native = NativeGemm.active()
+        self._native = (
+            native if native and native.supports_dequant_rows(ggml_type, embedding_dim) else None
+        )
 
     def as_linear(self) -> QuantizedLinear:
         """The tied output projection over this same packed table (vocab x embedding_dim)."""
@@ -50,10 +62,18 @@ class QuantizedEmbedding(nn.Module):
         self._rows = None
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        ids = input_ids.reshape(-1).tolist()
-        vectors = {
-            token_id: self._strategy.dequantize(self._rows.row(token_id), self.embedding_dim)
-            for token_id in set(ids)
-        }
-        out = torch.stack([vectors[token_id] for token_id in ids]).to(self.dtype)
+        ids_flat = input_ids.reshape(-1)
+        if self._native is not None:
+            unique_ids, inverse = torch.unique(ids_flat, return_inverse=True)
+            rows = self._native.dequant_rows(
+                self._ggml_type, self._raw, unique_ids, self.embedding_dim
+            )
+            out = rows[inverse].to(self.dtype)
+        else:
+            ids = ids_flat.tolist()
+            vectors = {
+                token_id: self._strategy.dequantize(self._rows.row(token_id), self.embedding_dim)
+                for token_id in set(ids)
+            }
+            out = torch.stack([vectors[token_id] for token_id in ids]).to(self.dtype)
         return out.reshape(*input_ids.shape, self.embedding_dim)

@@ -35,7 +35,6 @@ class ShowRequestHandler:
             ),
             estimated_ram_gb=estimate_ram_gb(
                 installed.path,
-                settings.memory_safety_margin,
                 quantized_native_enabled,
                 installed.architecture,
             ),
