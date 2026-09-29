@@ -45,3 +45,18 @@ class TestMatricxonAppTorchThreads:
             MatricxonApp()
         finally:
             real_set_num_threads(original)
+
+
+class TestMatricxonAppDisablesNNPACK:
+    """This project's target hardware (Sandy Bridge) can't use NNPACK at all - left enabled,
+    every real Conv1d call (nemotron_h's own SSM causal conv) re-probes it and re-logs a native
+    C++ warning Python's own `warnings` filters can't catch, once per generated token (confirmed
+    live, 2026-09-29: 11x in one nemotron_h chat)."""
+
+    def test_disables_nnpack_on_construction(self, monkeypatch) -> None:
+        calls = []
+        monkeypatch.setattr(torch.backends.nnpack, "set_flags", calls.append)
+
+        MatricxonApp()
+
+        assert calls == [False]

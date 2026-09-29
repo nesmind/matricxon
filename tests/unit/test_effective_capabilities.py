@@ -2,7 +2,10 @@
 now folds in (app/runtime/chat_template.py) - the "chat_format_unverified" capability this powers,
 added 2026-09-27 after Hebrew-Mistral-7B-Q5_K_M produced incoherent, non-chat-like output no matter
 which prompt format it was given, with nothing in the model list distinguishing it from a normal,
-well-behaved chat model."""
+well-behaved chat model - and "architecture_features_unsupported" (app.architectures.registry.
+unsupported_features), added 2026-09-29 after a real gemma-4-E2B-it GGUF's Per-Layer Embeddings
+and cross-layer KV reuse were silently never read at all by the dense-only Gemma4Architecture
+class that otherwise claimed full "completion" support for it."""
 
 from pathlib import Path
 
@@ -117,3 +120,29 @@ def test_effective_capabilities_does_not_flag_a_non_completion_model(tmp_path):
     capabilities = effective_capabilities(installed, has_paired_mmproj=False)
 
     assert "chat_format_unverified" not in capabilities
+
+
+def test_effective_capabilities_flags_a_checkpoint_with_a_real_gated_variant_gap(
+    tmp_path, monkeypatch
+):
+    """Decoupled from any specific architecture's own real gap (those get fixed over time - see
+    Gemma4Architecture's own MoE support, added 2026-09-29, the same day this flag was added for
+    a *different* gap that GGUF happened to have) - proves effective_capabilities' own wiring to
+    app.architectures.registry.unsupported_features, not any one architecture's current state."""
+    gguf_path = _build_untemplated_llama_gguf(tmp_path / "model.gguf")
+    installed = _installed("test:latest", gguf_path, "llama", ["completion"])
+    monkeypatch.setattr("app.models.capabilities.unsupported_features", lambda path: ["fake-gap"])
+
+    capabilities = effective_capabilities(installed, has_paired_mmproj=False)
+
+    assert "architecture_features_unsupported" in capabilities
+
+
+def test_effective_capabilities_does_not_flag_a_checkpoint_with_no_gap(tmp_path, monkeypatch):
+    gguf_path = _build_untemplated_llama_gguf(tmp_path / "model.gguf")
+    installed = _installed("test:latest", gguf_path, "llama", ["completion"])
+    monkeypatch.setattr("app.models.capabilities.unsupported_features", lambda path: [])
+
+    capabilities = effective_capabilities(installed, has_paired_mmproj=False)
+
+    assert "architecture_features_unsupported" not in capabilities

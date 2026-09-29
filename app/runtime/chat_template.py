@@ -25,6 +25,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from app.gguf.metadata import GGUFMetadata
 from app.gguf.reader import GGUFReader
+from app.runtime.chat_template_jinja_ext import GenerationTagExtension
 from app.runtime.prompt_builder import (
     LegacyMistralPromptBuilder,
     Mistral3PromptBuilder,
@@ -34,9 +35,8 @@ from app.runtime.vision_fusion import IMAGE_MARKER
 from app.schemas.chat import ChatMessage
 from app.server.errors import MatricxonError
 
-# Name-based heuristic (see PromptBuilderFactory.for_metadata) - a Vicuna fine-tune's GGUF gives
-# no metadata-only way to detect this (see module docstring), same spirit as
-# app.models.capabilities._THINKING_MARKERS' own repo/filename substring match.
+# Name-based heuristic (PromptBuilderFactory.for_metadata) - Vicuna fine-tunes give no
+# metadata-only detection signal (module docstring), same spirit as _THINKING_MARKERS' match.
 _VICUNA_TAG_MARKER = "vicuna"
 
 # Built-in templates for real models whose GGUF ships no `tokenizer.chat_template`, keyed by
@@ -68,12 +68,10 @@ _LLAMA3_COMPACT_TEMPLATE = (
 )
 _LLAMA3_TEMPLATE_MARKERS = ("<|start_header_id|>", "Cutting Knowledge Date")
 
-# Real marker (`ggml-org/SmolVLM2-2.2B-Instruct-GGUF`'s own template:
-# `message['content'][0]['type']`) for a template expecting `content` as a real list of
-# `{"type": ...}` parts (HF's own multi-modal convention), not a flat string. Confirmed live: a
-# flat string crashes on empty content (`content[0]` - "str object has no element 0") or, worse,
-# silently renders empty on non-empty content (`content[0]` returns a 1-char string, not a dict,
-# so `['type']` is Jinja `Undefined` - every `{% if line['type'] == ... %}` never matches).
+# Real marker (SmolVLM2's own template: `message['content'][0]['type']`) for a template
+# expecting `content` as a list of `{"type": ...}` parts (HF's multi-modal convention), not a
+# flat string. Confirmed live: a flat string crashes on empty content ("str object has no
+# element 0") or silently renders empty on non-empty content (Jinja `Undefined` never matches).
 _STRUCTURED_CONTENT_MARKERS = ("content'][0]", 'content"][0]')
 
 
@@ -97,8 +95,10 @@ class ChatTemplatePromptBuilder:
         no_tools_template: str | None = None,
         structured_content: bool = False,
     ) -> None:
-        # Same Jinja settings HF's own apply_chat_template uses (whitespace control in particular).
-        env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True)
+        # Same Jinja settings HF's apply_chat_template uses, plus GenerationTagExtension.
+        env = ImmutableSandboxedEnvironment(
+            trim_blocks=True, lstrip_blocks=True, extensions=[GenerationTagExtension]
+        )
         env.filters["tojson"] = self._tojson
         env.globals["raise_exception"] = self._raise_exception
         env.globals["strftime_now"] = lambda fmt: datetime.now().strftime(fmt)
@@ -127,14 +127,18 @@ class ChatTemplatePromptBuilder:
 
         is_llama3 = all(marker in template for marker in _LLAMA3_TEMPLATE_MARKERS)
         structured_content = any(marker in template for marker in _STRUCTURED_CONTENT_MARKERS)
-        return cls(
-            template,
-            token_text("tokenizer.ggml.bos_token_id"),
-            token_text("tokenizer.ggml.eos_token_id"),
-            add_bos,
-            _LLAMA3_COMPACT_TEMPLATE if is_llama3 else None,
-            structured_content,
-        )
+        try:
+            return cls(
+                template,
+                token_text("tokenizer.ggml.bos_token_id"),
+                token_text("tokenizer.ggml.eos_token_id"),
+                add_bos,
+                _LLAMA3_COMPACT_TEMPLATE if is_llama3 else None,
+                structured_content,
+            )
+        except TemplateError:
+            # Called per-model on every GET /api/tags - degrades, doesn't crash every other model.
+            return None
 
     @staticmethod
     def _tojson(value: Any, ensure_ascii: bool = False, indent: int | None = None, **_: Any) -> str:
@@ -211,12 +215,10 @@ class PromptBuilderFactory:
 
 
 def _has_confirmed_template(metadata: GGUFMetadata, tag: str = "") -> bool:
-    """True for exactly the cases PromptBuilderFactory.for_metadata above actually trusts - real
-    mistral3, a real/builtin chat template, or a tag-matched Vicuna model - False whenever it
-    would fall back to LegacyMistralPromptBuilder, our best-effort guess for a model we have no
-    real confirmation about. Kept in sync with for_metadata by hand (a few lines of duplication,
-    not worth a forced shared code path) rather than by construction - if that logic changes,
-    change this too."""
+    """True for exactly the cases PromptBuilderFactory.for_metadata above trusts - real mistral3,
+    a real/builtin template, or a tag-matched Vicuna model - False otherwise (the
+    LegacyMistralPromptBuilder fallback). Kept in sync with for_metadata by hand, not
+    construction - change both together if that logic changes."""
     return (
         metadata.architecture == "mistral3"
         or ChatTemplatePromptBuilder.from_metadata(metadata) is not None
@@ -224,21 +226,17 @@ def _has_confirmed_template(metadata: GGUFMetadata, tag: str = "") -> bool:
     )
 
 
-# Keyed by (path, mtime, size) - same reasoning and pattern as
-# app.models.load_dtype.estimate_ram_gb's own cache: this parses the same GGUF header
-# has_confirmed_chat_format below is called against on every GET /api/tags, and a file's own
-# metadata never changes without the file itself changing.
+# Keyed by (path, mtime, size), same pattern as app.models.load_dtype.estimate_ram_gb's own
+# cache: has_confirmed_chat_format parses this same GGUF header on every GET /api/tags, and a
+# file's metadata never changes without the file itself changing.
 _confirmed_chat_format_cache: dict[tuple[str, int, int, str], bool] = {}
 
 
 def has_confirmed_chat_format(gguf_path: str | Path, tag: str = "") -> bool:
-    """Whether `gguf_path` gets a chat template we actually know matches its real training format
-
-    (see _has_confirmed_template above), for a caller with only a path, not already-parsed
-    GGUFMetadata (see app.models.capabilities.effective_capabilities's "chat_format_unverified").
-    False isn't proof of a base/non-chat model - just that this is a generic guess, which can
-    still produce incoherent output regardless of which guess is used (Hebrew-Mistral-7B-Q5_K_M,
-    2026-09-27)."""
+    """Whether `gguf_path` gets a chat template matching its real training format (see
+    _has_confirmed_template), for a caller with only a path (see effective_capabilities's
+    "chat_format_unverified"). False isn't proof of a base model - just an unconfirmed guess,
+    which can still produce incoherent output either way (Hebrew-Mistral-7B-Q5_K_M, 2026-09-27)."""
     path = Path(gguf_path)
     stat = path.stat()
     cache_key = (str(path), stat.st_mtime_ns, stat.st_size, tag)

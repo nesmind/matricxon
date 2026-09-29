@@ -13,9 +13,11 @@ import torch
 from pydantic import ValidationError
 
 from app.architectures.mistral3 import Mistral3TextArchitecture
+from app.architectures.nemotron_h import NemotronHArchitecture
 from app.config import Settings
 from app.gguf.loader import GGUFModelLoader
 from tests.tiny_gguf import build_tiny_mistral3_gguf
+from tests.tiny_gguf_nemotron_h import LAYER_TYPES, build_tiny_nemotron_h_gguf
 
 
 class TestLogLevelBounds:
@@ -70,3 +72,28 @@ class TestPerLayerTrace:
             model(input_ids)
 
         assert not any(r.message.startswith("layer ") for r in caplog.records)
+
+
+class TestNemotronHPerLayerTrace:
+    """nemotron_h's own per-layer debug line (added 2026-09-29 after a real report: its hybrid
+    Mamba/attention/MLP layers logged nothing at DEBUG level at all, unlike every other
+    architecture's own per-layer/per-substage lines - see NemotronHArchitecture._forward_impl's
+    own comment)."""
+
+    def test_debug_level_emits_one_line_per_layer_with_its_real_type(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        gguf_path = build_tiny_nemotron_h_gguf(tmp_path / "tiny-nemotron-h.gguf")
+        loader = GGUFModelLoader(gguf_path, dtype=torch.float32)
+        model = NemotronHArchitecture.from_gguf(loader, dtype=torch.float32)
+        model.eval()
+        cache = model.build_cache(max_seq_len=8, dtype=torch.float32)
+        input_ids = torch.tensor([[1, 2, 3]], dtype=torch.long)
+
+        with caplog.at_level(logging.DEBUG, logger="app.architectures.nemotron_h"):
+            model(input_ids, cache)
+
+        layer_lines = [r for r in caplog.records if r.message.startswith("layer ")]
+        assert len(layer_lines) == len(LAYER_TYPES)
+        for record, layer_type in zip(layer_lines, LAYER_TYPES, strict=True):
+            assert f"({layer_type})" in record.message

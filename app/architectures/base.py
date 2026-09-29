@@ -46,6 +46,12 @@ class ModelArchitecture(PackedWeightLoading, nn.Module, ABC):
     #: rather than being re-parsed back out of each `supports()` method's
     #: comparison logic.
     NAME: ClassVar[str]
+    #: True for an architecture with real, working Mixture-of-Experts support - not every
+    #: `NAME`-matching checkpoint is MoE (a real `llama` GGUF is dense unless its own metadata
+    #: activates Mixtral's expert branch, see `llama_moe.detect_moe`), but the *class* can
+    #: handle one if given it. `GET /api/health` reads this directly (see
+    #: `ArchitectureRegistry.moe_supported_names`), same reasoning as `NAME` itself.
+    SUPPORTS_MOE: ClassVar[bool] = False
     _last_logits_only: bool = False
 
     def __init__(self) -> None:
@@ -83,6 +89,28 @@ class ModelArchitecture(PackedWeightLoading, nn.Module, ABC):
     @abstractmethod
     def supports(cls, metadata: GGUFMetadata) -> bool:
         """Whether this class can build the model described by `metadata`."""
+
+    @classmethod
+    def unsupported_features(cls, metadata: GGUFMetadata) -> list[str]:
+        """Real per-checkpoint feature flags `metadata` activates that this class does NOT
+        actually implement, despite `supports()` returning True for it - a real gap this closes
+        (2026-09-29): Gemma4Architecture claimed "completion" support for a real gemma-4-E2B-it
+        GGUF whose Per-Layer Embeddings and cross-layer KV reuse it silently never read at all,
+        with nothing distinguishing it from a fully-supported checkpoint until that was found and
+        fixed by hand. `supports()` only ever checks the architecture *name* string - some real
+        architectures gate an entire different code path behind metadata instead of a separate
+        name (the same real pattern `llama`'s own Mixtral MoE detection already handles
+        correctly - see `llama_moe.detect_moe` - but doesn't self-report if it didn't).
+
+        Empty (the default here) means "no *known* gated-variant gap", not "fully verified" -
+        same honesty level `has_confirmed_chat_format` already documents for chat templates.
+        Overridden only by architectures with a real, documented such gap (see
+        `Gemma4Architecture`'s own override) - every other architecture inherits this default
+        unchanged. Surfaced via `app.architectures.registry.unsupported_features` ->
+        `effective_capabilities`'s own `"architecture_features_unsupported"` flag, so a caller
+        (pAIring's model list) can warn before a real request silently produces wrong output
+        instead of a clean error."""
+        return []
 
     @classmethod
     @abstractmethod

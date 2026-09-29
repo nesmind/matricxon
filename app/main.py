@@ -78,6 +78,16 @@ class MatricxonApp:
         # docstring; irrelevant once matricxon actually supports a non-CPU device.
         if settings.device == "cpu":
             torch.set_num_threads(settings.torch_threads or os.cpu_count() or 1)
+        # This project's target hardware (Sandy Bridge) genuinely lacks whatever instruction set
+        # NNPACK needs (confirmed: torch.backends.nnpack.is_available() is False here, same class
+        # of gap as cpu_accelerates_bf16's own avx512_bf16/amx_bf16 check) - left at its PyTorch
+        # default, every real Conv1d call (nemotron_h's own SSM causal conv, see
+        # NemotronHMamba2Mixer) re-probes NNPACK and re-logs a native C++ warning that Python's own
+        # `warnings` filters can't catch, once per generated token (confirmed live, 2026-09-29:
+        # "Could not initialize NNPACK! Reason: Unsupported hardware", 11x in one nemotron_h chat).
+        # Turning it off here skips the probe (and the warning) entirely - conv1d already has a
+        # working non-NNPACK fallback path either way, confirmed correct on the same shapes.
+        torch.backends.nnpack.set_flags(False)
         # See Settings.gemv_backend - a no-op unless "native"; a failed build only logs a warning.
         NativeGemm.configure(settings.gemv_backend, settings.torch_threads)
 

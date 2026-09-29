@@ -1,3 +1,4 @@
+from app.architectures.registry import unsupported_features
 from app.models.installed_model import InstalledModel
 from app.runtime.chat_template import has_confirmed_chat_format
 
@@ -80,7 +81,16 @@ def effective_capabilities(installed: InstalledModel, has_paired_mmproj: bool) -
     flag "we don't actually know this model's real instruction format" - real, confirmed-live
     gap this closes (2026-09-27): Hebrew-Mistral-7B-Q5_K_M produced incoherent, non-chat-like
     output no matter which prompt format it was given, with nothing distinguishing it from a
-    normal, well-behaved chat model in the model list."""
+    normal, well-behaved chat model in the model list.
+
+    Also adds `"architecture_features_unsupported"` when `installed`'s own resolved architecture
+    class reports a real gated-variant gap for THIS checkpoint (see
+    `app.architectures.registry.unsupported_features`/`ModelArchitecture.unsupported_features`'s
+    own docstring) - real, confirmed-live gap this closes (2026-09-29): a real gemma-4-E2B-it
+    GGUF's Per-Layer Embeddings and cross-layer KV reuse were silently never read at all by the
+    dense-only `Gemma4Architecture` class that otherwise claimed full "completion" support for
+    it, with nothing in the model list distinguishing it from a fully-handled checkpoint until
+    that was found and fixed by hand."""
     capabilities = installed.capabilities
     has_real_fusion = has_paired_mmproj and installed.architecture in _VISION_FUSION_ARCHITECTURES
     if has_real_fusion and "vision" not in capabilities:
@@ -88,4 +98,6 @@ def effective_capabilities(installed: InstalledModel, has_paired_mmproj: bool) -
     format_confirmed = has_confirmed_chat_format(installed.path, tag=installed.tag)
     if "completion" in capabilities and not format_confirmed:
         capabilities = [*capabilities, "chat_format_unverified"]
+    if unsupported_features(installed.path):
+        capabilities = [*capabilities, "architecture_features_unsupported"]
     return capabilities

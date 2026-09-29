@@ -51,6 +51,7 @@ class LlamaArchitecture(ModelArchitecture):
     """
 
     NAME = "llama"
+    SUPPORTS_MOE = True  # real Mixtral GGUFs - see llama_moe.detect_moe's own module docstring
 
     def __init__(
         self,

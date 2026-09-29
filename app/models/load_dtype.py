@@ -9,45 +9,46 @@ from app.gguf.dequant.registry import QuantStrategyRegistry
 from app.gguf.reader import GGUFReader
 from app.gguf.tensor_info import GGUFTensorInfo
 
-# Tensors with no "blk.N." prefix (token_embd, output_norm, and - for an untied lm_head - a
-# separate output.weight) - grouped together so a caller can size "everything outside the
-# per-decoder-layer loop" the same way it sizes any one layer. Not a real GGUF tensor name, just
-# this module's own grouping key.
+# Tensors with no "blk.N." prefix (token_embd, output_norm, untied output.weight) - lets a caller
+# size "everything outside the per-layer loop" the same way as any one layer. Not a real GGUF
+# tensor name, just this module's own grouping key.
 NON_LAYER_GROUP = "__non_layer__"
 
 _LAYER_PREFIX_RE = re.compile(r"^blk\.(\d+)\.")
 
 # Every architecture whose _materialize_weights actually routes tensors through QuantizedLinear
-# today (see the plan behind this work) - the one shared source of truth both ModelManager._load
-# (deciding whether to build one) and estimate_ram_gb's real callers (show_router.py/
-# tags_router.py, deciding whether to *report* the smaller number) key off of - reporting a
-# smaller estimate for an architecture that doesn't actually use this path yet would be a real,
-# live-misleading claim, not just a stale one. `bert`/`nomic-bert` are deliberately excluded:
-# both are encoder-only, so a real call to either is always prefill-shaped (the whole real input
-# processed in one call, never a single-token decode step) - QuantizedLinear's own fast path only
-# helps decode (see its own docstring); for an always-prefill workload every call would hit the
-# transient-dequant-and-discard path instead, which would make every real embed call *slower*
-# (repeated dequant work, no cross-call cache) rather than saving real steady-state RAM the way it
-# does for chat's decode-dominant workload - a real, deliberate scope decision, not an oversight.
-# `granitemoe`/`nemotron_h` are also deliberately excluded, for a different real reason: their
-# expert/SSM tensors are hard-coded to bypass `_load_projection` entirely (3D expert tensors and
-# several non-2D SSM tensors - see each architecture's own docstring), so enabling this flag for
-# either would only ever touch a couple of their non-MoE/non-SSM projections (real but marginal
-# savings, since expert/SSM tensors dominate real total memory for both) - not worth the added
-# per-layer-type suffix bookkeeping this file's own flat-suffix-list design would need to stay
-# correct for a hybrid model, so left off rather than partially wired.
+# today - shared by ModelManager._load (build one or not) and estimate_ram_gb's callers (report
+# the smaller number or not); reporting a smaller estimate for an unwired architecture would be
+# live-misleading. `bert`/`nomic-bert` excluded: encoder-only, always prefill-shaped, and
+# QuantizedLinear's fast path only helps decode - wiring them would make embed calls slower for
+# no steady-state RAM win. `granitemoe` excluded: 3D expert tensors bypass `_load_projection`
+# entirely, so wiring would only touch a couple of non-expert projections (marginal - expert
+# tensors dominate its real memory). `nemotron_h` *used* to be excluded on the same theory - wrong
+# on a real installed 12B checkpoint (2026-09-29): MLP tensors are 47.7% of real elements there,
+# SSM only 38.3%, so wiring attn_v/attn_output/ffn_up/ffn_down/output.weight (below) is a real,
+# non-marginal saving - the flat suffix-list design already handles a hybrid per-layer-type model
+# correctly with no extra bookkeeping (a tensor simply isn't in the file for a layer type that
+# doesn't have it).
 QUANTIZED_NATIVE_WIRED_ARCHITECTURES = frozenset(
-    {"mistral3", "llama", "gemma4", "phi2", "granite", "qwen2", "qwen3", "command-r", "starcoder2"}
+    {
+        "mistral3",
+        "llama",
+        "gemma4",
+        "phi2",
+        "granite",
+        "qwen2",
+        "qwen3",
+        "command-r",
+        "starcoder2",
+        "nemotron_h",
+    }
 )
 
-# The exact 5 (of 7) real per-layer tensor names Mistral3TextArchitecture._load_projection routes
-# through QuantizedLinear when quantized-native compute is enabled - kept in sync with that
-# method by hand for now (only one architecture is wired so far, see the plan behind this work);
-# `attn_q`/`attn_k` are excluded from this shared base list because most architectures still load
-# them on the float path - estimating them as quantized-native-sized when they're not would
-# under-estimate real memory need, the one thing this guard must never do. mistral3/llama add them
-# (plus `token_embd`) below: those two apply `unpermute_rope_rows` to the packed rows and keep the
-# embedding table packed (`PackedWeightLoading`).
+# The 5 (of 7) real per-layer names Mistral3TextArchitecture._load_projection routes through
+# QuantizedLinear - kept in sync by hand. `attn_q`/`attn_k` excluded here since most architectures
+# still load them on the float path (counting them as packed would under-estimate real need);
+# mistral3/llama add them (+ `token_embd`) below - those two apply `unpermute_rope_rows`/keep the
+# embedding packed.
 _QUANTIZED_NATIVE_TENSOR_SUFFIXES = (
     "attn_v.weight",
     "attn_output.weight",
@@ -56,15 +57,11 @@ _QUANTIZED_NATIVE_TENSOR_SUFFIXES = (
     "ffn_down.weight",
 )
 
-# Per-architecture eligible tensor-name suffixes - kept separate per architecture (not one shared
-# list) because eligibility genuinely differs: gemma4 needs no unpermute_rope_rows at all, so its
-# real q/k projections are included too (see Gemma4Architecture.__init__'s own comment); llama/
-# phi2 have their own separate, untied lm_head (`output.weight`) mistral3/gemma4 don't (tied to
-# token_embd there); phi2's q/k/v come from one real fused `attn_qkv.weight` tensor, never
-# individually named `attn_v.weight`, so it's absent here too (see Phi2Architecture.__init__'s own
-# comment - not silently included by an over-broad shared list). Reusing the broader
-# `_QUANTIZED_NATIVE_TENSOR_SUFFIXES` for every architecture would *under*-estimate real memory
-# need for whichever ones don't actually route q/k that way - the one thing this must never do.
+# Per-architecture eligible suffixes (not one shared list) - eligibility genuinely differs:
+# gemma4 needs no unpermute_rope_rows, so its q/k projections are included too; llama/phi2 have
+# their own untied lm_head, mistral3/gemma4 don't (tied to token_embd); phi2's q/k/v come from one
+# fused `attn_qkv.weight`, never a standalone `attn_v.weight`. Reusing the broader list for
+# everyone would under-estimate whichever ones don't actually route q/k that way.
 _PACKED_QK_AND_EMBEDDING = ("attn_q.weight", "attn_k.weight", "token_embd.weight")
 
 _QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH: dict[str, tuple[str, ...]] = {
@@ -76,29 +73,38 @@ _QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH: dict[str, tuple[str, ...]] = {
         *_QUANTIZED_NATIVE_TENSOR_SUFFIXES,
     ),
     "phi2": ("attn_output.weight", "ffn_up.weight", "ffn_down.weight", "output.weight"),
-    # granite/qwen2/qwen3/command-r all follow llama's exact real _load_projection call list
-    # (attn_v/attn_output/ffn_gate/ffn_up/ffn_down, plus a real separate lm_head when untied) -
-    # confirmed by direct comparison against each architecture's own _materialize_weights, not
-    # assumed from family resemblance (this session's own hard-won lesson - see qwen2.py's
-    # docstring for what happens when that assumption goes unverified). None of the four route
-    # attn_q/attn_k through _load_projection (granite/qwen2/qwen3/command-r all load those via a
-    # plain .copy_() - with or without unpermute_rope_rows depending on the architecture, see each
-    # one's own docstring - never through QuantizedLinear), so those stay excluded here too, same
-    # reasoning as every other entry in this dict.
+    # granite/qwen2/qwen3/command-r follow llama's exact _load_projection call list (attn_v/
+    # attn_output/ffn_gate/ffn_up/ffn_down, + untied lm_head) - confirmed per-architecture, not
+    # assumed from family resemblance (see qwen2.py's own docstring for why that assumption is
+    # dangerous). None of the four route attn_q/attn_k through _load_projection either, so those
+    # stay excluded here too.
     "granite": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
     "qwen2": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
     "qwen3": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
     "command-r": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
-    # starcoder2's real MLP is plain (non-gated) - no ffn_gate tensor exists at all, so its own
-    # explicit list omits that suffix rather than reusing _QUANTIZED_NATIVE_TENSOR_SUFFIXES
-    # unchanged (harmless either way per this function's own real tensor-name matching, but this
-    # is clearer about what this architecture's real tensors actually are).
+    # starcoder2's MLP is plain (non-gated) - no ffn_gate tensor exists, so its list omits that
+    # suffix rather than reusing _QUANTIZED_NATIVE_TENSOR_SUFFIXES unchanged.
     "starcoder2": (
         "attn_v.weight",
         "attn_output.weight",
         "ffn_up.weight",
         "ffn_down.weight",
         "output.weight",
+    ),
+    # nemotron_h's attn_q/attn_k are always a plain .copy_() (no RoPE at all, no permutation
+    # reason to route them through _load_projection); token_embd stays a plain nn.Embedding (no
+    # QuantizedEmbedding wiring yet). ssm_in/ssm_out ARE plain 2D nn.Linear weights (99.9% of a
+    # real checkpoint's own SSM element count, confirmed 2026-09-29) and go through
+    # _load_projection too; every other real ssm_* tensor genuinely isn't 2D-shaped and bypasses
+    # it, left out automatically (its name never matches any suffix below).
+    "nemotron_h": (
+        "attn_v.weight",
+        "attn_output.weight",
+        "ffn_up.weight",
+        "ffn_down.weight",
+        "output.weight",
+        "ssm_in.weight",
+        "ssm_out.weight",
     ),
 }
 

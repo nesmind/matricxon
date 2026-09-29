@@ -44,13 +44,18 @@ class NemotronHArchitecture(ModelArchitecture):
     special case, and why `kv_cache_layer_shapes` is simply never defined here (it was never
     ABC-enforced to begin with).
 
-    Quantized-native compute is deliberately out of scope for v1, same documented pattern as
-    `GraniteMoeArchitecture`'s expert tensors: `"nemotron_h"` is not added to
-    `QUANTIZED_NATIVE_WIRED_ARCHITECTURES`/`_QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH`
-    (`app/models/load_dtype.py`), so `_load_projection` calls for attention/MLP tensors always
-    take their plain `.copy_()` fallback in practice; the SSM block's tensors (several of which
-    aren't 2D `nn.Linear`-shaped at all - `ssm_a`/`ssm_d` are 1D, `ssm_conv1d` is a depthwise conv
-    kernel) bypass `_load_projection` entirely and `.copy_()` straight into raw `nn.Parameter`s.
+    Quantized-native compute (`app/models/load_dtype.py`'s `QUANTIZED_NATIVE_WIRED_ARCHITECTURES`/
+    `_QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH`) covers `attn_v`/`attn_output`/`ffn_up`/`ffn_down`/
+    `output.weight`, plus the Mamba mixer's own `ssm_in`/`ssm_out` (2026-09-29) - real, non-marginal
+    savings confirmed on an installed 12B checkpoint (MLP tensors are 47.7% of real total elements
+    there, and `ssm_in`/`ssm_out` alone are 99.9% of the SSM bucket's own elements - together this
+    now covers nearly the whole model; estimated RAM for that file dropped ~29.5GB -> ~18.6GB).
+    Every other SSM tensor genuinely isn't 2D `nn.Linear`-shaped (`ssm_a`/`ssm_d`/`ssm_dt.bias` are
+    1D, `ssm_conv1d` is a depthwise conv kernel, `ssm_norm` a grouped-norm weight) and stays a
+    plain `.copy_()` into its raw `nn.Parameter`, same as `token_embd` and `attn_q`/`attn_k` (this
+    architecture has no RoPE, so there's no packed-row permutation reason to route those two
+    through `_load_projection` the way llama/gemma4 do) - a real, separate follow-up, not
+    attempted here.
     """
 
     NAME = "nemotron_h"
@@ -191,7 +196,9 @@ class NemotronHArchitecture(ModelArchitecture):
 
             layer_type = self.layer_types[i]
             if layer_type == "mamba":
-                materialize_mamba_layer(loader, prefix, layer.mixer)
+                materialize_mamba_layer(
+                    loader, prefix, layer.mixer, self._load_projection, self._dtype, enabled
+                )
             elif layer_type == "attention":
                 materialize_attention_layer(
                     loader, prefix, layer.self_attn, self._load_projection, self._dtype, enabled
@@ -222,9 +229,23 @@ class NemotronHArchitecture(ModelArchitecture):
         del image_embeddings  # no real vision-language Nemotron-H checkpoint exists yet to fuse
         del position_ids  # no RoPE anywhere in this architecture - nothing needs a position id
 
+        _, seq_len = input_ids.shape
         x = self.token_embd(input_ids)
         for i, layer in enumerate(self.layers):
+            layer_started = time.monotonic()
             x = layer(x, kv_cache, i)
+            # Real per-layer-type timing (mamba/attention/mlp) - a real gap this closes
+            # (2026-09-29): _forward_impl logged nothing here before, unlike gemma4's own
+            # "attention"/"ffn" lines. Each real layer here is only ever one stage, so one line
+            # with its type carries what gemma4 needs two nested lines for.
+            logger.debug(
+                "layer %d/%d (%s): %.1fms (seq_len=%d)",
+                i + 1,
+                self.n_layer,
+                self.layer_types[i],
+                (time.monotonic() - layer_started) * 1000,
+                seq_len,
+            )
             if stop_check is not None and stop_check():
                 logger.info(
                     "generation stop requested - cancelling after layer %d/%d", i + 1, self.n_layer

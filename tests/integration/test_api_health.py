@@ -20,6 +20,15 @@ def test_supported_architectures_matches_the_real_registry(client: TestClient) -
     assert response.json()["supported_architectures"] == ArchitectureRegistry().supported_names()
 
 
+def test_moe_supported_architectures_matches_the_real_registry(client: TestClient) -> None:
+    response = client.get("/api/health")
+
+    assert (
+        response.json()["moe_supported_architectures"]
+        == ArchitectureRegistry().moe_supported_names()
+    )
+
+
 def test_supported_quantizations_matches_the_real_registry(client: TestClient) -> None:
     response = client.get("/api/health")
 

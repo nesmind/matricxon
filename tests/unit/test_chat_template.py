@@ -116,6 +116,24 @@ def test_has_confirmed_template_is_false_without_a_vicuna_tag_match() -> None:
     assert _has_confirmed_template(_metadata("llama", None), tag=tag) is False
 
 
+def test_generation_tag_template_renders_as_a_transparent_pass_through() -> None:
+    """Real HF templates (Llama 3.1+, Granite 3.x) wrap the assistant turn in `{% generation %}`
+    - crashed a real DictaLM-3.0-24B-Thinking GGUF's /api/tags entry (2026-09-29, unknown Jinja
+    tag) before GenerationTagExtension existed."""
+    template = "{% generation %}{{ 'hello' }}{% endgeneration %}"
+    builder = ChatTemplatePromptBuilder(template, "", "")
+    assert builder.build([]) == "hello"
+
+
+def test_unsupported_template_syntax_degrades_to_none_not_a_crash() -> None:
+    """A template using Jinja syntax matricxon's environment still doesn't support must not
+    crash from_metadata's caller (has_confirmed_chat_format is called once per installed model
+    on every GET /api/tags - one bad model's template must not take down every other model's
+    listing, see from_metadata's own except TemplateError)."""
+    metadata = _metadata("llama", "{% this_tag_does_not_exist %}{{ 'x' }}{% endthis_tag %}")
+    assert ChatTemplatePromptBuilder.from_metadata(metadata) is None
+
+
 def test_raise_exception_in_a_template_becomes_a_400_error() -> None:
     builder = ChatTemplatePromptBuilder("{{ raise_exception('roles must alternate') }}", "", "")
     with pytest.raises(ChatTemplateError, match="roles must alternate") as exc_info:

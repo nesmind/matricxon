@@ -41,6 +41,7 @@ class GraniteMoeArchitecture(ModelArchitecture):
     """
 
     NAME = "granitemoe"
+    SUPPORTS_MOE = True
 
     def __init__(
         self,

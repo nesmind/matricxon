@@ -170,18 +170,30 @@ def build_nemotron_h_layer(
 
 
 def materialize_mamba_layer(
-    loader: GGUFModelLoader, prefix: str, mixer: NemotronHMamba2Mixer
+    loader: GGUFModelLoader,
+    prefix: str,
+    mixer: NemotronHMamba2Mixer,
+    load_projection: Callable[..., nn.Module],
+    dtype: torch.dtype,
+    enabled: bool,
 ) -> None:
-    """Always a plain `.copy_()` - see `NemotronHArchitecture`'s own docstring for why
-    `_load_projection` (the quantized-native-eligible path) never applies to the SSM block."""
-    mixer.in_proj.weight.copy_(loader.load_tensor(prefix + "ssm_in.weight"))
+    """`ssm_in`/`ssm_out` are plain 2D `nn.Linear` weights (99.9% of a real checkpoint's own SSM
+    element count - confirmed live, 2026-09-29: `ssm_conv1d`/`ssm_norm`/`ssm_a`/`ssm_d`/`ssm_dt`
+    are all negligible by comparison), so they go through `_load_projection` like every other
+    architecture's own projections. Every other real SSM tensor genuinely isn't 2D
+    `nn.Linear`-shaped (`ssm_a`/`ssm_d`/`ssm_dt.bias` are 1D, `ssm_conv1d` is a depthwise conv
+    kernel, `ssm_norm` is a grouped-norm weight) and stays a plain `.copy_()` into its raw
+    `nn.Parameter` regardless of `enabled`."""
+    mixer.in_proj = load_projection(loader, prefix + "ssm_in.weight", mixer.in_proj, dtype, enabled)
     mixer.conv1d_weight.copy_(loader.load_tensor(prefix + "ssm_conv1d.weight"))
     mixer.conv1d_bias.copy_(loader.load_tensor(prefix + "ssm_conv1d.bias"))
     mixer.dt_bias.copy_(loader.load_tensor(prefix + "ssm_dt.bias"))
     mixer.a.copy_(loader.load_tensor(prefix + "ssm_a").reshape(-1))
     mixer.d.copy_(loader.load_tensor(prefix + "ssm_d").reshape(-1))
     mixer.norm_weight.copy_(loader.load_tensor(prefix + "ssm_norm.weight"))
-    mixer.out_proj.weight.copy_(loader.load_tensor(prefix + "ssm_out.weight"))
+    mixer.out_proj = load_projection(
+        loader, prefix + "ssm_out.weight", mixer.out_proj, dtype, enabled
+    )
 
 
 def materialize_attention_layer(
