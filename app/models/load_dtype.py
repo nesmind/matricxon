@@ -185,7 +185,7 @@ def available_memory_bytes() -> int | None:
 
 # Headroom beyond the raw weights themselves for activations, the KV cache, and whatever else is
 # already resident (a second loaded model, matricxon's own process, the rest of the system).
-MEMORY_SAFETY_MARGIN = 1.5
+MEMORY_SAFETY_MARGIN = 1.2
 
 
 def exact_bf16_bytes(tensor_infos: list[GGUFTensorInfo]) -> int:

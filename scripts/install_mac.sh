@@ -83,13 +83,14 @@ else
 # matricxon settings - see app/config.py for every option. Real environment variables win over this file.
 MATRICXON_ENABLE_QUANTIZED_NATIVE_COMPUTE=true
 MATRICXON_GEMV_BACKEND=native
-MATRICXON_LOG_LEVEL=1
+MATRICXON_MEMORY_SAFETY_MARGIN=1.2
+MATRICXON_LOG_LEVEL=0
 # Where models are stored (default: ./data/models inside this folder):
 # MATRICXON_MODELS_DIR=/Users/you/matricxon-models
 # CPU threads (default: every core) - fewer runs cooler:
 # MATRICXON_TORCH_THREADS=4
 EOF
-    echo "ok: created .env (native kernels on, log level 1)"
+    echo "ok: created .env (native kernels on, memory safety margin 1.2, log level 0)"
 fi
 
 step "Building the native C kernels"

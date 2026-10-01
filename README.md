@@ -64,7 +64,7 @@ embed-then-chat usage pattern) can be raised on a machine with enough RAM -
 `ModelManager`'s eviction/capacity logic is generic, not hardcoded to 2. A
 load that clearly wouldn't fit now fails closed with a `503
 InsufficientMemoryError` instead of risking an OS-level OOM.
-`MATRICXON_MEMORY_SAFETY_MARGIN` (default `1.5`, bounded `1.1`-`1.8`) makes
+`MATRICXON_MEMORY_SAFETY_MARGIN` (default `1.2`, bounded `1.1`-`1.8`) makes
 that admission check's headroom requirement tunable per machine too,
 instead of a hardcoded constant.
 
@@ -92,9 +92,10 @@ between whole generation calls - a `stop_check` threaded through every
 architecture's forward pass raises cleanly instead of finishing a slow
 prefill/materialization it no longer needs to.
 
-**Quantized-native compute (opt-in):** set
-`MATRICXON_ENABLE_QUANTIZED_NATIVE_COMPUTE=1` to skip full dequant on the
-decode path. `QuantizedLinear` dispatches each single-token decode step
+**Quantized-native compute (on by default, with the native C kernels):**
+`MATRICXON_ENABLE_QUANTIZED_NATIVE_COMPUTE=0` turns it off; `MATRICXON_GEMV_BACKEND=numba`
+switches from the C kernels (falls back to Numba by itself without a C compiler). It skips
+full dequant on the decode path. `QuantizedLinear` dispatches each single-token decode step
 directly to a fused GEMV kernel running against the raw mmap'd quantized
 bytes, covering all 11 packed GGUF quant types
 (`Q2_K`-`Q8_K`/`Q4_0`/`Q4_1`/`Q5_0`/`Q5_1`/`Q8_0`); prefill is unaffected

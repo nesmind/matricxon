@@ -38,10 +38,11 @@ class Settings(BaseSettings):
     max_loaded_models: int = 1
     # Headroom `ModelManager._ensure_enough_memory_to_load`/`select_load_dtype` require beyond a
     # model's own exact bf16 weight size (see `load_dtype.exact_bf16_bytes`) before allowing a
-    # load - MEMORY_SAFETY_MARGIN's own default (1.5x). Bounded 1.1-1.8: below 1.1 leaves too
-    # little room for activations/KV-cache to mean anything as a *safety* margin, above 1.8
-    # rejects loads a real machine could likely still handle (see pAIring's Settings > External
-    # servers > Matricxon form, which exposes this same 1.1-1.8 range as
+    # load - MEMORY_SAFETY_MARGIN's own default (1.2x, lowered from 1.5 on 2026-10-01: quantized-
+    # native compute keeps weights packed, so far less headroom is needed). Bounded 1.1-1.8: below
+    # 1.1 leaves too little room for activations/KV-cache to mean anything as a *safety* margin,
+    # above 1.8 rejects loads a real machine could likely still handle (see pAIring's Settings >
+    # External servers > Matricxon form, which exposes this same 1.1-1.8 range as
     # MATRICXON_MEMORY_SAFETY_MARGIN).
     memory_safety_margin: float = Field(default=MEMORY_SAFETY_MARGIN, ge=1.1, le=1.8)
     # Off by default. `ModelManager._load`'s mixed per-layer float32/bf16 loading (mistral3 only)
@@ -62,7 +63,10 @@ class Settings(BaseSettings):
     # algorithm directly) rather than deleted, since a properly-headroomed budget might still yield
     # a real win - that redesign is real, needed follow-up work, not done yet.
     enable_mixed_precision_loading: bool = False
-    # Off by default. Real, permanent, user-selectable choice between two load strategies -
+    # On by default (changed 2026-10-01, with `gemv_backend` below defaulting to the C kernels:
+    # measured on the Qwen3.5-4B Q4_K_M, packed weights + C kernels decode ~10x faster than the
+    # Numba kernels and fit a 15GB machine the dequantize-everything path cannot). Real, permanent,
+    # user-selectable choice between two load strategies -
     # not a temporary rollout toggle (explicit user direction, 2026-09-21): today's path
     # (`ModelManager._load` -> `_materialize_weights`, every architecture) dequantizes every
     # weight to bf16/float32 *once* on first use, then holds all of it in RAM for the model's
@@ -74,17 +78,16 @@ class Settings(BaseSettings):
     # covers - real quantized-native compute, never materializing a full dequantized weight, at
     # the real, honest cost of decode running ~1.9-4x slower per real kernel (see
     # quantized_gemv.py's own docstring for why, and the real redesign attempts already tried).
-    # Defaults off for the same reason `enable_mixed_precision_loading` above does: ship behind a
-    # flag, let real measurement (not optimism) decide whether this becomes the default -  the
-    # old path itself is never removed either way.
-    enable_quantized_native_compute: bool = False
+    # It shipped behind a flag first, until real measurement made it the default - the old path
+    # (MATRICXON_ENABLE_QUANTIZED_NATIVE_COMPUTE=false) is never removed.
+    enable_quantized_native_compute: bool = True
     # Which kernels `QuantizedLinear` runs on (only matters with enable_quantized_native_compute):
-    # "numba" (default, today's float-based Numba GEMV) or "native" - matricxon's own C integer
+    # "numba" (the float-based Numba GEMV) or "native" (default) - matricxon's own C integer
     # kernels (app/native/, see ROADMAP.md's "In-house native (C) quantized kernels"), built on
     # first use with the system C compiler. "native" also takes over prefill for those tensors.
     # Falls back to numba per tensor for a type/shape the C kernels don't cover, or entirely if
-    # the library can't be built.
-    gemv_backend: Literal["numba", "native"] = "numba"
+    # the library can't be built (no C compiler) - so "native" is a safe default.
+    gemv_backend: Literal["numba", "native"] = "native"
 
     device: str = "cpu"
     # None means "use every CPU core" (os.cpu_count()) - PyTorch's own default heuristic measured
