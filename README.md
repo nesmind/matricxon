@@ -44,7 +44,7 @@ logits compared with Hugging Face `transformers` or llama.cpp, or coherent, corr
 "Tiny-model tests only" means the wiring is tested on small synthetic GGUF files but the numbers
 are not yet verified on a full-size model. Any other architecture is rejected with a clear error,
 never run approximately. Model families plug in through an architecture registry, so support for
-more can be added without touching the rest.
+more model types can be added without touching the rest.
 
 **Quantization types:** `F32`, `F16`, `BF16`; `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`; the K-quants
 `Q2_K` to `Q8_K`; and the I-quants and ternary types `IQ1_S`, `IQ1_M`, `IQ2_XXS`, `IQ2_XS`,
@@ -57,9 +57,8 @@ raw integer types, which fail with a clear error.
 
 - **Quantized-native compute.** Weights stay packed in the memory-mapped file and are multiplied
   directly, with no full dequantized copy in RAM. A native C kernel (OpenMP threads) is the
-  default; the Numba kernels are the fallback when there is no C compiler. On by default.
-- **Lazy loading.** Loading a model only builds its structure; weight data is read on first use,
-  so a bad request fails fast and an unused model costs no time.
+  default; the Numba kernels are the fallback when there is no C compiler.
+- **Lazy loading.** Loading a model only builds its structure; weight data is read on first use.
 - **Hybrid models.** Linear-attention and state-space layers keep a
   fixed-size recurrent state instead of a growing KV cache.
 - **Prompt cache.** Each model keeps several conversations' caches, so users sharing a model don't
@@ -71,9 +70,8 @@ raw integer types, which fail with a clear error.
   is that users stream at the same time instead of waiting in line. Mixture-of-experts models and
   Nemotron-H take one reply per step.
 - **Vision.** CLIP/SigLIP-style projector files feed image embeddings into `llama` (LLaVA),
-  `phi2` (moondream2) and `qwen35`. The projector is found next to the model by convention.
-- **Safe memory use.** A model that would not fit in free RAM (with a safety margin) is refused
-  instead of risking the OS killing the process. Idle models unload after a keep-alive time.
+  `phi2` (moondream2) and `qwen35`.
+- **Safe memory use.** A model that would not fit in free RAM (with a safety margin) is refused. Idle models unload after a keep-alive time.
 - **Cancelling one reply.** A `request_id` on `/api/chat` stops just that reply; the model and
   other users' replies are untouched.
 
@@ -90,8 +88,7 @@ raw integer types, which fail with a clear error.
 | `GET /api/health` | Matricxon-only: supported architectures, quantizations, MoE and vision lists |
 | `GET /api/version` | Version string |
 
-Pulling resolves only `hf.co/<repo>:<file>` tags; Ollama's own registry is not reachable.
-`POST /api/push` always returns `501`. A generated `tool_calls` field is not parsed back out of
+Pulling resolves only `hf.co/<repo>:<file>` tags; A generated `tool_calls` field is not parsed back out of
 the model's text yet.
 
 ## Setup
@@ -166,3 +163,26 @@ See [`scripts/README_oracle.md`](scripts/README_oracle.md) for running these on 
 limited RAM. `scripts/manual_chat_check.py`, `manual_embed_check.py` and `manual_pull_check.py`
 exercise the real HTTP API end to end. Long benchmarks can overheat a laptop: use
 `scripts/thermal_guard.py` to stop them at a safe temperature.
+
+
+<br><br>
+
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688)
+![Self-hosted](https://img.shields.io/badge/self--hosted-yes-purple)
+![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
+
+<br><br>
+
+## License
+
+[GNU AGPL-3.0](LICENSE) — you're free to run it, modify it, and
+self-host it, no strings attached, for personal or internal use. The
+one thing it asks in return: if you take a modified version and offer
+it to other people as a hosted service, you share those changes back
+too. If that's relevant to how you're planning to use this (it usually
+isn't, for a personal setup or an internal company deployment), it's
+worth a quick look either way.
+
+If you try it, a ⭐ is always appreciated — and issues/PRs are genuinely
+welcome, whoever you're running this for.
