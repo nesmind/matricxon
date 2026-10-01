@@ -32,6 +32,7 @@ class Phi2Architecture(ModelArchitecture):
     """
 
     NAME = "phi2"
+    SUPPORTS_VISION = True
 
     def __init__(
         self,

@@ -14,6 +14,7 @@ from app.architectures.nomic_bert import NomicBertArchitecture
 from app.architectures.phi2 import Phi2Architecture
 from app.architectures.qwen2 import Qwen2Architecture
 from app.architectures.qwen3 import Qwen3Architecture
+from app.architectures.qwen35 import Qwen35Architecture
 from app.architectures.starcoder2 import Starcoder2Architecture
 from app.gguf.metadata import GGUFMetadata
 from app.gguf.reader import GGUFReader
@@ -38,6 +39,7 @@ class ArchitectureRegistry:
         NemotronHArchitecture,
         Qwen2Architecture,
         Qwen3Architecture,
+        Qwen35Architecture,
         CommandRArchitecture,
         Starcoder2Architecture,
         FalconArchitecture,
@@ -72,6 +74,16 @@ class ArchitectureRegistry:
             architecture_cls.NAME
             for architecture_cls in self._ARCHITECTURES
             if architecture_cls.SUPPORTS_MOE
+        ]
+
+    def vision_supported_names(self) -> list[str]:
+        """The subset of `supported_names()` that really fuses paired-mmproj image embeddings (see
+        `ModelArchitecture.SUPPORTS_VISION`) - `GET /api/health` reports it so a caller can tell
+        "resolves this name" from "and can see images"."""
+        return [
+            architecture_cls.NAME
+            for architecture_cls in self._ARCHITECTURES
+            if architecture_cls.SUPPORTS_VISION
         ]
 
 

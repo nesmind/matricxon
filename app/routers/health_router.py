@@ -30,6 +30,7 @@ class HealthRequestHandler:
             version=MATRICXON_VERSION,
             supported_architectures=self._architecture_registry.supported_names(),
             moe_supported_architectures=self._architecture_registry.moe_supported_names(),
+            vision_supported_architectures=self._architecture_registry.vision_supported_names(),
             supported_quantizations=self._quant_registry.supported_names(),
         )
 

@@ -15,6 +15,7 @@ from app.native.gemm import NativeGemm
 from app.runtime.chat_engine import ChatEngine
 from app.runtime.generation_request import GenerationRequest, SamplingConfig
 from app.runtime.prompt_builder import Mistral3PromptBuilder
+from app.runtime.qwen3vl_fusion import FusedPrompt, build_qwen3vl_prompt
 from app.runtime.special_token_filter import SpecialTokenTextFilter
 from app.runtime.tokenizer import IncrementalTextDecoder
 from app.runtime.vision_fusion import build_prompt_with_images
@@ -85,7 +86,11 @@ class ChatRequestHandler:
 
         stage_started = time.monotonic()
         image_embeddings = None
-        if mmproj is not None:
+        fused = None
+        if mmproj is not None and handle.architecture.NAME == "qwen35":
+            fused = build_qwen3vl_prompt(prompt, all_images, handle.tokenizer, mmproj)
+            prompt_token_ids, image_embeddings = fused.token_ids, fused.image_embeddings
+        elif mmproj is not None:
             prompt_token_ids, image_embeddings = build_prompt_with_images(
                 prompt, all_images, handle.tokenizer, mmproj
             )
@@ -108,7 +113,7 @@ class ChatRequestHandler:
             )
 
         generation_request = self._build_generation_request(
-            request, prompt_token_ids, image_embeddings
+            request, prompt_token_ids, image_embeddings, fused
         )
         return NDJSONResponse(
             self._stream(handle, generation_request, len(prompt_token_ids), load_duration)
@@ -119,11 +124,14 @@ class ChatRequestHandler:
         request: ChatRequest,
         prompt_token_ids: list[int],
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
+        fused: FusedPrompt | None = None,
     ) -> GenerationRequest:
         options = request.options
         return GenerationRequest(
             input_ids=torch.tensor([prompt_token_ids], dtype=torch.long),
             image_embeddings=image_embeddings,
+            position_ids=fused.position_ids if fused else None,
+            position_delta=fused.position_delta if fused else 0,
             sampling=SamplingConfig(
                 temperature=options.temperature,
                 top_p=options.top_p,

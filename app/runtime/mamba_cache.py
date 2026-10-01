@@ -1,6 +1,18 @@
+from dataclasses import dataclass
+
 import torch
 
 from app.runtime.kv_cache import KVCache
+
+
+@dataclass(frozen=True)
+class HybridSnapshot:
+    """The recurrent half of a `NemotronHHybridCache` at one sequence position, plus that
+    position. (The attention half is just a KV prefix - restoring it is a truncate.)"""
+
+    length: int
+    conv_state: list[torch.Tensor]
+    ssm_state: list[torch.Tensor]
 
 
 class NemotronHHybridCache:
@@ -66,3 +78,19 @@ class NemotronHHybridCache:
         slot = self._mamba_slot[layer_idx]
         self.conv_state[slot] = conv_state
         self.ssm_state[slot] = ssm_state
+
+    def snapshot(self) -> HybridSnapshot:
+        """Copies the recurrent state at the current length - the one thing a recurrent layer
+        can't be rolled back to otherwise, which is what `PromptCache` needs to reuse a prefix."""
+        return HybridSnapshot(
+            self.length,
+            [t.clone() for t in self.conv_state],
+            [t.clone() for t in self.ssm_state],
+        )
+
+    def restore(self, snapshot: HybridSnapshot) -> None:
+        """Rolls back to `snapshot` (taken at a length <= the current one): the attention KV is
+        truncated, the recurrent state replaced by a copy (the snapshot stays reusable)."""
+        self._kv_cache.truncate(snapshot.length)
+        self.conv_state = [t.clone() for t in snapshot.conv_state]
+        self.ssm_state = [t.clone() for t in snapshot.ssm_state]

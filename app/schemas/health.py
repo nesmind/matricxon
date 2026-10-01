@@ -6,4 +6,5 @@ class HealthResponse(BaseModel):
     version: str
     supported_architectures: list[str]
     moe_supported_architectures: list[str]
+    vision_supported_architectures: list[str]
     supported_quantizations: list[str]

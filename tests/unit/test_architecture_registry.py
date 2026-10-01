@@ -16,6 +16,7 @@ from app.architectures.nomic_bert import NomicBertArchitecture
 from app.architectures.phi2 import Phi2Architecture
 from app.architectures.qwen2 import Qwen2Architecture
 from app.architectures.qwen3 import Qwen3Architecture
+from app.architectures.qwen35 import Qwen35Architecture
 from app.architectures.registry import ArchitectureRegistry, unsupported_features
 from app.architectures.starcoder2 import Starcoder2Architecture
 from app.gguf.constants import GGUFValueType
@@ -78,6 +79,7 @@ class TestSupportedNames:
             NemotronHArchitecture.NAME,
             Qwen2Architecture.NAME,
             Qwen3Architecture.NAME,
+            Qwen35Architecture.NAME,
             CommandRArchitecture.NAME,
             Starcoder2Architecture.NAME,
             FalconArchitecture.NAME,
@@ -100,6 +102,19 @@ class TestMoeSupportedNames:
     def test_every_moe_name_is_also_a_supported_name(self) -> None:
         registry = ArchitectureRegistry()
         assert set(registry.moe_supported_names()) <= set(registry.supported_names())
+
+
+class TestVisionSupportedNames:
+    def test_lists_only_the_architectures_that_really_fuse_images(self) -> None:
+        assert ArchitectureRegistry().vision_supported_names() == [
+            LlamaArchitecture.NAME,
+            Phi2Architecture.NAME,
+            Qwen35Architecture.NAME,
+        ]
+
+    def test_every_vision_name_is_also_a_supported_name(self) -> None:
+        registry = ArchitectureRegistry()
+        assert set(registry.vision_supported_names()) <= set(registry.supported_names())
 
 
 def test_model_architecture_declares_name_as_a_class_var() -> None:

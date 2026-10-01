@@ -6,6 +6,7 @@ import torch
 
 from app.architectures.base import GenerationCancelledError, ModelArchitecture
 from app.runtime.generation_request import GenerationRequest, GenerationResult
+from app.runtime.mamba_cache import NemotronHHybridCache
 from app.runtime.prompt_cache import PromptCache
 from app.runtime.sampler import Sampler
 
@@ -27,15 +28,49 @@ class ChatEngine:
     architectures go through EmbeddingEngine instead.
     """
 
+    #: A hybrid (recurrent) cache's prefill is split into pieces of at most this many tokens, with
+    #: a snapshot after each (see `PromptCache`) - also bounds peak activation memory on a long
+    #: prompt. Plus one extra cut this many tokens before the prompt's end: the next turn's
+    #: prompt usually diverges just before the generation-prompt suffix - the useful restore point.
+    PREFILL_CHUNK = 512
+    TAIL_SNAPSHOT_OFFSET = 16
+
     def __init__(
         self,
         architecture: ModelArchitecture,
         eos_token_ids: set[int],
         prompt_cache: PromptCache | None = None,
+        prefill_chunk: int = PREFILL_CHUNK,
     ) -> None:
         self._architecture = architecture
         self._eos_token_ids = eos_token_ids
         self._prompt_cache = prompt_cache or PromptCache()
+        self._prefill_chunk = prefill_chunk
+
+    @staticmethod
+    def _images_in(
+        images: list[tuple[int, torch.Tensor]] | None, start: int, end: int
+    ) -> list[tuple[int, torch.Tensor]] | None:
+        """The image spans (and the parts of spans) inside prompt tokens `[start, end)`, with
+        starts made relative to `start` - a chunked prefill hands each piece only its own part."""
+        if not images:
+            return images
+        pieces = []
+        for span_start, embeds in images:
+            lo, hi = max(span_start, start), min(span_start + embeds.shape[0], end)
+            if lo < hi:
+                pieces.append((lo - start, embeds[lo - span_start : hi - span_start]))
+        return pieces or None
+
+    def _prefill_cuts(self, kv_cache: object, reused: int, prompt_len: int) -> list[int]:
+        """End positions of each prefill piece. One piece (the whole remaining prompt) for a plain
+        KV cache; split for a hybrid one (see `PREFILL_CHUNK`)."""
+        if not isinstance(kv_cache, NemotronHHybridCache):
+            return [prompt_len]
+        cuts = {prompt_len, *range(reused + self._prefill_chunk, prompt_len, self._prefill_chunk)}
+        if prompt_len - self.TAIL_SNAPSHOT_OFFSET > reused:
+            cuts.add(prompt_len - self.TAIL_SNAPSHOT_OFFSET)
+        return sorted(cuts)
 
     def stream(
         self, request: GenerationRequest, stop_check: Callable[[], bool] | None = None
@@ -71,24 +106,33 @@ class ChatEngine:
 
         try:
             with torch.no_grad():
-                position_ids = torch.arange(reused, prompt_len, dtype=torch.long)
                 forward_started = time.monotonic()
-                logits = self._architecture.forward(
-                    request.input_ids[:, reused:],
-                    kv_cache,
-                    position_ids,
-                    stop_check,
-                    request.image_embeddings,
-                    last_logits_only=True,
-                )
+                cuts = self._prefill_cuts(kv_cache, reused, prompt_len)
+                start = reused
+                for end in cuts:
+                    positions = (
+                        request.position_ids[:, start:end]
+                        if request.position_ids is not None
+                        else torch.arange(start, end, dtype=torch.long)
+                    )
+                    logits = self._architecture.forward(
+                        request.input_ids[:, start:end],
+                        kv_cache,
+                        positions,
+                        stop_check,
+                        self._images_in(request.image_embeddings, start, end),
+                        last_logits_only=True,
+                    )
+                    kv_cache.advance(end - start)
+                    self._prompt_cache.advanced(prompt_ids[start:end])
+                    self._prompt_cache.capture(kv_cache)
+                    start = end
                 logger.info(
                     "prefill forward: %d prompt tokens (%d reused from the cache) in %.2fs",
                     prompt_len,
                     reused,
                     time.monotonic() - forward_started,
                 )
-                kv_cache.advance(prompt_len - reused)
-                self._prompt_cache.advanced(prompt_ids[reused:])
 
                 generated_ids: list[int] = []
                 for step in range(max_new_tokens):
@@ -99,7 +143,9 @@ class ChatEngine:
                         return
 
                     next_input = torch.tensor([[next_token]], dtype=torch.long)
-                    position_ids = torch.tensor([kv_cache.length], dtype=torch.long)
+                    position_ids = torch.tensor(
+                        [kv_cache.length + request.position_delta], dtype=torch.long
+                    )
                     forward_started = time.monotonic()
                     logits = self._architecture.forward(
                         next_input, kv_cache, position_ids, stop_check, last_logits_only=True

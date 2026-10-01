@@ -26,6 +26,32 @@ class RotaryEmbedding(nn.Module):
         return emb.cos() * self.attention_factor, emb.sin() * self.attention_factor
 
 
+class InterleavedMRopeEmbedding(RotaryEmbedding):
+    """Qwen3-VL/Qwen3.5 interleaved multi-axis RoPE. `position_ids` is either `(T,)` (text: every
+    axis is the same index, identical to plain `RotaryEmbedding`) or `(3, T)` - temporal / height /
+    width indices per token (image tokens differ per axis). The rotary frequencies are shared;
+    which axis's index drives frequency `i` is interleaved: `i % 3` while `i < 3 * sections[axis]`
+    (axes 1 and 2), everything else uses the temporal axis - HF `apply_interleaved_mrope`, so for
+    sections `[11, 11, 10]`: h = 1,4,...,31; w = 2,5,...,29; t = the rest.
+    """
+
+    def __init__(self, head_dim: int, rope_theta: float, sections: list[int]) -> None:
+        super().__init__(head_dim, rope_theta)
+        axis_of_freq = torch.zeros(head_dim // 2, dtype=torch.long)
+        for axis in (1, 2):
+            axis_of_freq[axis : sections[axis] * 3 : 3] = axis
+        self.register_buffer("axis_of_freq", axis_of_freq, persistent=False)
+
+    def forward(self, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if position_ids.dim() == 1:
+            return super().forward(position_ids)
+        freqs = position_ids.float().unsqueeze(-1) * self.inv_freq  # (3, T, dim/2)
+        index = self.axis_of_freq.view(1, 1, -1).expand(1, freqs.shape[1], -1)
+        freqs = freqs.gather(0, index)[0]  # (T, dim/2)
+        emb = torch.cat([freqs, freqs], dim=-1)
+        return emb.cos(), emb.sin()
+
+
 class YarnRotaryEmbedding(RotaryEmbedding):
     """YaRN-scaled rotary position embedding.
 

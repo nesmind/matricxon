@@ -52,6 +52,10 @@ class ModelArchitecture(PackedWeightLoading, nn.Module, ABC):
     #: handle one if given it. `GET /api/health` reads this directly (see
     #: `ArchitectureRegistry.moe_supported_names`), same reasoning as `NAME` itself.
     SUPPORTS_MOE: ClassVar[bool] = False
+    #: True for an architecture whose `_forward_impl` really splices paired-mmproj image embeddings
+    #: (see `ArchitectureRegistry.vision_supported_names`; `capabilities.py` derives its
+    #: "vision" flag from the same set, so the two can't drift).
+    SUPPORTS_VISION: ClassVar[bool] = False
     _last_logits_only: bool = False
 
     def __init__(self) -> None:

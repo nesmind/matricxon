@@ -22,6 +22,7 @@ from tests.tiny_gguf_nemotron_h import build_tiny_nemotron_h_gguf
 from tests.tiny_gguf_phi2 import build_tiny_phi2_gguf
 from tests.tiny_gguf_qwen2 import build_tiny_qwen2_gguf
 from tests.tiny_gguf_qwen3 import build_tiny_qwen3_gguf
+from tests.tiny_gguf_qwen35 import build_tiny_qwen35_gguf
 from tests.tiny_gguf_starcoder2 import build_tiny_starcoder2_gguf
 
 # The real, already-downloaded ministral-3:3b GGUF from pAIring's Ollama blob
@@ -733,6 +734,30 @@ def tiny_llama_tied_embeddings_model(models_dir: Path) -> InstalledModel:
         capabilities=["completion"],
         size_bytes=gguf_path.stat().st_size,
         family="llama",
+        parameter_size="0.001B",
+        context_length=32,
+    )
+    sidecar_path = repo_dir / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
+    sidecar_path.write_text(json.dumps(installed.__dict__))
+    return installed
+
+
+@pytest.fixture
+def tiny_qwen35_model(models_dir: Path) -> InstalledModel:
+    """A tiny but complete, valid `qwen35` GGUF (see tests/tiny_gguf_qwen35.py) - exercises the
+    hybrid Gated DeltaNet/gated-attention stack and its recurrent cache through `/api/chat`."""
+    repo_dir = models_dir / "hf.co" / "test-org" / "tiny-qwen35"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    gguf_path = repo_dir / "tiny.gguf"
+    build_tiny_qwen35_gguf(gguf_path)
+
+    installed = InstalledModel(
+        tag="tiny-qwen35:latest",
+        path=str(gguf_path),
+        architecture="qwen35",
+        capabilities=["completion"],
+        size_bytes=gguf_path.stat().st_size,
+        family="qwen35",
         parameter_size="0.001B",
         context_length=32,
     )

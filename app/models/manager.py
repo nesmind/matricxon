@@ -225,7 +225,14 @@ class ModelManager:
         ensure_enough_memory_to_load(
             tag, real_bytes_needed, self._memory_safety_margin, list(self._handles)
         )
-        dtype = select_load_dtype(bf16_bytes, self._memory_safety_margin)
+        # float32-vs-bf16 for what stays float: with quantized-native compute that is a small part
+        # of the model, so size the decision from the real (packed) footprint, not the full
+        # unpacked bf16 size - which made a 4B model always fall to bf16, ~10x slower here (no
+        # hardware bf16; measured 2026-10-01, Qwen3.5-4B decode 1.65 -> 0.18 tok/s).
+        dtype = select_load_dtype(
+            real_bytes_needed if quantized_native_enabled else bf16_bytes,
+            self._memory_safety_margin,
+        )
 
         # Mixed per-layer float32/bf16 precision - see plan_mixed_precision_load's own docstring,
         # including why it's off (returns (None, dtype)) by default.

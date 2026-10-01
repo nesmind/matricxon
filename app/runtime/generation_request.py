@@ -33,6 +33,10 @@ class GenerationRequest:
     # belong at. Only ever relevant to the prefill forward pass (see ChatEngine.stream) - the
     # image's own tokens are part of the prompt, never regenerated during decode.
     image_embeddings: list[tuple[int, torch.Tensor]] | None = None
+    # Qwen3.5 vision (3-axis M-RoPE): per-token (3, prompt_len) positions, and how far decode
+    # positions sit from the cache length afterwards (an image spans fewer positions than tokens).
+    position_ids: torch.Tensor | None = None
+    position_delta: int = 0
 
 
 @dataclass(frozen=True)

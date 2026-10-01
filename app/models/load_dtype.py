@@ -37,6 +37,7 @@ QUANTIZED_NATIVE_WIRED_ARCHITECTURES = frozenset(
         "granitemoe",
         "qwen2",
         "qwen3",
+        "qwen35",
         "command-r",
         "starcoder2",
         "nemotron_h",
@@ -103,6 +104,20 @@ _QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH: dict[str, tuple[str, ...]] = {
     "qwen2": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
     "qwen3": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
     "command-r": (*_QUANTIZED_NATIVE_TENSOR_SUFFIXES, "output.weight"),
+    # qwen35 routes every 2D projection through _load_projection (no RoPE row permutation
+    # anywhere): full-attention q/k/v/o and the linear-attention layers' fused qkv/gate/alpha/
+    # beta/out. Norms, conv1d and the 1D ssm_* tensors stay plain `.copy_()`.
+    "qwen35": (
+        *_QUANTIZED_NATIVE_TENSOR_SUFFIXES,
+        "attn_q.weight",
+        "attn_k.weight",
+        "attn_qkv.weight",
+        "attn_gate.weight",
+        "ssm_out.weight",
+        "ssm_alpha.weight",
+        "ssm_beta.weight",
+        "output.weight",
+    ),
     # starcoder2's MLP is plain (non-gated) - no ffn_gate tensor exists, so its list omits that
     # suffix rather than reusing _QUANTIZED_NATIVE_TENSOR_SUFFIXES unchanged.
     "starcoder2": (

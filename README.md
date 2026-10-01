@@ -46,7 +46,7 @@ anyone using it.
 | `POST /api/copy`    |   ✅   | Duplicates an installed model's blob (hardlinked where possible) + sidecar under a new tag |
 | `POST /api/create`  |   ✅   | `FROM <existing-tag>`-only: a local re-tag via the same catalog duplication `/api/copy` uses. No Modelfile parser - `TEMPLATE`/`PARAMETER`/`SYSTEM` directives, if sent, are silently not applied |
 | `POST /api/push`    |   ⏳   | Always fails closed (`501`) - matricxon has no registry to push to |
-| `GET /api/health`   |   ✅   | Matricxon-only extension (not Ollama-compatible): real `supported_architectures`/`supported_quantizations` lists, read live off `ArchitectureRegistry`/`QuantStrategyRegistry` rather than hand-maintained |
+| `GET /api/health`   |   ✅   | Matricxon-only extension (not Ollama-compatible): real `supported_architectures`/`supported_quantizations` lists (plus `moe_supported_architectures` and `vision_supported_architectures` subsets), read live off `ArchitectureRegistry`/`QuantStrategyRegistry` rather than hand-maintained |
 
 Tool calling covers the *input* side only: a caller's message history can
 include prior `tool_calls` (assistant turns) and `tool` role results, and
@@ -99,7 +99,7 @@ directly to a fused GEMV kernel running against the raw mmap'd quantized
 bytes, covering all 11 packed GGUF quant types
 (`Q2_K`-`Q8_K`/`Q4_0`/`Q4_1`/`Q5_0`/`Q5_1`/`Q8_0`); prefill is unaffected
 and still dequantizes normally. Wired into `mistral3`, `llama`, `gemma4`,
-`phi2`, `granite`, `qwen2`, `qwen3`, and `command-r` (not `bert`/
+`phi2`, `granite`, `qwen2`, `qwen3`, `qwen35`, and `command-r` (not `bert`/
 `nomic-bert`, which are always-prefill encoders). Every real MoE
 architecture's expert tensors are covered too - `granitemoe`, `llama`'s
 Mixtral branch, and `gemma4`'s MoE variant - via a shared
@@ -158,6 +158,10 @@ would-have-shipped-broken bug - a wrong sign-convention assumption on the
 SSM's own `A` parameter - was caught by reading a real downloaded GGUF
 file's raw tensor bytes directly, before any of it ever ran; full
 real-weight forward-pass validation still open, see ROADMAP.md),
+`qwen35` (Alibaba Qwen3.5 dense - a hybrid: 3 of every 4 layers are Gated DeltaNet
+linear attention, every 4th is gated full attention with partial RoPE; real-weight validated
+against llama.cpp on Qwen3.5-4B, cosine >= 0.999 on logits; text only, no vision tower; recurrent
+state isn't reused across requests, like `nemotron_h`),
 `qwen2`/`qwen3` (Alibaba Qwen - `qwen2` has real q/k/v bias, `qwen3` swaps
 that for real per-head QK-norm plus a real `head_dim` that must be read
 from GGUF metadata rather than derived; both are the most rigorously

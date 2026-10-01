@@ -1,4 +1,4 @@
-from app.architectures.registry import unsupported_features
+from app.architectures.registry import ArchitectureRegistry, unsupported_features
 from app.models.installed_model import InstalledModel
 from app.runtime.chat_template import has_confirmed_chat_format
 
@@ -21,7 +21,7 @@ _MMPROJ_ARCHITECTURE = "clip"
 # not the pairing-detection logic itself, whenever a future architecture gets real fusion wiring.
 # "phi2" added once Phi2Architecture._forward_impl grew the same real image_embeddings splice
 # LlamaArchitecture's own already has (moondream2, its own real reference vision model).
-_VISION_FUSION_ARCHITECTURES = frozenset({"llama", "phi2"})
+_VISION_FUSION_ARCHITECTURES = frozenset(ArchitectureRegistry().vision_supported_names())
 
 
 class CapabilityInferer:

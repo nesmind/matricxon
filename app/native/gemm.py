@@ -56,6 +56,8 @@ class NativeGemm:
         ]
         lib.mx_dequant_rows.restype = ctypes.c_int
         lib.mx_gemm.restype = ctypes.c_int
+        lib.mx_gated_delta_rule.argtypes = [ctypes.c_void_p] * 7 + [ctypes.c_int] * 5
+        lib.mx_gated_delta_rule.restype = ctypes.c_int
 
     @classmethod
     def configure(cls, backend: str, n_threads: int | None = None) -> None:
@@ -120,6 +122,28 @@ class NativeGemm:
         if status != 0:
             raise RuntimeError(f"mx_dequant_rows failed with status {status} for type {ggml_type}")
         return out
+
+    def gated_delta_rule(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        g: torch.Tensor,
+        beta: torch.Tensor,
+        state: torch.Tensor,
+        out: torch.Tensor,
+    ) -> None:
+        """Qwen3.5's Gated DeltaNet recurrence (see qwen35_delta_kernels.py): all float32 and
+        contiguous - q/k (T,H,dk), v/out (T,H,dv), g/beta (T,H); `state` (H,dk,dv) is updated in
+        place."""
+        n_tokens, n_heads, dk = q.shape
+        status = self._lib.mx_gated_delta_rule(
+            q.data_ptr(), k.data_ptr(), v.data_ptr(), g.data_ptr(), beta.data_ptr(),
+            state.data_ptr(), out.data_ptr(),
+            n_tokens, n_heads, dk, v.shape[2], self._n_threads,
+        )  # fmt: skip
+        if status != 0:
+            raise RuntimeError(f"mx_gated_delta_rule failed with status {status}")
 
     def take_stats(self) -> tuple[int, float]:
         """(calls, seconds) spent in native kernels since the last call - chat_router logs it per
