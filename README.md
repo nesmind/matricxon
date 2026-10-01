@@ -1,340 +1,168 @@
-# Matricxon
+<h1 align="center">
+  <img src="assets/matricxon-logo.svg" alt="Matricxon - LLM inference runtime" width="460">
+</h1>
 
-A self-hosted, from-scratch Python + PyTorch inference runtime that implements
-Ollama's HTTP API closely enough to be a drop-in replacement for
-pAIring.
+A small, readable LLM inference runtime written from scratch in Python and PyTorch (C is used for the dequantization stages, for speed). It runs GGUF models locally - chat and text generation, embeddings, and vision-language
+models - and serves them through an HTTP API, so tools like [pAIring](https://github.com/nesmind/pairing) can use all of its features.
 
-Intended for ML students who want to learn how inference runtimes work
-under the hood, and for private/personal use. **Not ready for production
-use at the moment.**
+The project started as part of the pAIring UI. We ran into limited advanced configuration options when working with Ollama, such as advanced memory management (for concurrent workloads) and others. We also made some important improvements to various inference stages, and everything is managed from the advanced pAIring UI, where Matricxon is the main inference engine.
 
-No llama.cpp/ggml/vllm code or bindings are used: GGUF parsing, dequantization
-kernels, the transformer forward pass, KV cache, and sampling are all
-implemented here.
+For now, Matricxon is best suited to **learning and research**. It is written to be read, and it
+shows how a GGUF file becomes tokens, how quantized weights are multiplied, how a KV cache and a
+sampler work, and how hybrid models (attention plus state-space layers) are served.
 
-See [`ROADMAP.md`](ROADMAP.md) for the build order and current architecture
-scope.
+Everything is built from scratch, with no llama.cpp, ggml or vLLM code or bindings: file parsing,
+dequantization, the transformer forward passes, caching, sampling and scheduling. It runs on the CPUs only for now; we plan to add GPUs support soon.
 
-## Current status
+## What's inside
 
-matricxon now serves every endpoint pAIring actually calls: chat completion,
-embeddings, and pulling models on its own, all backed by from-scratch GGUF
-parsing, dequantization, transformer forward passes (both a causal decoder
-and two non-causal encoder architectures), a KV cache, sampler, two
-tokenizer implementations, a model manager with load/evict/keep-alive, and
-a Hugging-Face-backed puller. Endpoints marked ⏳ below always return a
-clean error rather than silently doing the wrong thing.
+| Part | What it does | Where |
+| --- | --- | --- |
+| GGUF reader | Parses metadata and tensors; memory-maps the file | `app/gguf/` |
+| Dequantization | 25 quantization types, in Numba and native C | `app/gguf/dequant/`, `app/native/` |
+| Architectures | Transformer, MoE, hybrid and encoder forward passes | `app/architectures/` |
+| Runtime | Tokenizers, KV caches, sampler, generation loop, scheduler | `app/runtime/`, `app/models/` |
+| Vision | Image encoders that feed vision-language models | `app/vision/` |
+| Server | The HTTP API and the Hugging Face model puller | `app/routers/`, `app/pull/` |
 
-Pulling only ever resolves `hf.co/<repo>:<suffix>` tags, straight from
-Hugging Face - not Ollama's registry, which matricxon has no access to
-(that protocol is closed/undocumented). This isn't a compromise for any one
-caller: it's the only tag shape matricxon can ever fetch real bytes for, for
-anyone using it.
+## Supported models
 
-| Endpoint            | Status | Notes                                             |
-| ------------------- | :----: | -------------------------------------------------- |
-| `GET /api/tags`     |   ✅   | Lists installed models from the local catalog, including a real `estimated_ram_gb` per entry (exact per-tensor GGUF sizing, not an on-disk approximation) |
-| `POST /api/show`    |   ✅   | Model details (family, params, context length, `estimated_ram_gb`) |
-| `GET /api/ps`       |   ✅   | Reports actually-loaded models with live expiry    |
-| `DELETE /api/delete`|   ✅   | Unloads first (if loaded), then removes from the catalog |
-| `POST /api/chat`    |   ✅   | Real streaming NDJSON completion (an unload-only call returns `200` immediately); supports `tool_calls`/a `tool` role in the input message history and a top-level `tools` field |
-| `POST /api/pull`    |   ✅   | Real download from `hf.co/<repo>:<suffix>` with progress + sha256 verification |
-| `POST /api/embeddings` | ✅ | Real mean-pooled, L2-normalized embedding vector |
-| `POST /api/generate` |  ✅   | Single raw-prompt completion (no chat template applied), same NDJSON/`ChatEngine` stack as `/api/chat` |
-| `POST /api/embed`   |   ✅   | Batched sibling of `/api/embeddings` (`input: str \| list[str]`) - one `EmbeddingEngine` forward pass per item, not a real padded batch |
-| `GET /api/version`  |   ✅   | Static version string |
-| `POST /api/copy`    |   ✅   | Duplicates an installed model's blob (hardlinked where possible) + sidecar under a new tag |
-| `POST /api/create`  |   ✅   | `FROM <existing-tag>`-only: a local re-tag via the same catalog duplication `/api/copy` uses. No Modelfile parser - `TEMPLATE`/`PARAMETER`/`SYSTEM` directives, if sent, are silently not applied |
-| `POST /api/push`    |   ⏳   | Always fails closed (`501`) - matricxon has no registry to push to |
-| `GET /api/health`   |   ✅   | Matricxon-only extension (not Ollama-compatible): real `supported_architectures`/`supported_quantizations` lists (plus `moe_supported_architectures` and `vision_supported_architectures` subsets), read live off `ArchitectureRegistry`/`QuantStrategyRegistry` rather than hand-maintained |
+| Architecture | Examples | Status |
+| --- | --- | --- |
+| `llama` | Llama 2/3, TinyLlama, Mixtral (MoE), LLaVA (vision) | checked on real weights |
+| `mistral3` | Ministral | checked on real weights |
+| `gemma4`, `granite`, `granitemoe`, `command-r`, `falcon` | Gemma 4 (dense and MoE), IBM Granite, Cohere Command R, Falcon | tiny-model tests only |
+| `nemotron_h` | NVIDIA Nemotron-H (hybrid Mamba-2) | tiny-model tests only |
+| `qwen2`, `qwen3` | Qwen 2.5, Qwen 3 | checked on real weights |
+| `qwen35` | Qwen 3.5 (hybrid: Gated DeltaNet + attention), text and vision | checked on real weights |
+| `phi2` | Phi-2, moondream2 (vision) | checked on real weights |
+| `starcoder2` | StarCoder2 | checked on real weights |
+| `bert`, `nomic-bert` | Embedding models | checked on real weights |
 
-Tool calling covers the *input* side only: a caller's message history can
-include prior `tool_calls` (assistant turns) and `tool` role results, and
-`Mistral3PromptBuilder` renders them into the real
-`[AVAILABLE_TOOLS]`/`[TOOL_CALLS]`/`[ARGS]`/`[TOOL_RESULTS]` control-token
-structure (confirmed against the real `chat_template.jinja` from
-`mistralai/Ministral-3-3B-Instruct-2512`, not assumed). Parsing a
-*generated* tool call back out of the model's own output into a structured
-response `tool_calls` field isn't implemented yet - the raw
-`[TOOL_CALLS]name[ARGS]{...}` text currently passes through as plain
-`content`; a caller wanting to act on it must parse it itself for now.
+"Checked on real weights" means it was run on a real downloaded model and the output verified:
+logits compared with Hugging Face `transformers` or llama.cpp, or coherent, correct generation.
+"Tiny-model tests only" means the wiring is tested on small synthetic GGUF files but the numbers
+are not yet verified on a full-size model. Any other architecture is rejected with a clear error,
+never run approximately. Model families plug in through an architecture registry, so support for
+more can be added without touching the rest.
 
-`MATRICXON_MAX_LOADED_MODELS` (default `2`, matching pAIring's real
-embed-then-chat usage pattern) can be raised on a machine with enough RAM -
-`ModelManager`'s eviction/capacity logic is generic, not hardcoded to 2. A
-load that clearly wouldn't fit now fails closed with a `503
-InsufficientMemoryError` instead of risking an OS-level OOM.
-`MATRICXON_MEMORY_SAFETY_MARGIN` (default `1.2`, bounded `1.1`-`1.8`) makes
-that admission check's headroom requirement tunable per machine too,
-instead of a hardcoded constant.
+**Quantization types:** `F32`, `F16`, `BF16`; `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`; the K-quants
+`Q2_K` to `Q8_K`; and the I-quants and ternary types `IQ1_S`, `IQ1_M`, `IQ2_XXS`, `IQ2_XS`,
+`IQ2_S`, `IQ3_XXS`, `IQ3_S`, `IQ4_NL`, `IQ4_XS`, `TQ1_0`, `TQ2_0`. Not supported: `Q8_1` and the
+raw integer types, which fail with a clear error.
 
-**Telemetry:** `MATRICXON_LOG_LEVEL` (default `0`, bounded `0`-`2`) turns on
-stdlib `logging` output, previously absent everywhere in matricxon - level
-`1` traces per-request pipeline stage boundaries (model load duration,
-prompt build, each token's id/elapsed, generation summary); level `2` adds
-a line per real decoder-layer iteration on every forward pass. Also
-persisted via a `.env` file (real environment variables still take
-priority) so a value set outside the current shell survives a restart.
+**Tokenizers:** byte-level BPE, WordPiece, SentencePiece BPE and Gemma's rank-based BPE.
 
-**On-the-fly dequant:** `get_or_load()`/`from_gguf()` no longer copy any
-real weight data in - they just build the (correctly-shaped, but
-uninitialized) module graph and keep the GGUF file's mmap open. The actual
-dequant happens once, lazily, on a model's first real forward pass, and is
-cached for every call after that (see `ModelArchitecture._ensure_materialized`).
-This means a request that fails validation (unknown model, prompt exceeds
-`num_ctx`) no longer pays the multi-second-to-minutes dequant cost first -
-it fails fast, before any real weight is ever touched - and a handle
-evicted before ever being used pays no dequant cost at all. Total dequant
-work for an actual generation is unchanged (same weights, same bytes),
-just moved from load time to first-use time. Stopping a generation now also
-takes effect mid-forward-pass, between decoder layers, rather than only
-between whole generation calls - a `stop_check` threaded through every
-architecture's forward pass raises cleanly instead of finishing a slow
-prefill/materialization it no longer needs to.
+## Features
 
-**Quantized-native compute (on by default, with the native C kernels):**
-`MATRICXON_ENABLE_QUANTIZED_NATIVE_COMPUTE=0` turns it off; `MATRICXON_GEMV_BACKEND=numba`
-switches from the C kernels (falls back to Numba by itself without a C compiler). It skips
-full dequant on the decode path. `QuantizedLinear` dispatches each single-token decode step
-directly to a fused GEMV kernel running against the raw mmap'd quantized
-bytes, covering all 11 packed GGUF quant types
-(`Q2_K`-`Q8_K`/`Q4_0`/`Q4_1`/`Q5_0`/`Q5_1`/`Q8_0`); prefill is unaffected
-and still dequantizes normally. Wired into `mistral3`, `llama`, `gemma4`,
-`phi2`, `granite`, `qwen2`, `qwen3`, `qwen35`, and `command-r` (not `bert`/
-`nomic-bert`, which are always-prefill encoders). Every real MoE
-architecture's expert tensors are covered too - `granitemoe`, `llama`'s
-Mixtral branch, and `gemma4`'s MoE variant - via a shared
-`QuantizedMoEExperts` (`app/architectures/moe_experts.py`): a real
-per-expert 3D tensor is just a contiguous 2D byte slice of the bigger
-one, handed to the same `QuantizedLinear` unchanged, so it needed no new
-kernel at all. Not wired into `nemotron_h` - its SSM tensors aren't 2D
-`nn.Linear`-shaped the way the fused GEMV kernels need, a real
-structural gap, not an oversight.
-Off by default - real measurement on this project's CPU-only target
-hardware showed no speed benefit, but it's shipped as a real, permanent,
-user-selectable choice rather than removed, since results may differ on
-other hardware.
+- **Quantized-native compute.** Weights stay packed in the memory-mapped file and are multiplied
+  directly, with no full dequantized copy in RAM. A native C kernel (OpenMP threads) is the
+  default; the Numba kernels are the fallback when there is no C compiler. On by default.
+- **Lazy loading.** Loading a model only builds its structure; weight data is read on first use,
+  so a bad request fails fast and an unused model costs no time.
+- **Hybrid models.** Linear-attention and state-space layers keep a
+  fixed-size recurrent state instead of a growing KV cache.
+- **Prompt cache.** Each model keeps several conversations' caches, so users sharing a model don't
+  make each other re-read their whole history. A new prompt reuses the cache that shares its
+  longest prefix; if it doesn't continue that conversation, it copies just the shared part.
+- **Concurrent users.** Replies on one model run side by side. A scheduler advances every active
+  reply, and for most architectures their decode steps are batched into one forward pass.
+  Batching helps most on memory-bandwidth-bound hardware; on a compute-bound CPU its main effect
+  is that users stream at the same time instead of waiting in line. Mixture-of-experts models and
+  Nemotron-H take one reply per step.
+- **Vision.** CLIP/SigLIP-style projector files feed image embeddings into `llama` (LLaVA),
+  `phi2` (moondream2) and `qwen35`. The projector is found next to the model by convention.
+- **Safe memory use.** A model that would not fit in free RAM (with a safety margin) is refused
+  instead of risking the OS killing the process. Idle models unload after a keep-alive time.
+- **Cancelling one reply.** A `request_id` on `/api/chat` stops just that reply; the model and
+  other users' replies are untouched.
 
-**GGUF architectures:** `mistral3` (text-only decoder; the vision tower is
-parsed but its tensors are never read, per matricxon's v1
-"accept-and-ignore images" scope), `bert` and `nomic-bert` (non-causal
-encoders, embeddings only), `llama` (plain GQA decoder - RMSNorm/SwiGLU/
-un-scaled RoPE, the "simpler special case" of `mistral3` without YaRN
-scaling; validated against a real `TinyLlama-1.1B-Chat-v1.0` pull; also
-covers Mixtral's real sparse MoE variant - plain top-k-then-softmax
-routing, no shared dense branch, reusing the same `QuantizedMoEExperts`
-core as `granitemoe`/`gemma4`'s MoE below),
-`gemma4` (sandwich normalization, QK-norm, alternating local/global
-attention layers with different head dims and RoPE bases, final-logit
-softcapping, plus a real optional sparse MoE variant - a dense MLP branch
-always runs and is summed with a routed expert branch, ported from the
-real `transformers`/llama.cpp Gemma4 source; built from the real
-`transformers` Gemma4 source against a real `google/gemma-4-12b-it` GGUF
-pull, but that model is too large - ~28GB in bf16 - to run on this
-project's 15GB-RAM target hardware, so only its wiring (dense and MoE
-alike) is validated against tiny synthetic fixtures, not its numerics
-against real weights - a real, open gap, see ROADMAP.md), `phi2`
-(parallel-residual decoder block - a single shared LayerNorm feeds both the
-attention and MLP branches, unlike every other decoder here - partial
-rotary embeddings, biases on every projection, and a fused `attn_qkv`
-tensor split into query/key/value at materialize time; validated against a
-real `moondream2-gguf` pull), `granite` (dense IBM Granite - a plain
-GQA/RoPE/SwiGLU decoder plus four real "Power"-scaling terms:
-`attention_multiplier` replaces the default attention scale entirely,
-`embedding_multiplier`/`residual_multiplier`/`logits_scaling` scale the
-embedding lookup, each layer's residual branches, and the final logits;
-wiring validated against a synthetic fixture, real-weight oracle not yet
-run - see ROADMAP.md), `granitemoe` (Granite's sparse Mixture-of-Experts
-sibling - real top-k-then-softmax routing over real 3D per-expert GGUF
-tensors, the first MoE-shaped code in this project, now sharing its expert
-dispatch with every other real MoE architecture via `QuantizedMoEExperts`
-(`app/architectures/moe_experts.py`) so a future MoE architecture only
-needs its own router + activation function; same validation status
-as `granite`), `nemotron_h` (NVIDIA's hybrid design - three real
-interleaved layer types per real per-layer GGUF arrays, not a uniform
-stack: Mamba-2 state-space layers, plain GQA attention with no RoPE at
-all, and non-gated squared-ReLU MLP layers; needed a new hybrid cache
-class alongside the plain KV cache every other decoder here uses; a real,
-would-have-shipped-broken bug - a wrong sign-convention assumption on the
-SSM's own `A` parameter - was caught by reading a real downloaded GGUF
-file's raw tensor bytes directly, before any of it ever ran; full
-real-weight forward-pass validation still open, see ROADMAP.md),
-`qwen35` (Alibaba Qwen3.5 dense - a hybrid: 3 of every 4 layers are Gated DeltaNet
-linear attention, every 4th is gated full attention with partial RoPE; real-weight validated
-against llama.cpp on Qwen3.5-4B, cosine >= 0.999 on logits; text only, no vision tower; recurrent
-state isn't reused across requests, like `nemotron_h`),
-`qwen2`/`qwen3` (Alibaba Qwen - `qwen2` has real q/k/v bias, `qwen3` swaps
-that for real per-head QK-norm plus a real `head_dim` that must be read
-from GGUF metadata rather than derived; both are the most rigorously
-validated architectures in this project - full real-weight comparison
-against downloaded HF checkpoints, 0.999+ cosine similarity on all but a
-couple of tail decoder layers, real generation confirmed factually
-correct), and `command-r` (Cohere - a genuine parallel attention+FFN block
-reusing `phi2`'s existing block shape, real bias-free `LayerNorm` rather
-than RMSNorm, and a real logit-scale multiply; wiring validated against a
-synthetic fixture - a real-weight check was attempted but stopped mid-run
-for hardware-safety reasons on this machine, a written-but-unrun oracle
-script is ready for different hardware, see ROADMAP.md) - every other
-forward pass is cross-checked against a real Hugging Face `transformers`
-model, see [Testing](#testing) below. Any other `general.architecture`
-fails closed with a clear error rather than attempting a best-effort
-forward pass.
+## API
 
-**GGUF tokenizers:** byte-level BPE (`tokenizer.ggml.model = "gpt2"`),
-WordPiece (`"bert"`), SentencePiece BPE (`"llama"` - score-based merge
-selection and whole-text normalization, a genuinely different core
-algorithm from the other two; cross-checked against the real HF
-`LlamaTokenizer`, see `scripts/oracle/validate_sentencepiece_tokenizer.py`),
-and Gemma4's own rank-based BPE (`"gemma4"` - like `"gpt2"`'s ordered-merge-
-list algorithm, but no byte-to-unicode remapping and no regex pre-split
-into words first; reverse-engineered against the real HF tokenizer's own
-serialized `tokenizer.json`, cross-checked in
-`scripts/oracle/validate_gemma_tokenizer.py`).
+| Endpoint | Notes |
+| --- | --- |
+| `POST /api/chat` | Streaming NDJSON chat with tools and image support |
+| `POST /api/generate` | Raw-prompt completion, no chat template |
+| `POST /api/embeddings`, `POST /api/embed` | Mean-pooled, L2-normalized vectors (single and list input) |
+| `POST /api/pull` | Downloads `hf.co/<repo>:<file>` from Hugging Face with progress and sha256 check |
+| `GET /api/tags`, `POST /api/show`, `GET /api/ps` | Installed models, model details, loaded models with expiry |
+| `DELETE /api/delete`, `POST /api/copy`, `POST /api/create` | Remove, duplicate, re-tag (`create` supports only `FROM <tag>`) |
+| `GET /api/health` | Matricxon-only: supported architectures, quantizations, MoE and vision lists |
+| `GET /api/version` | Version string |
 
-**Vision:** a standalone `ClipVisionEncoder` (`app/vision/`) implements
-llama.cpp's real `clip`/mmproj GGUF format - a SigLIP-shaped ViT (patch
-embedding, learned position embeddings, a pre-norm transformer stack) plus
-a real MLP projector, with real image preprocessing
-(`ClipImagePreprocessor`: base64 -> decode -> resize -> normalize with the
-GGUF's own real `image_mean`/`image_std`). Validated against a real
-`moondream/moondream2-gguf` mmproj pull (910MB) - correct output shape, no
-NaN/Inf, and different real images produce genuinely different embeddings
-(see `scripts/manual_vision_check.py`). Now wired into real end-to-end
-`/api/chat` fusion: `app/runtime/vision_fusion.py` splits a prompt on
-`[IMG]` markers, runs each image through `ClipVisionEncoder`, and splices
-the resulting embeddings directly into the token-embedding tensor before
-the decoder layers run, for the two architectures with a paired real
-vision-language checkpoint - `llama` (LLaVA) and `phi2` (moondream2). The
-paired mmproj file is found by convention (same directory,
-`general.architecture = "clip"`) via `ModelCatalog.find_paired_mmproj()`,
-and a model's `vision` capability is now computed dynamically from whether
-that pairing exists, rather than fixed at pull time. Validated with real
-streaming `/api/chat` generations against both real LLaVA and real
-moondream2 GGUF files - coherent output, clean unload with no leaked mmap
-references either time. Every other architecture (`mistral3`, `gemma4`,
-`bert`, `nomic-bert`) still has no paired real vision-language checkpoint,
-so their `ChatMessage.images` handling remains the pre-existing "count them
-and insert `[IMG]` placeholder tokens, never read the actual bytes"
-behavior.
-
-`/api/chat`'s prompt building is currently hardcoded to
-`Mistral3PromptBuilder` regardless of which architecture is actually
-loaded - correct for `mistral3`, structurally wrong for `llama` (whose real
-chat template uses `<|user|>`/`<|assistant|>`, not `[INST]`/`[/INST]`).
-Tolerable for short completions (confirmed: still produces a correct
-answer for a simple factual prompt) but a real multi-turn conversation
-would get the wrong prompt structure - per-architecture prompt-builder
-dispatch is real follow-up work, not yet implemented.
-
-**GGUF quantization types:** `F32`, `F16`, `BF16`, `Q8_0`, `Q4_0`, `Q4_1`,
-`Q5_0`, `Q5_1`, `Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`, `Q8_K`, `IQ4_NL`,
-`IQ4_XS`, `TQ1_0`, `TQ2_0`, `IQ2_XXS`, `IQ2_XS`, `IQ2_S`, `IQ3_XXS`, `IQ3_S`,
-`IQ1_S`, `IQ1_M` - including the full grid-based I-quant family (codebook
-tables extracted verbatim from ggml's own source via
-`scripts/extract_iq_grids.py`, not hand-transcribed). Not yet supported:
-`Q8_1` and the raw integer/index types (`I8`/`I16`/`I32`/`I64`) and `F64` -
-reading one of these fails closed with `UnsupportedQuantTypeError` rather
-than misinterpreting the bytes.
+Pulling resolves only `hf.co/<repo>:<file>` tags; Ollama's own registry is not reachable.
+`POST /api/push` always returns `501`. A generated `tool_calls` field is not parsed back out of
+the model's text yet.
 
 ## Setup
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-```
-
-### Setup on macOS
-
-pAIring's "Install from GitHub" button only runs on Linux, so on a Mac Matricxon is installed by
-hand. Mac support for the native C kernels was added after `v1.2`, so use a newer tag, or `main`.
-It follows Apple's and Homebrew's documented compiler flags.
-
-**Quick way:** clone the repo, then run the install script. It does steps 1-3 below: it checks the
-prerequisites, offers to install `libomp`, creates `.venv`, installs the dependencies, writes a
-starter `.env` if there isn't one, and builds the native kernels once so you see straight away
-whether they built.
-
-```bash
 git clone https://github.com/nesmind/matricxon.git
 cd matricxon
-scripts/install_mac.sh          # add --yes to install libomp without asking
-scripts/start.sh
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt     # requirements-dev.txt adds the test tools
 ```
 
-**Step by step** (what the script does):
+The native C kernels are compiled automatically on first start if `gcc` (or `cc` on macOS) is
+available. Without a compiler, Matricxon falls back to the Numba kernels, which are much slower.
 
-1. **Prerequisites**: Xcode's command-line tools, which provide `git` and the C compiler `cc`,
-   and Python 3.11 or newer:
+**macOS:** `scripts/install_mac.sh` checks the prerequisites, optionally installs `libomp` (for
+multi-threaded kernels), creates `.venv`, installs the dependencies, writes a starter `.env` and
+builds the native kernels once so you can see right away whether they built:
 
-   ```bash
-   xcode-select --install
-   python3 --version            # 3.11+; otherwise: brew install python@3.13
-   ```
-
-   Optional but recommended: `brew install libomp`. With it the native kernels use every CPU core
-   you allow; without it they still build, but run on a single thread.
-
-2. **Get the code and install the dependencies:**
-
-   ```bash
-   git clone https://github.com/nesmind/matricxon.git
-   cd matricxon
-   python3 -m venv .venv
-   .venv/bin/pip install -r requirements.txt
-   ```
-
+```bash
+scripts/install_mac.sh          # add --yes to install libomp without asking
+```
 
 ## Running
-
-matricxon defaults to port **8420**
 
 ```bash
 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8420
 ```
 
-Override host/port/models dir via env vars (see `app/config.py`), e.g.
-`MATRICXON_PORT=12000`.
-
-### Running as a background service
+Or in the background, with a PID file and a log:
 
 ```bash
-scripts/start.sh    # starts uvicorn detached, writes run/matricxon.pid + logs/matricxon.log
-scripts/status.sh   # reports running/stopped + a liveness check against /api/tags
-scripts/stop.sh     # graceful SIGTERM, falls back to SIGKILL after a timeout
+scripts/start.sh     # starts detached; writes run/matricxon.pid and logs/matricxon.log
+scripts/status.sh    # running or stopped, plus a liveness check
+scripts/stop.sh      # graceful stop
 ```
 
-All three respect `MATRICXON_HOST`/`MATRICXON_PORT` if set.
+## Configuration
 
-### Running as a systemd service (Debian/Ubuntu) 
+Set environment variables, or put them in a `.env` file in the project folder (real environment
+variables win). All of them are listed in `app/config.py`.
 
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MATRICXON_HOST`, `MATRICXON_PORT` | `0.0.0.0`, `8420` | Where the server listens |
+| `MATRICXON_MODELS_DIR` | `./data/models` | Where models are stored |
+| `MATRICXON_MAX_LOADED_MODELS` | `2` | Models kept in RAM at once |
+| `MATRICXON_DEFAULT_KEEP_ALIVE_SECONDS` | `300` | Idle time before a model unloads |
+| `MATRICXON_MEMORY_SAFETY_MARGIN` | `1.2` | Free RAM needed beyond a model's size (1.1 to 1.8) |
+| `MATRICXON_ENABLE_QUANTIZED_NATIVE_COMPUTE` | `true` | Multiply packed weights directly |
+| `MATRICXON_GEMV_BACKEND` | `native` | `native` (C kernels) or `numba` |
+| `MATRICXON_TORCH_THREADS` | all cores | CPU threads; fewer runs cooler |
+| `MATRICXON_MAX_DECODE_BATCH` | `8` | Replies that run at once per model |
+| `MATRICXON_PROMPT_CACHE_SLOTS` | `4` | Conversations cached per model |
+| `MATRICXON_PROMPT_CACHE_BUDGET_MB` | `2048` | Memory those caches may use together |
+| `MATRICXON_LOG_LEVEL` | `0` | `0` warnings, `1` per-request steps, `2` per-layer trace |
 
 ## Testing
 
 ```bash
-.venv/bin/pytest
+.venv/bin/pytest            # unit and API tests (tiny synthetic models, no downloads)
 .venv/bin/ruff check
 ```
 
-### Validating a forward pass against a real model
-
-Every architecture's forward pass, and both tokenizer implementations, are
-cross-checked against a real Hugging Face `transformers` model or tokenizer -
-not just unit-tested in isolation:
+Forward passes and tokenizers are also compared with Hugging Face on real models:
 
 ```bash
-scripts/run_m3_oracle_check.sh                       # Mistral3TextArchitecture (truncated, memory-capped)
-.venv/bin/python -m scripts.oracle.validate_tokenizer            # GGUFTokenizer (byte-level BPE)
-.venv/bin/python -m scripts.oracle.validate_wordpiece_tokenizer  # WordPieceTokenizer
-.venv/bin/python -m scripts.oracle.validate_bert                 # BertArchitecture
-.venv/bin/python -m scripts.oracle.validate_nomic_bert           # NomicBertArchitecture
+.venv/bin/python -m scripts.oracle.validate_qwen3          # also validate_qwen2, validate_bert, ...
+.venv/bin/python -m scripts.oracle.validate_tokenizer
 ```
 
-See [`scripts/README_oracle.md`](scripts/README_oracle.md) for how the
-mistral3 check stays tractable on a machine with limited RAM and no GPU
-(truncated layer count, no full-checkpoint download, memory-capped
-subprocesses) - the encoder models are small enough (≤137M params) that
-none of that is needed for `validate_bert`/`validate_nomic_bert`.
-
-For a full end-to-end proof against real weights over the actual HTTP API
-(not just the forward pass), see `scripts/manual_chat_check.py`,
-`scripts/manual_embed_check.py`, and `scripts/manual_pull_check.py`.
+See [`scripts/README_oracle.md`](scripts/README_oracle.md) for running these on a machine with
+limited RAM. `scripts/manual_chat_check.py`, `manual_embed_check.py` and `manual_pull_check.py`
+exercise the real HTTP API end to end. Long benchmarks can overheat a laptop: use
+`scripts/thermal_guard.py` to stop them at a safe temperature.

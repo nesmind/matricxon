@@ -41,6 +41,8 @@ class KVCache:
             torch.zeros((1, n_head_kv, max_seq_len, head_dim), dtype=dtype)
             for n_head_kv, head_dim in layer_shapes
         ]
+        self._layer_shapes = list(layer_shapes)
+        self._dtype = dtype
         self._max_seq_len = max_seq_len
         self._length = 0
 
@@ -76,3 +78,20 @@ class KVCache:
         if not 0 <= length <= self._length:
             raise ValueError(f"can't truncate a cache of length {self._length} to {length}")
         self._length = length
+
+    def fork(self, length: int) -> "KVCache":
+        """A new cache holding a copy of the first `length` positions; this one is left untouched.
+        Cheap next to recomputing those positions - how `PromptCache` lets a second conversation
+        build on a shared prefix without destroying the first one's cache."""
+        if not 0 <= length <= self._length:
+            raise ValueError(f"can't fork a cache of length {self._length} at {length}")
+        forked = KVCache(self._layer_shapes, self._max_seq_len, self._dtype)
+        for src, dst in ((self._k, forked._k), (self._v, forked._v)):
+            for layer_src, layer_dst in zip(src, dst, strict=True):
+                layer_dst[:, :, :length, :] = layer_src[:, :, :length, :]
+        forked._length = length
+        return forked
+
+    def nbytes(self) -> int:
+        """Memory held by the preallocated key/value tensors."""
+        return sum(t.numel() * t.element_size() for t in (*self._k, *self._v))

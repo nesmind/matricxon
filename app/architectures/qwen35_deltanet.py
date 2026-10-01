@@ -62,46 +62,53 @@ class Qwen35GatedDeltaNet(nn.Module):
         self.norm_weight = nn.Parameter(torch.empty(head_dim, dtype=dtype))
 
     def _expand_heads(self, x: torch.Tensor) -> torch.Tensor:
-        """(T, n_k_heads, d) -> (T, n_v_heads, d)."""
+        """(..., n_k_heads, d) -> (..., n_v_heads, d)."""
         ratio = self.n_v_heads // self.n_k_heads
         if ratio == 1:
             return x
         if self.tiled_heads:
-            return x.repeat(1, ratio, 1)
-        return x.repeat_interleave(ratio, dim=1)
+            return torch.cat([x] * ratio, dim=-2)
+        return x.repeat_interleave(ratio, dim=-2)
 
     def _causal_conv(
         self, mixed: torch.Tensor, conv_state: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Depthwise causal conv + silu over (1, T, conv_dim), carrying the last k-1 inputs."""
+        """Depthwise causal conv + silu over (B, T, conv_dim), carrying the last k-1 inputs."""
         padded = torch.cat([conv_state.transpose(1, 2), mixed.transpose(1, 2)], dim=-1)
         out = F.conv1d(padded, self.conv1d_weight.unsqueeze(1), groups=self.conv_dim)
         new_state = padded[:, :, -(self.conv_kernel - 1) :].transpose(1, 2)
         return F.silu(out).transpose(1, 2), new_state
 
     def forward(self, x: torch.Tensor, hybrid_cache: object, layer_idx: int) -> torch.Tensor:
-        _, seq_len, _ = x.shape  # batch == 1, project-wide invariant
-        conv_state, ssm_state = hybrid_cache.mamba_state(layer_idx)
+        """`x` is `(1, T, hidden)` - one sequence, any number of tokens - or `(B, 1, hidden)` for a
+        batched decode step: one new token for each of `B` sequences (see runtime/batch_cache.py).
+        The projections and norms run over everything at once; the recurrence, which carries each
+        sequence's own state, runs per sequence."""
+        batch, seq_len, _ = x.shape
+        conv_state, ssm_state = hybrid_cache.mamba_state(layer_idx)  # (B, k-1, C), (B, H, dk, dv)
         mixed, new_conv_state = self._causal_conv(self.qkv_proj(x), conv_state)
 
         q, k, v = mixed.split([self.key_dim, self.key_dim, self.value_dim], dim=-1)
-        q = q.reshape(seq_len, self.n_k_heads, self.head_dim).float()
-        k = k.reshape(seq_len, self.n_k_heads, self.head_dim).float()
-        v = v.reshape(seq_len, self.n_v_heads, self.head_dim).float()
+        q = q.reshape(batch, seq_len, self.n_k_heads, self.head_dim).float()
+        k = k.reshape(batch, seq_len, self.n_k_heads, self.head_dim).float()
+        v = v.reshape(batch, seq_len, self.n_v_heads, self.head_dim).float()
         q = self._expand_heads(_l2norm(q)) * self.head_dim**-0.5
         k = self._expand_heads(_l2norm(k))
 
-        beta = torch.sigmoid(self.beta_proj(x)[0].float())
-        g = self.a.float() * F.softplus(self.alpha_proj(x)[0].float() + self.dt_bias.float())
-        out, state = gated_delta_rule(q, k, v, g, beta, ssm_state[0].float().clone())
+        beta = torch.sigmoid(self.beta_proj(x).float())
+        g = self.a.float() * F.softplus(self.alpha_proj(x).float() + self.dt_bias.float())
+        results = [
+            gated_delta_rule(q[b], k[b], v[b], g[b], beta[b], ssm_state[b].float().clone())
+            for b in range(batch)
+        ]
+        out = torch.stack([r[0] for r in results])  # (B, T, H, d)
+        state = torch.stack([r[1] for r in results])
 
         # Per-head RMSNorm (weight as-is), then gate by silu(z).
         out = out * torch.rsqrt(out.pow(2).mean(dim=-1, keepdim=True) + self.rms_eps)
         out = out * self.norm_weight.float()
-        z = self.z_proj(x)[0].float().view(seq_len, self.n_v_heads, self.head_dim)
-        out = (out * F.silu(z)).reshape(1, seq_len, self.value_dim).to(x.dtype)
+        z = self.z_proj(x).float().view(batch, seq_len, self.n_v_heads, self.head_dim)
+        out = (out * F.silu(z)).reshape(batch, seq_len, self.value_dim).to(x.dtype)
 
-        hybrid_cache.set_mamba_state(
-            layer_idx, new_conv_state, state.unsqueeze(0).to(ssm_state.dtype)
-        )
+        hybrid_cache.set_mamba_state(layer_idx, new_conv_state, state.to(ssm_state.dtype))
         return self.out_proj(out)

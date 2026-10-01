@@ -82,11 +82,16 @@ def test_no_reuse_across_a_num_ctx_change(model: LlamaArchitecture) -> None:
     assert cache.reused_tokens == 0
 
 
-def test_image_prompts_are_never_reused_or_kept(model: LlamaArchitecture) -> None:
+def test_image_prompts_are_never_reused_or_kept_and_leave_the_pool_alone(
+    model: LlamaArchitecture,
+) -> None:
     cache = PromptCache()
     _generate(model, cache, [1, 72, 105])
 
     _generate(model, cache, [1, 72, 105, 33], images=True)
-    assert cache.reused_tokens == 0
+    assert cache.reused_tokens == 0  # an image prompt never reuses a cache...
+    assert cache.slot_count == 1  # ...and never adds one
+
+    # Another user's image request didn't flush the first conversation's cache.
     _generate(model, cache, [1, 72, 105, 33, 44])
-    assert cache.reused_tokens == 0
+    assert cache.reused_tokens == 3

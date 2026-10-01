@@ -21,7 +21,9 @@ class RotaryEmbedding(nn.Module):
         self.attention_factor = 1.0
 
     def forward(self, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        freqs = torch.outer(position_ids.float(), self.inv_freq)
+        """`position_ids` `(T,)` -> cos/sin `(T, dim)`. A batched decode step passes `(B, 1)` - one
+        position per sequence - and gets `(B, 1, dim)` (see `apply_rotary_pos_emb`)."""
+        freqs = position_ids.float().unsqueeze(-1) * self.inv_freq
         emb = torch.cat([freqs, freqs], dim=-1)
         return emb.cos() * self.attention_factor, emb.sin() * self.attention_factor
 
@@ -149,8 +151,11 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 def apply_rotary_pos_emb(
     q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    cos = cos.unsqueeze(0).unsqueeze(0).to(q.dtype)
-    sin = sin.unsqueeze(0).unsqueeze(0).to(q.dtype)
+    if cos.dim() == 3:  # batched decode: one position per sequence, (B, 1, dim) -> (B, 1, 1, dim)
+        cos, sin = cos.unsqueeze(1), sin.unsqueeze(1)
+    else:
+        cos, sin = cos.unsqueeze(0).unsqueeze(0), sin.unsqueeze(0).unsqueeze(0)
+    cos, sin = cos.to(q.dtype), sin.to(q.dtype)
     return (q * cos) + (rotate_half(q) * sin), (k * cos) + (rotate_half(k) * sin)
 
 

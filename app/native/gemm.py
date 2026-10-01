@@ -56,6 +56,8 @@ class NativeGemm:
         ]
         lib.mx_dequant_rows.restype = ctypes.c_int
         lib.mx_gemm.restype = ctypes.c_int
+        lib.mx_set_fused_max_tokens.argtypes = [ctypes.c_int]
+        lib.mx_set_fused_max_tokens.restype = None
         lib.mx_gated_delta_rule.argtypes = [ctypes.c_void_p] * 7 + [ctypes.c_int] * 5
         lib.mx_gated_delta_rule.restype = ctypes.c_int
 
@@ -144,6 +146,11 @@ class NativeGemm:
         )  # fmt: skip
         if status != 0:
             raise RuntimeError(f"mx_gated_delta_rule failed with status {status}")
+
+    def set_fused_max_tokens(self, n_tokens: int) -> None:
+        """Up to this many tokens per call a K-quant matmul uses its per-token fused kernel instead
+        of unpacking each weight row once (see mx_gemm.c) - what a small decode batch should use."""
+        self._lib.mx_set_fused_max_tokens(n_tokens)
 
     def take_stats(self) -> tuple[int, float]:
         """(calls, seconds) spent in native kernels since the last call - chat_router logs it per

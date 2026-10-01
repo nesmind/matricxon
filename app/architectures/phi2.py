@@ -32,6 +32,7 @@ class Phi2Architecture(ModelArchitecture):
     """
 
     NAME = "phi2"
+    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
     SUPPORTS_VISION = True
 
     def __init__(

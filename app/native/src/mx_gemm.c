@@ -13,10 +13,23 @@
 typedef float (*mx_vec_dot_fn)(const uint8_t *row, const mx_block_q8_k *y, int nb);
 
 /* Up to this many tokens, a K-quant uses its fused per-token kernel (`fused`) instead of
- * unpacking each row once: unpacking only pays off once it's reused across tokens. */
+ * unpacking each row once: unpacking only pays off once it's reused across tokens. Measured on
+ * this project's i7-2640M (Qwen3.5-4B Q4_K/Q6_K tensors, 2 threads): fused is faster for 2-8
+ * tokens (e.g. 4 tokens 4.5ms vs 6.0ms) and level at 16 - so a small batched decode step (a
+ * few users' tokens in one pass) uses the fused kernel, not the unpack path built for prompts.
+ * Per-token cost there is ~constant (1.1ms for a 9216x2560 Q4_K), i.e. compute-bound, so a batch
+ * doesn't get cheaper per token on that CPU the way it does on a bandwidth-bound one. */
 #ifndef MX_FUSED_MAX_TOKENS
-#define MX_FUSED_MAX_TOKENS 1
+#define MX_FUSED_MAX_TOKENS 8
 #endif
+
+/* Runtime copy of the threshold, so a benchmark can find the real crossover (see
+ * mx_set_fused_max_tokens and scripts/benchmark_kernels.py) without a rebuild. */
+static int mx_fused_max_tokens = MX_FUSED_MAX_TOKENS;
+
+void mx_set_fused_max_tokens(int n_tokens) {
+    mx_fused_max_tokens = n_tokens;
+}
 
 /* How one GGML type is computed: K-quants set `unpack` (and `has_min` for Q4_K/Q5_K), plus
  * `fused` where SSSE3 is available; Q8_0 sets only `dot`. Every I-quant/T-quant (IQ4_NL/XS,
@@ -173,7 +186,7 @@ int mx_gemm(int ggml_type, const uint8_t *w, const float *x, float *y, int n_tok
 
     int status = 0;
     const mx_vec_dot_fn dot =
-        k.dot != NULL ? k.dot : (n_tokens <= MX_FUSED_MAX_TOKENS ? k.fused : NULL);
+        k.dot != NULL ? k.dot : (n_tokens <= mx_fused_max_tokens ? k.fused : NULL);
     if (dot != NULL) {
 #pragma omp parallel for schedule(static) num_threads(n_threads)
         for (int o = 0; o < out_features; ++o) {

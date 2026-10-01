@@ -1,4 +1,5 @@
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 
 from app.architectures.mistral3 import Mistral3TextArchitecture
@@ -18,8 +19,13 @@ from app.models.load_dtype import (
 from app.models.memory_guard import ensure_enough_memory_to_load
 from app.models.tokenizer_dispatch import build_tokenizer
 from app.models.worker import ModelWorker
+from app.runtime.batch_decode import BatchDecoder
 from app.runtime.chat_stop_tokens import extra_eos_token_ids
 from app.runtime.chat_template import PromptBuilderFactory
+from app.runtime.prompt_cache import PromptCache
+
+# How many not-yet-started cancelled reply ids to remember (see ModelManager.cancel_request).
+_MAX_REMEMBERED_CANCELS = 1024
 
 
 class ModelManager:
@@ -60,6 +66,9 @@ class ModelManager:
         enable_mixed_precision_loading: bool = False,
         enable_quantized_native_compute: bool = False,
         clock: Callable[[], float] = time.monotonic,
+        prompt_cache_slots: int = 4,
+        prompt_cache_budget_mb: int = 2048,
+        max_decode_batch: int = 8,
     ) -> None:
         self._catalog = catalog
         self._max_loaded = max_loaded
@@ -73,6 +82,9 @@ class ModelManager:
         # permanent user choice (2026-09-21), not a rollout toggle.
         self._enable_quantized_native_compute = enable_quantized_native_compute
         self._clock = clock
+        self._prompt_cache_slots = prompt_cache_slots
+        self._prompt_cache_budget_bytes = prompt_cache_budget_mb << 20
+        self._max_decode_batch = max_decode_batch
         self._handles: dict[str, ModelHandle] = {}
         self._registry = ArchitectureRegistry()
         # Tags stop-requested while they had no handle yet - see unload()'s own docstring for why
@@ -80,6 +92,7 @@ class ModelManager:
         # target: loading alone routinely takes tens of seconds, and a caller can ask to stop well
         # before that finishes.
         self._cancelled_loads: set[str] = set()
+        self._cancelled_requests: OrderedDict[str, None] = OrderedDict()
 
     def get_or_load(self, tag: str, keep_alive_seconds: int | None = None) -> ModelHandle:
         now = self._clock()
@@ -99,6 +112,23 @@ class ModelManager:
         handle = self._load(tag, keep_alive_seconds, now)
         self._handles[tag] = handle
         return handle
+
+    def cancel_request(self, tag: str, request_id: str) -> None:
+        """Stops one reply (`ChatRequest.request_id`) without unloading anything: the model, other
+        users' replies and the caches are untouched. If the reply isn't on a worker yet (still
+        loading the model, or between the router and the worker) the id is remembered, so
+        `pop_cancelled_request` can drop it the moment it would start. See `ModelWorker.cancel_job`.
+        """
+        handle = self._handles.get(tag)
+        if handle is not None and handle.worker.cancel_job(request_id):
+            return
+        self._cancelled_requests[request_id] = None
+        while len(self._cancelled_requests) > _MAX_REMEMBERED_CANCELS:
+            self._cancelled_requests.popitem(last=False)
+
+    def pop_cancelled_request(self, request_id: str) -> bool:
+        """True (and consumes the note) if `cancel_request` ran for this id before it started."""
+        return self._cancelled_requests.pop(request_id, 0) is None
 
     def pop_cancelled_load(self, tag: str) -> bool:
         """True (and consumes the flag) if unload() was called for `tag` while it had no handle
@@ -275,7 +305,9 @@ class ModelManager:
             tag=tag,
             architecture=architecture,
             tokenizer=tokenizer,
-            worker=ModelWorker(),
+            worker=ModelWorker(
+                BatchDecoder(architecture, self._max_decode_batch), self._max_decode_batch
+            ),
             capabilities=installed.capabilities,
             size_bytes=installed.size_bytes,
             keep_alive_seconds=(
@@ -286,4 +318,5 @@ class ModelManager:
             last_used_at=now,
             prompt_builder=prompt_builder,
             extra_eos_token_ids=extra_eos_token_ids(loader.metadata),
+            prompt_cache=PromptCache(self._prompt_cache_slots, self._prompt_cache_budget_bytes),
         )

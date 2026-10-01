@@ -1,10 +1,11 @@
 import logging
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 
 import torch
 
 from app.architectures.base import GenerationCancelledError, ModelArchitecture
+from app.runtime.batch_decode import CHECKPOINT, BatchDecoder, Checkpoint, DecodeStep
 from app.runtime.generation_request import GenerationRequest, GenerationResult
 from app.runtime.mamba_cache import NemotronHHybridCache
 from app.runtime.prompt_cache import PromptCache
@@ -79,14 +80,47 @@ class ChatEngine:
         streaming actually needs. See `generate()` for the collect-everything
         convenience wrapper used by tests and the M4 manual smoke test.
 
-        `stop_check` (typically `ModelWorker.should_stop`, see its own docstring) is passed
-        straight through to each `forward()` call, so a stop can be noticed *between decoder
-        layers*, not just between tokens the way `finally: yield` boundaries already allow -
-        real gap this closes (2026-09-21): a stop request previously had to wait out an entire
-        in-progress forward pass first, which on this project's slow hardware can be many seconds
-        to minutes for one large-prompt prefill. `GenerationCancelledError` (raised deep inside
-        `_forward_impl`'s layer loop when that happens) is caught here and ends this generator
-        cleanly - same as reaching EOS or a between-token stop, never surfaced as a real error.
+        A plain driver over `stream_steps`: every decode step is run right here, alone. The
+        worker's scheduler drives `stream_steps` itself instead, so it can batch the decode steps
+        of several replies into one forward pass.
+        """
+        steps = self.stream_steps(request, stop_check)
+        decoder = BatchDecoder(self._architecture)
+        try:
+            item = next(steps)
+            while True:
+                if isinstance(item, DecodeStep):
+                    result = decoder.decode_alone(item)
+                    item = (
+                        steps.throw(result) if isinstance(result, Exception) else steps.send(result)
+                    )
+                    continue
+                if isinstance(item, int):
+                    yield item
+                item = steps.send(None)
+        except StopIteration:
+            return
+        finally:
+            steps.close()
+
+    def stream_steps(
+        self, request: GenerationRequest, stop_check: Callable[[], bool] | None = None
+    ) -> Generator[int | DecodeStep | Checkpoint, torch.Tensor | None, None]:
+        """The generation as a coroutine. Yields a generated token id (an `int`); a `CHECKPOINT`
+        between prefill pieces (the reply goes on, others may take a turn); and a `DecodeStep`
+        whenever it needs the logits for its newest token - the caller `send()`s them back (a
+        `(1, 1, vocab)` tensor) or `throw()`s the exception that step raised.
+
+        `stop_check` (typically from `ModelWorker.stop_check_for`) is passed straight through to
+        each prefill `forward()` call, so a stop can be noticed *between decoder layers*, not just
+        between tokens - real gap this closes (2026-09-21): a stop request previously had to wait
+        out an entire in-progress forward pass first, which on this project's slow hardware can be
+        many seconds to minutes for one large-prompt prefill. `GenerationCancelledError` (raised
+        deep inside `_forward_impl`'s layer loop when that happens) is caught here and ends this
+        generator cleanly - same as reaching EOS or a between-token stop, never surfaced as a real
+        error. Nothing here holds `torch.no_grad()` across a `yield`: several of these generators
+        interleave on one thread, and a grad-mode context spanning a suspension would leak into
+        the others (the worker thread disables gradients for good instead).
         """
         sampling = request.sampling
         model_dtype = next(self._architecture.parameters()).dtype
@@ -105,16 +139,16 @@ class ChatEngine:
         )
 
         try:
-            with torch.no_grad():
-                forward_started = time.monotonic()
-                cuts = self._prefill_cuts(kv_cache, reused, prompt_len)
-                start = reused
-                for end in cuts:
-                    positions = (
-                        request.position_ids[:, start:end]
-                        if request.position_ids is not None
-                        else torch.arange(start, end, dtype=torch.long)
-                    )
+            forward_started = time.monotonic()
+            cuts = self._prefill_cuts(kv_cache, reused, prompt_len)
+            start = reused
+            for end in cuts:
+                positions = (
+                    request.position_ids[:, start:end]
+                    if request.position_ids is not None
+                    else torch.arange(start, end, dtype=torch.long)
+                )
+                with torch.no_grad():
                     logits = self._architecture.forward(
                         request.input_ids[:, start:end],
                         kv_cache,
@@ -123,43 +157,35 @@ class ChatEngine:
                         self._images_in(request.image_embeddings, start, end),
                         last_logits_only=True,
                     )
-                    kv_cache.advance(end - start)
-                    self._prompt_cache.advanced(prompt_ids[start:end])
-                    self._prompt_cache.capture(kv_cache)
-                    start = end
-                logger.info(
-                    "prefill forward: %d prompt tokens (%d reused from the cache) in %.2fs",
-                    prompt_len,
-                    reused,
-                    time.monotonic() - forward_started,
-                )
+                kv_cache.advance(end - start)
+                self._prompt_cache.advanced(kv_cache, prompt_ids[start:end])
+                self._prompt_cache.capture(kv_cache)
+                start = end
+                if end != cuts[-1]:
+                    yield CHECKPOINT
+            logger.info(
+                "prefill forward: %d prompt tokens (%d reused from the cache) in %.2fs",
+                prompt_len,
+                reused,
+                time.monotonic() - forward_started,
+            )
 
-                generated_ids: list[int] = []
-                for step in range(max_new_tokens):
-                    next_token = sampler.sample(logits[0, -1, :], generated_ids)
-                    generated_ids.append(next_token)
-                    yield next_token
-                    if next_token in self._eos_token_ids:
-                        return
-
-                    next_input = torch.tensor([[next_token]], dtype=torch.long)
-                    position_ids = torch.tensor(
-                        [kv_cache.length + request.position_delta], dtype=torch.long
-                    )
-                    forward_started = time.monotonic()
-                    logits = self._architecture.forward(
-                        next_input, kv_cache, position_ids, stop_check, last_logits_only=True
-                    )
-                    logger.info(
-                        "decode step %d forward: %.2fs",
-                        step + 1,
-                        time.monotonic() - forward_started,
-                    )
-                    kv_cache.advance(1)
-                    self._prompt_cache.advanced([next_token])
+            generated_ids: list[int] = []
+            for _ in range(max_new_tokens):
+                next_token = sampler.sample(logits[0, -1, :], generated_ids)
+                generated_ids.append(next_token)
+                yield next_token
+                if next_token in self._eos_token_ids:
+                    return
+                position = kv_cache.length + request.position_delta
+                logits = yield DecodeStep(next_token, kv_cache, position, stop_check)
+                kv_cache.advance(1)
+                self._prompt_cache.advanced(kv_cache, [next_token])
         except GenerationCancelledError as exc:
             logger.info("generation cancelled mid-forward-pass: %s", exc)
             return
+        finally:
+            self._prompt_cache.release(kv_cache)
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         token_ids = list(self.stream(request))

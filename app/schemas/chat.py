@@ -42,6 +42,11 @@ class ChatRequest(BaseModel):
     options: ChatOptions = ChatOptions()
     stream: bool = True
     keep_alive: int | None = None
+    # Caller-chosen id for this one reply (pAIring sends the message id). A later empty
+    # `keep_alive: 0` call carrying the same id cancels just that reply - the model stays loaded and
+    # other users' replies are untouched; the same call without an id is the explicit "unload this
+    # model now" (Ollama's convention).
+    request_id: str | None = None
 
     def is_unload_call(self) -> bool:
         return not self.messages and self.keep_alive == 0

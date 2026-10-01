@@ -30,12 +30,22 @@ class Settings(BaseSettings):
     models_dir: Path = Path("./data/models")
 
     default_keep_alive_seconds: int = 300
+    # How many conversations' caches (see PromptCache) each loaded model keeps so concurrent users
+    # don't overwrite each other's, and the memory they may use together (MB, caches + recurrent
+    # snapshots). Whichever limit is hit first evicts the least recently used conversation; one
+    # conversation is always kept. Raise both on a machine with spare RAM and many concurrent chats.
+    prompt_cache_slots: int = Field(default=4, ge=1, le=64)
+    prompt_cache_budget_mb: int = Field(default=2048, ge=64)
+    # Replies that run at the same time on one loaded model, and the most whose decode steps are
+    # batched into a single forward pass (see ModelWorker / BatchDecoder). More concurrent users
+    # than this wait in line. Batching helps once the native C kernels run the packed weights.
+    max_decode_batch: int = Field(default=8, ge=1, le=64)
     # 2 (not 1) matches pAIring's real usage - see ModelManager's own docstring. Safe to raise via
     # MATRICXON_MAX_LOADED_MODELS on a machine with enough RAM: ModelManager's eviction/capacity
     # logic is generic, not hardcoded to 2, and a real load that clearly wouldn't fit now fails
     # closed with InsufficientMemoryError instead of risking an OS-level OOM kill (see
     # ModelManager._ensure_enough_memory_to_load).
-    max_loaded_models: int = 1
+    max_loaded_models: int = 2
     # Headroom `ModelManager._ensure_enough_memory_to_load`/`select_load_dtype` require beyond a
     # model's own exact bf16 weight size (see `load_dtype.exact_bf16_bytes`) before allowing a
     # load - MEMORY_SAFETY_MARGIN's own default (1.2x, lowered from 1.5 on 2026-10-01: quantized-

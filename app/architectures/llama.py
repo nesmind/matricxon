@@ -51,6 +51,7 @@ class LlamaArchitecture(ModelArchitecture):
     """
 
     NAME = "llama"
+    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
     SUPPORTS_VISION = True
     SUPPORTS_MOE = True  # real Mixtral GGUFs - see llama_moe.detect_moe's own module docstring
 
@@ -97,6 +98,8 @@ class LlamaArchitecture(ModelArchitecture):
         # separate "mixtral" architecture string to dispatch on instead.
         self.num_experts, self.num_experts_per_tok = detect_moe(metadata, metadata.architecture)
         self.is_moe = self.num_experts is not None
+        if self.is_moe:  # expert routing isn't batch-checked (test_batched_decode.py)
+            self.SUPPORTS_BATCHED_DECODE = False
         # Real, confirmed gap (2026-09-21): a real LLaVA-v1.6-Vicuna GGUF pull has no
         # `llama.vocab_size` metadata key at all - falls back to the real tokenizer vocab's own
         # length, the same fallback `BertArchitecture`/`NomicBertArchitecture`/`Gemma4Architecture`/

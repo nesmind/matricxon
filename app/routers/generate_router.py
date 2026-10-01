@@ -93,7 +93,7 @@ class GenerateRequestHandler:
         )
         decoder = IncrementalTextDecoder(handle.tokenizer)
         special_token_filter = SpecialTokenTextFilter()
-        results = handle.worker.stream(lambda: engine.stream(generation_request))
+        results = handle.worker.stream(lambda: engine.stream_steps(generation_request))
 
         eval_count = 0
         generation_started = time.monotonic()

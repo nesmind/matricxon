@@ -15,6 +15,8 @@ def test_fresh_install_defaults() -> None:
     assert settings.enable_quantized_native_compute is True
     assert settings.gemv_backend == "native"
     assert settings.log_level == 0
+    assert settings.max_loaded_models == 2
+    assert settings.default_keep_alive_seconds == 300
 
 
 def test_memory_safety_margin_accepts_its_default_and_rejects_beyond_the_bounds() -> None:

@@ -47,6 +47,7 @@ class GraniteArchitecture(ModelArchitecture):
     """
 
     NAME = "granite"
+    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
 
     def __init__(
         self,

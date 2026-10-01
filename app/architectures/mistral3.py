@@ -34,6 +34,7 @@ class Mistral3TextArchitecture(ModelArchitecture):
     """
 
     NAME = "mistral3"
+    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
 
     def __init__(
         self,

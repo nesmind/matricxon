@@ -43,6 +43,7 @@ class Qwen35Architecture(ModelArchitecture):
     """
 
     NAME = "qwen35"
+    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
     SUPPORTS_VISION = True
 
     def __init__(
@@ -195,7 +196,10 @@ class Qwen35Architecture(ModelArchitecture):
             kv_cache = self.build_cache(seq_len, self._dtype)
         if position_ids is None:
             position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)
-        cos, sin = self.rope(position_ids)  # position_ids: (T,) text, or (3, T) with images
+        if getattr(kv_cache, "batched", False):  # batched decode: one text position per sequence
+            cos, sin = RotaryEmbedding.forward(self.rope, position_ids)
+        else:
+            cos, sin = self.rope(position_ids)  # (T,) text, or (3, T) with images
 
         x = self.token_embd(input_ids)
         for start, embeds in image_embeddings or []:

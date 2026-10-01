@@ -43,6 +43,7 @@ class Gemma4Architecture(ModelArchitecture):
     """
 
     NAME = "gemma4"
+    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
     SUPPORTS_MOE = True  # real Gemma4TextExperts/Gemma4TextRouter - see gemma4_moe.py
 
     def __init__(
@@ -116,6 +117,8 @@ class Gemma4Architecture(ModelArchitecture):
         # `has_attn_v` above already uses, in case a real checkpoint ever mixes MoE/dense layers.
         num_experts, num_experts_per_tok, moe_ffn_len = detect_moe(metadata, metadata.architecture)
         self.is_moe = num_experts is not None
+        if self.is_moe:  # expert routing isn't batch-checked (test_batched_decode.py)
+            self.SUPPORTS_BATCHED_DECODE = False
         has_moe = has_moe if has_moe is not None else [self.is_moe] * self.n_layer
 
         # Plain floats (not tensors), so unaffected by _construct_without_init's meta-device

@@ -117,3 +117,57 @@ class TestChatErrorsBeforeStreaming:
         )
 
         assert response.status_code == 400
+
+
+class TestChatCancelDoesNotUnload:
+    def test_cancelling_one_reply_by_id_leaves_the_model_loaded(
+        self, client: TestClient, tiny_mistral3_model: InstalledModel
+    ) -> None:
+        client.post(
+            "/api/chat",
+            json={
+                "model": "tiny-mistral3:latest",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"num_predict": 1},
+            },
+        )
+        assert client.get("/api/ps").json()["models"]
+
+        response = client.post(
+            "/api/chat",
+            json={
+                "model": "tiny-mistral3:latest",
+                "messages": [],
+                "keep_alive": 0,
+                "request_id": "reply-1",
+            },
+        )
+
+        assert response.status_code == 200
+        assert client.get("/api/ps").json()["models"]  # still resident
+
+    def test_a_cancel_that_arrives_first_makes_that_reply_a_no_op(
+        self, client: TestClient, tiny_mistral3_model: InstalledModel
+    ) -> None:
+        client.post(
+            "/api/chat",
+            json={
+                "model": "tiny-mistral3:latest",
+                "messages": [],
+                "keep_alive": 0,
+                "request_id": "early",
+            },
+        )
+
+        response = client.post(
+            "/api/chat",
+            json={
+                "model": "tiny-mistral3:latest",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"num_predict": 3},
+                "request_id": "early",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.text.strip() in ("", "{}")  # nothing was generated

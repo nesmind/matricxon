@@ -14,6 +14,9 @@ class HybridSnapshot:
     conv_state: list[torch.Tensor]
     ssm_state: list[torch.Tensor]
 
+    def nbytes(self) -> int:
+        return sum(t.numel() * t.element_size() for t in (*self.conv_state, *self.ssm_state))
+
 
 class NemotronHHybridCache:
     """Composes two independent, orthogonal sub-caches - one real `KVCache` restricted to this
@@ -40,6 +43,14 @@ class NemotronHHybridCache:
         max_seq_len: int,
         dtype: torch.dtype = torch.float32,
     ) -> None:
+        self._spec = (
+            layer_types,
+            attention_layer_shape,
+            mamba_conv_state_shape,
+            mamba_ssm_state_shape,
+            max_seq_len,
+            dtype,
+        )
         attention_indices = [i for i, t in enumerate(layer_types) if t == "attention"]
         mamba_indices = [i for i, t in enumerate(layer_types) if t == "mamba"]
         self._kv_cache = KVCache(
@@ -94,3 +105,17 @@ class NemotronHHybridCache:
         self._kv_cache.truncate(snapshot.length)
         self.conv_state = [t.clone() for t in snapshot.conv_state]
         self.ssm_state = [t.clone() for t in snapshot.ssm_state]
+
+    def fork_from(self, snapshot: HybridSnapshot) -> "NemotronHHybridCache":
+        """A new cache at `snapshot.length`: a copy of this one's attention KV up to there plus the
+        snapshot's recurrent state; this cache is left untouched (see `KVCache.fork`)."""
+        forked = NemotronHHybridCache(*self._spec)
+        forked._kv_cache = self._kv_cache.fork(snapshot.length)
+        forked.conv_state = [t.clone() for t in snapshot.conv_state]
+        forked.ssm_state = [t.clone() for t in snapshot.ssm_state]
+        return forked
+
+    def nbytes(self) -> int:
+        """Memory held: the attention KV plus the live recurrent state."""
+        states = (*self.conv_state, *self.ssm_state)
+        return self._kv_cache.nbytes() + sum(t.numel() * t.element_size() for t in states)

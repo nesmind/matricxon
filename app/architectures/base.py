@@ -56,6 +56,10 @@ class ModelArchitecture(PackedWeightLoading, nn.Module, ABC):
     #: (see `ArchitectureRegistry.vision_supported_names`; `capabilities.py` derives its
     #: "vision" flag from the same set, so the two can't drift).
     SUPPORTS_VISION: ClassVar[bool] = False
+    #: True for an architecture whose forward pass gives the same logits for a decode step run as
+    #: part of a batch of sequences (`app.runtime.batch_decode`, `batch_cache`) as run alone -
+    #: checked per architecture in tests/unit/test_batched_decode.py before it is set.
+    SUPPORTS_BATCHED_DECODE: ClassVar[bool] = False
     _last_logits_only: bool = False
 
     def __init__(self) -> None:

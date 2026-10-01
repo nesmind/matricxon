@@ -45,7 +45,11 @@ class ChatRequestHandler:
 
     def handle(self, request: ChatRequest) -> JSONResponse | NDJSONResponse:
         if request.is_unload_call():
-            self._model_manager.unload(request.model)
+            if request.request_id is not None:
+                # Stops only that reply; the model and every other reply are left alone.
+                self._model_manager.cancel_request(request.model, request.request_id)
+            else:
+                self._model_manager.unload(request.model)
             return JSONResponse(status_code=200, content={})
 
         load_started = time.monotonic()
@@ -62,6 +66,10 @@ class ChatRequestHandler:
         # would otherwise be silently lost the instant loading finished, and generation would
         # start anyway - completely unaware anyone had already asked to stop.
         if self._model_manager.pop_cancelled_load(request.model):
+            return JSONResponse(status_code=200, content={})
+        if request.request_id is not None and self._model_manager.pop_cancelled_request(
+            request.request_id
+        ):
             return JSONResponse(status_code=200, content={})
 
         stage_started = time.monotonic()
@@ -116,7 +124,9 @@ class ChatRequestHandler:
             request, prompt_token_ids, image_embeddings, fused
         )
         return NDJSONResponse(
-            self._stream(handle, generation_request, len(prompt_token_ids), load_duration)
+            self._stream(
+                handle, generation_request, len(prompt_token_ids), load_duration, request.request_id
+            )
         )
 
     def _build_generation_request(
@@ -149,6 +159,7 @@ class ChatRequestHandler:
         generation_request: GenerationRequest,
         prompt_eval_count: int,
         load_duration: float,
+        request_id: str | None = None,
     ) -> AsyncIterator[dict]:
         eos_token_ids = {handle.tokenizer.eos_token_id} | handle.extra_eos_token_ids
         engine = ChatEngine(
@@ -158,8 +169,13 @@ class ChatRequestHandler:
         )
         decoder = IncrementalTextDecoder(handle.tokenizer)
         special_token_filter = SpecialTokenTextFilter()
+        # Cancelled in the gap between handle() and this stream starting: nothing to run.
+        if request_id is not None and self._model_manager.pop_cancelled_request(request_id):
+            return
+        stop_check = handle.worker.stop_check_for(request_id)
         results = handle.worker.stream(
-            lambda: engine.stream(generation_request, stop_check=handle.worker.should_stop)
+            lambda: engine.stream_steps(generation_request, stop_check=stop_check),
+            request_id=request_id,
         )
 
         eval_count = 0

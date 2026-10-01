@@ -19,4 +19,7 @@ def get_model_manager() -> ModelManager:
         memory_safety_margin=settings.memory_safety_margin,
         enable_mixed_precision_loading=settings.enable_mixed_precision_loading,
         enable_quantized_native_compute=settings.enable_quantized_native_compute,
+        prompt_cache_slots=settings.prompt_cache_slots,
+        prompt_cache_budget_mb=settings.prompt_cache_budget_mb,
+        max_decode_batch=settings.max_decode_batch,
     )
