@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from app.architectures.mistral3 import Mistral3TextArchitecture
 from app.architectures.registry import ArchitectureRegistry
+from app.gguf.dequant.torch_dequant import TorchDequantizer
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.reader import GGUFReader
 from app.models.catalog import ModelCatalog
@@ -22,7 +23,9 @@ from app.models.worker import ModelWorker
 from app.runtime.batch_decode import BatchDecoder
 from app.runtime.chat_stop_tokens import extra_eos_token_ids
 from app.runtime.chat_template import PromptBuilderFactory
+from app.runtime.compute_device import ComputeDevice
 from app.runtime.prompt_cache import PromptCache
+from app.server.errors import DeviceUnavailableError
 
 # How many not-yet-started cancelled reply ids to remember (see ModelManager.cancel_request).
 _MAX_REMEMBERED_CANCELS = 1024
@@ -69,7 +72,12 @@ class ModelManager:
         prompt_cache_slots: int = 4,
         prompt_cache_budget_mb: int = 2048,
         max_decode_batch: int = 8,
+        device: str = "cpu",
+        gpu_weight_mode: str = "dequantized",
     ) -> None:
+        # Raises DeviceUnavailableError for a GPU that isn't there (never a silent CPU fallback).
+        self._device = ComputeDevice.resolve(device)
+        self._gpu_weight_mode = gpu_weight_mode
         self._catalog = catalog
         self._max_loaded = max_loaded
         self._default_keep_alive_seconds = default_keep_alive_seconds
@@ -180,6 +188,18 @@ class ModelManager:
         else:
             self._cancelled_loads.add(tag)
 
+    def _cache_budget_bytes(self, on_gpu: bool, free_before_load: int, weight_bytes: int) -> int:
+        """Prompt-cache budget. On a GPU the cached KV lives in VRAM next to the weights, so it is
+        capped at half of the VRAM left once this model's weights are in (never above the setting;
+        the weights may not be uploaded yet, hence the estimate rather than a fresh reading)."""
+        if not on_gpu:
+            return self._prompt_cache_budget_bytes
+        return min(self._prompt_cache_budget_bytes, max(0, free_before_load - weight_bytes) // 2)
+
+    @property
+    def on_gpu(self) -> bool:
+        return self._device.is_gpu
+
     def now(self) -> float:
         """Exposes the manager's own (possibly injected/fake) clock, so a
         caller computing a `ModelHandle`'s `expires_in()` reads the same
@@ -244,24 +264,45 @@ class ModelManager:
         # get fully materialized either way - norms/embeddings/attn_q/attn_k - a smaller number
         # there would risk wrongly picking float32 for those with less real headroom than it
         # assumes, not a safety problem `ensure_enough_memory_to_load` itself can afford).
-        quantized_native_enabled = (
-            self._enable_quantized_native_compute
-            and architecture_cls.NAME in QUANTIZED_NATIVE_WIRED_ARCHITECTURES
+        # The CPU packed-weight kernels read the mmap, so a GPU model either materializes in
+        # bf16 or, with gpu_weight_mode="packed", uploads supported quant types still packed.
+        on_gpu = self._device.is_gpu
+        if on_gpu and not architecture_cls.SUPPORTS_GPU:
+            raise DeviceUnavailableError(
+                f"architecture {architecture_cls.NAME!r} has no GPU support yet (CPU only)"
+            )
+        wired = architecture_cls.NAME in QUANTIZED_NATIVE_WIRED_ARCHITECTURES
+        gpu_packed = on_gpu and wired and self._gpu_weight_mode == "packed"
+        quantized_native_enabled = gpu_packed or (
+            self._enable_quantized_native_compute and not on_gpu and wired
         )
         real_bytes_needed = estimate_quantized_native_bytes(
-            tensor_infos, quantized_native_enabled, architecture_cls.NAME
+            tensor_infos,
+            quantized_native_enabled,
+            architecture_cls.NAME,
+            packable=TorchDequantizer.supports if gpu_packed else None,
         )
 
+        free_before_load = (self._device.free_memory_bytes() or 0) if on_gpu else 0
         ensure_enough_memory_to_load(
-            tag, real_bytes_needed, self._memory_safety_margin, list(self._handles)
+            tag,
+            real_bytes_needed,
+            self._memory_safety_margin,
+            list(self._handles),
+            available_fn=self._device.free_memory_bytes if on_gpu else None,
+            memory_kind="VRAM" if on_gpu else "memory",
         )
         # float32-vs-bf16 for what stays float: with quantized-native compute that is a small part
         # of the model, so size the decision from the real (packed) footprint, not the full
         # unpacked bf16 size - which made a 4B model always fall to bf16, ~10x slower here (no
         # hardware bf16; measured 2026-10-01, Qwen3.5-4B decode 1.65 -> 0.18 tok/s).
-        dtype = select_load_dtype(
-            real_bytes_needed if quantized_native_enabled else bf16_bytes,
-            self._memory_safety_margin,
+        dtype = (
+            self._device.load_dtype()
+            if on_gpu
+            else select_load_dtype(
+                real_bytes_needed if quantized_native_enabled else bf16_bytes,
+                self._memory_safety_margin,
+            )
         )
 
         # Mixed per-layer float32/bf16 precision - see plan_mixed_precision_load's own docstring,
@@ -270,7 +311,7 @@ class ModelManager:
             tensor_infos,
             dtype,
             self._memory_safety_margin,
-            enabled=self._enable_mixed_precision_loading,
+            enabled=self._enable_mixed_precision_loading and not on_gpu,
             supports_mixed_precision=architecture_cls is Mistral3TextArchitecture,
         )
 
@@ -299,6 +340,11 @@ class ModelManager:
         except Exception:
             loader.close()
             raise
+        try:
+            architecture.place_on(self._device.torch_device, packed_weights=gpu_packed)
+        except Exception:
+            architecture.close()
+            raise
         architecture.eval()
 
         return ModelHandle(
@@ -318,5 +364,8 @@ class ModelManager:
             last_used_at=now,
             prompt_builder=prompt_builder,
             extra_eos_token_ids=extra_eos_token_ids(loader.metadata),
-            prompt_cache=PromptCache(self._prompt_cache_slots, self._prompt_cache_budget_bytes),
+            prompt_cache=PromptCache(
+                self._prompt_cache_slots,
+                self._cache_budget_bytes(on_gpu, free_before_load, real_bytes_needed),
+            ),
         )

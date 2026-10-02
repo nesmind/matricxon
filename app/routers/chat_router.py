@@ -96,11 +96,13 @@ class ChatRequestHandler:
         image_embeddings = None
         fused = None
         if mmproj is not None and handle.architecture.NAME == "qwen35":
-            fused = build_qwen3vl_prompt(prompt, all_images, handle.tokenizer, mmproj)
+            fused = build_qwen3vl_prompt(
+                prompt, all_images, handle.tokenizer, mmproj, handle.architecture.device
+            )
             prompt_token_ids, image_embeddings = fused.token_ids, fused.image_embeddings
         elif mmproj is not None:
             prompt_token_ids, image_embeddings = build_prompt_with_images(
-                prompt, all_images, handle.tokenizer, mmproj
+                prompt, all_images, handle.tokenizer, mmproj, handle.architecture.device
             )
         else:
             prompt_token_ids = handle.tokenizer.encode(

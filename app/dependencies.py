@@ -22,4 +22,6 @@ def get_model_manager() -> ModelManager:
         prompt_cache_slots=settings.prompt_cache_slots,
         prompt_cache_budget_mb=settings.prompt_cache_budget_mb,
         max_decode_batch=settings.max_decode_batch,
+        device=settings.device,
+        gpu_weight_mode=settings.gpu_weight_mode,
     )

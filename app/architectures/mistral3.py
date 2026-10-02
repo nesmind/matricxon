@@ -13,7 +13,7 @@ from app.architectures.mistral3_layers import (  # noqa: F401 - re-exported for 
     Mistral3DecoderLayer,
     SwiGLUMLP,
 )
-from app.architectures.quantized_embedding import QuantizedEmbedding
+from app.architectures.packed_weights import PACKED_EMBEDDINGS
 from app.architectures.rope import YarnRotaryEmbedding
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
@@ -34,6 +34,7 @@ class Mistral3TextArchitecture(ModelArchitecture):
     """
 
     NAME = "mistral3"
+    SUPPORTS_GPU = True
     SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
 
     def __init__(
@@ -182,7 +183,7 @@ class Mistral3TextArchitecture(ModelArchitecture):
         enabled = self._enable_quantized_native
         embed_dtype = self.token_embd.weight.dtype
         self.token_embd = self._load_token_embedding(loader, self.token_embd, embed_dtype, enabled)
-        if isinstance(self.token_embd, QuantizedEmbedding):
+        if isinstance(self.token_embd, PACKED_EMBEDDINGS):
             self.lm_head = self.token_embd.as_linear()
         self.output_norm.weight.copy_(loader.load_tensor("output_norm.weight"))
         logger.debug(

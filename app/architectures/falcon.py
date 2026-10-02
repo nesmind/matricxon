@@ -45,6 +45,7 @@ class FalconArchitecture(ModelArchitecture):
     """
 
     NAME = "falcon"
+    SUPPORTS_GPU = True
     SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
 
     def __init__(

@@ -15,11 +15,12 @@ import torch
 from app.gguf.loader import GGUFModelLoader
 from app.models.installed_model import InstalledModel
 from app.runtime.vision_fusion import IMAGE_MARKER
+from app.vision.device import VisionDevice
 from app.vision.qwen3vl_encoder import Qwen3VLVisionEncoder
 from app.vision.qwen3vl_preprocessing import Qwen3VLImagePreprocessor
 
 _VISION_START, _VISION_END, _IMAGE_PAD = "<|vision_start|>", "<|vision_end|>", "<|image_pad|>"
-_encoder_cache: dict[str, Qwen3VLVisionEncoder] = {}
+_encoder_cache: dict[tuple[str, str], Qwen3VLVisionEncoder] = {}
 
 
 @dataclass(frozen=True)
@@ -30,18 +31,23 @@ class FusedPrompt:
     position_delta: int
 
 
-def _get_encoder(mmproj: InstalledModel) -> Qwen3VLVisionEncoder:
-    if mmproj.tag not in _encoder_cache:
+def _get_encoder(mmproj: InstalledModel, device: torch.device) -> Qwen3VLVisionEncoder:
+    key = (mmproj.tag, str(device))
+    if key not in _encoder_cache:
         loader = GGUFModelLoader(mmproj.path, dtype=torch.float32)
-        _encoder_cache[mmproj.tag] = Qwen3VLVisionEncoder.from_gguf(loader)
-    return _encoder_cache[mmproj.tag]
+        _encoder_cache[key] = VisionDevice.place(Qwen3VLVisionEncoder.from_gguf(loader), device)
+    return _encoder_cache[key]
 
 
 def build_qwen3vl_prompt(
-    prompt: str, images_b64: list[str], tokenizer: object, mmproj: InstalledModel
+    prompt: str,
+    images_b64: list[str],
+    tokenizer: object,
+    mmproj: InstalledModel,
+    device: torch.device | None = None,
 ) -> FusedPrompt:
     """One `[IMG]` marker per image, in order (a marker without an image is dropped)."""
-    encoder = _get_encoder(mmproj)
+    encoder = _get_encoder(mmproj, device or torch.device("cpu"))
     preprocessor = Qwen3VLImagePreprocessor(encoder.image_mean, encoder.image_std)
     pad_id = tokenizer.encode(_IMAGE_PAD, add_bos=False)[0]
     segments = prompt.split(IMAGE_MARKER)
@@ -68,7 +74,7 @@ def build_qwen3vl_prompt(
                 continue
             pixels = preprocessor.preprocess(images_b64[i])
             rows, cols = encoder.merged_grid(pixels.shape[-2], pixels.shape[-1])
-            embeddings.append((len(token_ids), encoder(pixels)))
+            embeddings.append((len(token_ids), VisionDevice.encode(encoder, pixels)))
             token_ids.extend([pad_id] * (rows * cols))
             axes = torch.stack(
                 [

@@ -11,7 +11,7 @@ from app.architectures.gemma4_layers import Gemma4DecoderLayer
 from app.architectures.gemma4_moe import Gemma4MoEBlock, detect_moe, materialize_moe
 from app.architectures.gemma4_ple import Gemma4PerLayerEmbedding
 from app.architectures.layers import RMSNorm
-from app.architectures.quantized_embedding import QuantizedEmbedding
+from app.architectures.packed_weights import PACKED_EMBEDDINGS
 from app.architectures.rope import RotaryEmbedding
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
@@ -43,6 +43,7 @@ class Gemma4Architecture(ModelArchitecture):
     """
 
     NAME = "gemma4"
+    SUPPORTS_GPU = True
     SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
     SUPPORTS_MOE = True  # real Gemma4TextExperts/Gemma4TextRouter - see gemma4_moe.py
 
@@ -240,7 +241,7 @@ class Gemma4Architecture(ModelArchitecture):
         # or not. No separate output.weight ever exists here (tied lm_head - see this class's own
         # docstring), so a packed table always gets its tied lm_head from as_linear() too.
         self.token_embd = self._load_token_embedding(loader, self.token_embd, self._dtype, enabled)
-        if isinstance(self.token_embd, QuantizedEmbedding):
+        if isinstance(self.token_embd, PACKED_EMBEDDINGS):
             self.lm_head = self.token_embd.as_linear()
         self.output_norm.weight.copy_(loader.load_tensor("output_norm.weight"))
         if self.per_layer_dim:

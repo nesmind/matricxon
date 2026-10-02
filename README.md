@@ -12,7 +12,7 @@ shows how a GGUF file becomes tokens, how quantized weights are multiplied, how 
 sampler work, and how hybrid models (attention plus state-space layers) are served.
 
 Everything is built from scratch, with no llama.cpp, ggml or vLLM code or bindings: file parsing,
-dequantization, the transformer forward passes, caching, sampling and scheduling. It runs on the CPUs only for now; we plan to add GPUs support soon.
+dequantization, the transformer forward passes, caching, sampling and scheduling. It runs on CPUs & GPUs (BETA).
 
 ## What's inside
 

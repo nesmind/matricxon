@@ -99,7 +99,16 @@ class Settings(BaseSettings):
     # the library can't be built (no C compiler) - so "native" is a safe default.
     gemv_backend: Literal["numba", "native"] = "native"
 
+    # "cpu" (default) or "cuda"/"cuda:N" - EXPERIMENTAL GPU mode (dense architectures marked
+    # `SUPPORTS_GPU`, weights in bf16/fp16, never quantized-native). A GPU that isn't there fails
+    # the first model load with an error instead of silently running on the CPU.
     device: str = "cpu"
+    # How a GPU holds quantized weights (only with `device` = cuda): "dequantized" (default) keeps
+    # every weight in bf16/fp16 - fastest, ~2 bytes of VRAM per parameter; "packed" keeps supported
+    # quant types (Q4_0/4_1/5_0/5_1/8_0, Q2_K-Q6_K, Q8_K, IQ4_NL/IQ4_XS) quantized in VRAM and
+    # dequantizes per call with torch ops - ~3-4x less VRAM for a 4-bit file, slower per token.
+    # Other types in a packed-mode load are still dequantized.
+    gpu_weight_mode: Literal["dequantized", "packed"] = "dequantized"
     # None means "use every CPU core" (os.cpu_count()) - PyTorch's own default heuristic measured
     # live as only 2 threads on a real 4-core machine, silently leaving half the CPU idle during
     # every matmul in the hot generation path (see app.main.MatricxonApp's own docstring on where

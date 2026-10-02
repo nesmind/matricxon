@@ -59,6 +59,7 @@ class NemotronHArchitecture(ModelArchitecture):
     """
 
     NAME = "nemotron_h"
+    SUPPORTS_GPU = True
 
     def __init__(
         self,
@@ -155,6 +156,7 @@ class NemotronHArchitecture(ModelArchitecture):
             mamba_ssm_state_shape=(self.mamba_num_heads, self.mamba_head_dim, self.d_state),
             max_seq_len=max_seq_len,
             dtype=dtype,
+            device=self.device,
         )
 
     @classmethod

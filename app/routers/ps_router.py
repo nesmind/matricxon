@@ -20,7 +20,7 @@ class PsRequestHandler:
             PsEntry(
                 name=handle.tag,
                 size=handle.size_bytes,
-                size_vram=0,  # matricxon is CPU-only in v1 - see app/config.py's `device`
+                size_vram=handle.size_bytes if self._model_manager.on_gpu else 0,
                 expires_at=(wall_now + timedelta(seconds=handle.expires_in(clock_now))).isoformat(),
             )
             for handle in self._model_manager.list_loaded()

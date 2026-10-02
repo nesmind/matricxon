@@ -8,6 +8,7 @@ from typing import ClassVar
 import torch
 from torch import nn
 
+from app.architectures.device_placement import DevicePlacement
 from app.architectures.packed_weights import PackedWeightLoading
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
@@ -24,7 +25,7 @@ class GenerationCancelledError(Exception):
     """
 
 
-class ModelArchitecture(PackedWeightLoading, nn.Module, ABC):
+class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
     """Base class for a model built directly from a GGUF file's weights.
 
     Hyperparameters are read generically off GGUF's `<arch>.*` metadata
@@ -90,7 +91,10 @@ class ModelArchitecture(PackedWeightLoading, nn.Module, ABC):
         simply never defined by that architecture; it overrides this method instead.
         """
         return KVCache(
-            layer_shapes=self.kv_cache_layer_shapes, max_seq_len=max_seq_len, dtype=dtype
+            layer_shapes=self.kv_cache_layer_shapes,
+            max_seq_len=max_seq_len,
+            dtype=dtype,
+            device=self.device,
         )
 
     @classmethod
@@ -228,6 +232,8 @@ class ModelArchitecture(PackedWeightLoading, nn.Module, ABC):
             materialize_started = time.monotonic()
             with torch.no_grad():
                 self._materialize_weights(self._pending_loader, stop_check)
+            if self._device_packed:
+                self.settle_on_device()
             logger.info("materialization done in %.2fs", time.monotonic() - materialize_started)
             # Real quantized-native compute (see `_mark_quantized_native_used`'s own docstring)
             # needs this loader's mmap to stay open for the model's entire lifetime, not just
@@ -300,7 +306,21 @@ class ModelArchitecture(PackedWeightLoading, nn.Module, ABC):
         row for every prompt token. Others ignore it and still return every position."""
         self._ensure_materialized(stop_check)
         self._last_logits_only = last_logits_only
-        return self._forward_impl(input_ids, kv_cache, position_ids, stop_check, image_embeddings)
+        if self.device.type == "cpu":
+            return self._forward_impl(
+                input_ids, kv_cache, position_ids, stop_check, image_embeddings
+            )
+        # On a GPU: inputs follow the model, and the result returns to the CPU (the sampler,
+        # embedding pooling and every caller read it there). Vision encoders stay on the CPU.
+        images = [(start, e.to(self.device)) for start, e in image_embeddings or []] or None
+        out = self._forward_impl(
+            input_ids.to(self.device),
+            kv_cache,
+            self.to_compute_device(position_ids),
+            stop_check,
+            images,
+        )
+        return out.cpu()
 
     @abstractmethod
     def _forward_impl(

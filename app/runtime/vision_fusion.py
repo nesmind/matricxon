@@ -16,6 +16,7 @@ import torch
 from app.gguf.loader import GGUFModelLoader
 from app.models.installed_model import InstalledModel
 from app.vision.clip_vision_encoder import ClipVisionEncoder
+from app.vision.device import VisionDevice
 from app.vision.image_preprocessing import ClipImagePreprocessor
 
 IMAGE_MARKER = "[IMG]"
@@ -24,18 +25,23 @@ IMAGE_MARKER = "[IMG]"
 # process's lifetime - re-loading+re-running eval() on every chat turn would be wasteful, and this
 # stays a plain module-level cache rather than joining ModelManager's own load/evict lifecycle,
 # same as ClipVisionEncoder itself deliberately isn't a ModelArchitecture (see its own docstring).
-_encoder_cache: dict[str, ClipVisionEncoder] = {}
+_encoder_cache: dict[tuple[str, str], ClipVisionEncoder] = {}
 
 
-def _get_encoder(mmproj: InstalledModel) -> ClipVisionEncoder:
-    if mmproj.tag not in _encoder_cache:
+def _get_encoder(mmproj: InstalledModel, device: torch.device) -> ClipVisionEncoder:
+    key = (mmproj.tag, str(device))
+    if key not in _encoder_cache:
         loader = GGUFModelLoader(mmproj.path, dtype=torch.float32)
-        _encoder_cache[mmproj.tag] = ClipVisionEncoder.from_gguf(loader)
-    return _encoder_cache[mmproj.tag]
+        _encoder_cache[key] = VisionDevice.place(ClipVisionEncoder.from_gguf(loader), device)
+    return _encoder_cache[key]
 
 
 def build_prompt_with_images(
-    prompt: str, images_b64: list[str], tokenizer: object, mmproj: InstalledModel
+    prompt: str,
+    images_b64: list[str],
+    tokenizer: object,
+    mmproj: InstalledModel,
+    device: torch.device | None = None,
 ) -> tuple[list[int], list[tuple[int, torch.Tensor]]]:
     """Splits `prompt` on the real literal `[IMG]` marker text `Mistral3PromptBuilder` already
     emits (one per real image, in message order), tokenizes each real text segment independently
@@ -50,7 +56,7 @@ def build_prompt_with_images(
     caller today (see `chat_router.py`: only a request with both real images *and* a paired mmproj
     routes through this function at all; everything else still calls plain `tokenizer.encode()`).
     """
-    encoder = _get_encoder(mmproj)
+    encoder = _get_encoder(mmproj, device or torch.device("cpu"))
     preprocessor = ClipImagePreprocessor(encoder.image_size, encoder.image_mean, encoder.image_std)
 
     segments = prompt.split(IMAGE_MARKER)
@@ -61,7 +67,9 @@ def build_prompt_with_images(
             token_ids.extend(tokenizer.encode(segment, add_bos=(i == 0)))
             if i < len(images_b64):
                 pixel_values = preprocessor.preprocess(images_b64[i])
-                patch_embeds = encoder(pixel_values)[0]  # drop the batch dim: (num_patches, n_embd)
+                patch_embeds = VisionDevice.encode(encoder, pixel_values)[
+                    0
+                ]  # drop the batch dim: (num_patches, n_embd)
                 start = len(token_ids)
                 token_ids.extend([0] * encoder.num_patches)
                 image_embeddings.append((start, patch_embeds))

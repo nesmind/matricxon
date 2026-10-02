@@ -12,12 +12,18 @@ from app.runtime.kv_cache import KVCache
 logger = logging.getLogger(__name__)
 
 
-def _causal_mask(q_len: int, kv_len: int, cache_offset: int, window: int | None) -> torch.Tensor:
+def _causal_mask(
+    q_len: int,
+    kv_len: int,
+    cache_offset: int,
+    window: int | None,
+    device: torch.device | None = None,
+) -> torch.Tensor:
     """Same causal rule as Mistral3DecoderLayer's own `_causal_mask`, plus an optional sliding
     window: query i may attend to key j iff `j <= i + cache_offset` (causal) and, if `window` is
     set, `j > i + cache_offset - window` (Gemma4's local/sliding-window layers)."""
-    q_idx = torch.arange(q_len).unsqueeze(1)
-    kv_idx = torch.arange(kv_len).unsqueeze(0)
+    q_idx = torch.arange(q_len, device=device).unsqueeze(1)
+    kv_idx = torch.arange(kv_len, device=device).unsqueeze(0)
     causal = kv_idx <= (q_idx + cache_offset)
     if window is None:
         return causal
@@ -148,7 +154,7 @@ class Gemma4Attention(nn.Module):
         # laptop: at a 200-token context that copy cost ~90 ms per generated token over 28
         # layers, vs ~7 ms without it; the gap grows with the conversation).
         if kv_cache is not None or self.sliding_window is not None:
-            mask = _causal_mask(seq_len, k.shape[-2], cache_offset, self.sliding_window)
+            mask = _causal_mask(seq_len, k.shape[-2], cache_offset, self.sliding_window, q.device)
             out = F.scaled_dot_product_attention(
                 q, k, v, attn_mask=mask, scale=1.0, enable_gqa=True
             )

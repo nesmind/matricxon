@@ -1,9 +1,16 @@
+from collections.abc import Callable
+
 from app.models.load_dtype import available_memory_bytes
 from app.server.errors import InsufficientMemoryError
 
 
 def ensure_enough_memory_to_load(
-    tag: str, bf16_bytes: int, safety_margin: float, loaded_tags: list[str]
+    tag: str,
+    bf16_bytes: int,
+    safety_margin: float,
+    loaded_tags: list[str],
+    available_fn: Callable[[], int | None] | None = None,
+    memory_kind: str = "memory",
 ) -> None:
     """A hard circuit breaker in front of a model load, not just a dtype choice: `select_load_dtype`
     already picks the smallest available footprint (bf16) when float32 wouldn't fit, but it never
@@ -31,7 +38,9 @@ def ensure_enough_memory_to_load(
     common "this model is just too big for this machine" case, not a hard guarantee against every
     possible interleaving of concurrent loads.
     """
-    available = available_memory_bytes()
+    # Resolved at call time (not a default argument) so tests can still patch the module's name.
+    # `available_fn`/`memory_kind` let a GPU load check free VRAM instead of system RAM.
+    available = (available_fn or available_memory_bytes)()
     if available is None:
         return
     minimum_needed = bf16_bytes * safety_margin
@@ -39,7 +48,7 @@ def ensure_enough_memory_to_load(
         return
     loaded = ", ".join(sorted(loaded_tags)) or "none"
     raise InsufficientMemoryError(
-        f"not enough memory to load {tag!r}: need ~{minimum_needed / 1e9:.1f}GB "
+        f"not enough {memory_kind} to load {tag!r}: need ~{minimum_needed / 1e9:.1f}GB "
         f"(bf16 estimate, {safety_margin}x safety margin), only "
         f"{available / 1e9:.1f}GB available. Currently loaded: {loaded} - "
         "unload one first, or lower max_loaded_models."

@@ -57,6 +57,7 @@ class Starcoder2Architecture(ModelArchitecture):
     """
 
     NAME = "starcoder2"
+    SUPPORTS_GPU = True
     SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
 
     def __init__(

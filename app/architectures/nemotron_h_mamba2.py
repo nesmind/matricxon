@@ -80,9 +80,7 @@ class NemotronHMamba2Mixer(nn.Module):
     def forward(self, x: torch.Tensor, hybrid_cache: object, layer_idx: int) -> torch.Tensor:
         _, seq_len, _ = x.shape  # batch == 1, project-wide invariant
         proj = self.in_proj(x)
-        gate, hidden_bc, dt_raw = proj.split(
-            [self.d_inner, self.conv_dim, self.n_heads], dim=-1
-        )
+        gate, hidden_bc, dt_raw = proj.split([self.d_inner, self.conv_dim, self.n_heads], dim=-1)
 
         conv_state, ssm_state = hybrid_cache.mamba_state(layer_idx)
         hidden_bc_t = hidden_bc.transpose(1, 2)  # (1, conv_dim, seq_len)
@@ -109,7 +107,9 @@ class NemotronHMamba2Mixer(nn.Module):
         )
 
         state = ssm_state[0].to(torch.float32).clone()  # (n_heads, head_dim, d_state)
-        outputs = torch.empty(seq_len, self.n_heads, self.head_dim, dtype=torch.float32)
+        outputs = torch.empty(
+            seq_len, self.n_heads, self.head_dim, dtype=torch.float32, device=x.device
+        )
         for t in range(seq_len):
             dt_t = dt[0, t].float()  # (n_heads,)
             decay = torch.exp(dt_t * a).view(-1, 1, 1)

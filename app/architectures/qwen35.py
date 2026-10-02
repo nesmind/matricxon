@@ -43,6 +43,7 @@ class Qwen35Architecture(ModelArchitecture):
     """
 
     NAME = "qwen35"
+    SUPPORTS_GPU = True
     SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
     SUPPORTS_VISION = True
 
@@ -131,6 +132,7 @@ class Qwen35Architecture(ModelArchitecture):
             mamba_ssm_state_shape=(self.n_v_heads, self.ssm_head_dim, self.ssm_head_dim),
             max_seq_len=max_seq_len,
             dtype=dtype,
+            device=self.device,
         )
         # The recurrent state accumulates over the whole context - keep it float32 even when
         # activations/KV are bf16.

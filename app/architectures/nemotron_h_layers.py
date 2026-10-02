@@ -9,9 +9,11 @@ from app.architectures.nemotron_h_mamba2 import NemotronHMamba2Mixer
 from app.gguf.loader import GGUFModelLoader
 
 
-def _causal_mask(q_len: int, kv_len: int, cache_offset: int) -> torch.Tensor:
-    q_idx = torch.arange(q_len).unsqueeze(1)
-    kv_idx = torch.arange(kv_len).unsqueeze(0)
+def _causal_mask(
+    q_len: int, kv_len: int, cache_offset: int, device: torch.device | None = None
+) -> torch.Tensor:
+    q_idx = torch.arange(q_len, device=device).unsqueeze(1)
+    kv_idx = torch.arange(kv_len, device=device).unsqueeze(0)
     return kv_idx <= (q_idx + cache_offset)
 
 
@@ -64,7 +66,7 @@ class NemotronHAttention(nn.Module):
         # laptop: at a 200-token context that copy cost ~90 ms per generated token over 28
         # layers, vs ~7 ms without it; the gap grows with the conversation).
         if hybrid_cache is not None:
-            mask = _causal_mask(seq_len, k.shape[-2], cache_offset)
+            mask = _causal_mask(seq_len, k.shape[-2], cache_offset, q.device)
             out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, enable_gqa=True)
         else:
             out = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True)
@@ -158,8 +160,15 @@ def build_nemotron_h_layer(
     stays focused on metadata parsing/materialization orchestration."""
     if layer_type == "mamba":
         mixer = NemotronHMamba2Mixer(
-            n_embd, mamba_d_inner, mamba_num_heads, mamba_head_dim, d_state, n_group,
-            conv_kernel, rms_eps, dtype=dtype,
+            n_embd,
+            mamba_d_inner,
+            mamba_num_heads,
+            mamba_head_dim,
+            d_state,
+            n_group,
+            conv_kernel,
+            rms_eps,
+            dtype=dtype,
         )
         return NemotronHMambaBlock(n_embd, rms_eps, mixer, dtype=dtype)
     if layer_type == "attention":

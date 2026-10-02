@@ -1,5 +1,6 @@
 import functools
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import torch
@@ -208,7 +209,10 @@ def exact_bf16_bytes(tensor_infos: list[GGUFTensorInfo]) -> int:
 
 
 def estimate_quantized_native_bytes(
-    tensor_infos: list[GGUFTensorInfo], enabled: bool, architecture_name: str = ""
+    tensor_infos: list[GGUFTensorInfo],
+    enabled: bool,
+    architecture_name: str = "",
+    packable: Callable[[int], bool] | None = None,
 ) -> int:
     """`exact_bf16_bytes`'s own real-memory-need estimate, adjusted for real quantized-native
     compute (see `Settings.enable_quantized_native_compute`'s own docstring) when `enabled` -
@@ -238,7 +242,10 @@ def estimate_quantized_native_bytes(
     registry = QuantStrategyRegistry()
     total = 0
     for t in tensor_infos:
-        is_quantized_native = t.name.endswith(eligible_suffixes) and has_gemv_kernel(t.ggml_type)
+        # `packable`: which types stay packed (default the CPU fused kernels; a packed-GPU load
+        # passes `TorchDequantizer.supports`).
+        can_pack = packable or has_gemv_kernel
+        is_quantized_native = t.name.endswith(eligible_suffixes) and can_pack(t.ggml_type)
         if is_quantized_native:
             total += registry.get(t.ggml_type).byte_length(t.n_elements)
         else:

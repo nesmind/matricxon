@@ -11,14 +11,16 @@ from app.runtime.kv_cache import KVCache
 logger = logging.getLogger(__name__)
 
 
-def _causal_mask(q_len: int, kv_len: int, cache_offset: int) -> torch.Tensor:
+def _causal_mask(
+    q_len: int, kv_len: int, cache_offset: int, device: torch.device | None = None
+) -> torch.Tensor:
     """Same causal rule as `Mistral3DecoderLayer`'s own `_causal_mask` (duplicated, not imported -
     same precedent `Gemma4DecoderLayer`'s own `_causal_mask` already set: this project's per-
     architecture layers modules keep their own copy of small helpers like this rather than
     cross-importing another module's private name): query i (local index) may attend to key j iff
     j <= i + cache_offset."""
-    q_idx = torch.arange(q_len).unsqueeze(1)
-    kv_idx = torch.arange(kv_len).unsqueeze(0)
+    q_idx = torch.arange(q_len, device=device).unsqueeze(1)
+    kv_idx = torch.arange(kv_len, device=device).unsqueeze(0)
     return kv_idx <= (q_idx + cache_offset)
 
 
@@ -79,7 +81,7 @@ class Phi2Attention(nn.Module):
             cache_offset = 0
 
         if kv_cache is not None:
-            mask = _causal_mask(seq_len, k.shape[-2], cache_offset)
+            mask = _causal_mask(seq_len, k.shape[-2], cache_offset, q.device)
             out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
         else:
             out = F.scaled_dot_product_attention(q, k, v, is_causal=True)

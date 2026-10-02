@@ -38,6 +38,7 @@ class GraniteMoeArchitecture(ModelArchitecture):
     """
 
     NAME = "granitemoe"
+    SUPPORTS_GPU = True
     SUPPORTS_MOE = True
 
     def __init__(

@@ -42,6 +42,7 @@ class NemotronHHybridCache:
         mamba_ssm_state_shape: tuple[int, int, int],
         max_seq_len: int,
         dtype: torch.dtype = torch.float32,
+        device: torch.device | str = "cpu",
     ) -> None:
         self._spec = (
             layer_types,
@@ -50,6 +51,7 @@ class NemotronHHybridCache:
             mamba_ssm_state_shape,
             max_seq_len,
             dtype,
+            device,
         )
         attention_indices = [i for i, t in enumerate(layer_types) if t == "attention"]
         mamba_indices = [i for i, t in enumerate(layer_types) if t == "mamba"]
@@ -57,19 +59,26 @@ class NemotronHHybridCache:
             layer_shapes=[attention_layer_shape] * len(attention_indices),
             max_seq_len=max_seq_len,
             dtype=dtype,
+            device=device,
         )
         self._attention_slot = {layer_idx: slot for slot, layer_idx in enumerate(attention_indices)}
         self._mamba_slot = {layer_idx: slot for slot, layer_idx in enumerate(mamba_indices)}
         self.conv_state = [
-            torch.zeros(1, *mamba_conv_state_shape, dtype=dtype) for _ in mamba_indices
+            torch.zeros(1, *mamba_conv_state_shape, dtype=dtype, device=device)
+            for _ in mamba_indices
         ]
         self.ssm_state = [
-            torch.zeros(1, *mamba_ssm_state_shape, dtype=dtype) for _ in mamba_indices
+            torch.zeros(1, *mamba_ssm_state_shape, dtype=dtype, device=device)
+            for _ in mamba_indices
         ]
 
     @property
     def length(self) -> int:
         return self._kv_cache.length
+
+    @property
+    def device(self) -> torch.device:
+        return self._kv_cache.device
 
     def advance(self, n_new_tokens: int) -> None:
         self._kv_cache.advance(n_new_tokens)

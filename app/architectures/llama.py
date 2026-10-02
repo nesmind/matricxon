@@ -10,7 +10,7 @@ from app.architectures.base import GenerationCancelledError, ModelArchitecture
 from app.architectures.layers import RMSNorm
 from app.architectures.llama_moe import build_ffn, detect_moe, materialize_moe_ffn
 from app.architectures.mistral3_layers import Mistral3DecoderLayer
-from app.architectures.quantized_embedding import QuantizedEmbedding
+from app.architectures.packed_weights import PACKED_EMBEDDINGS
 from app.architectures.rope import RotaryEmbedding
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
@@ -51,6 +51,7 @@ class LlamaArchitecture(ModelArchitecture):
     """
 
     NAME = "llama"
+    SUPPORTS_GPU = True
     SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
     SUPPORTS_VISION = True
     SUPPORTS_MOE = True  # real Mixtral GGUFs - see llama_moe.detect_moe's own module docstring
@@ -185,7 +186,7 @@ class LlamaArchitecture(ModelArchitecture):
             self.lm_head = self._load_projection(
                 loader, "output.weight", self.lm_head, self._dtype, enabled
             )
-        elif isinstance(self.token_embd, QuantizedEmbedding):
+        elif isinstance(self.token_embd, PACKED_EMBEDDINGS):
             self.lm_head = self.token_embd.as_linear()
         logger.debug(
             "materializing: token_embd + output_norm + lm_head in %.1fs",

@@ -33,10 +33,11 @@ class BatchedKVCache:
 
     def __init__(self, caches: list[KVCache]) -> None:
         self._caches = caches
+        self._device = caches[0].device
 
     @property
     def length(self) -> torch.Tensor:
-        return torch.tensor([c.length for c in self._caches]).view(-1, 1, 1, 1)
+        return torch.tensor([c.length for c in self._caches], device=self._device).view(-1, 1, 1, 1)
 
     def update(
         self, layer_idx: int, k: torch.Tensor, v: torch.Tensor
@@ -55,10 +56,11 @@ class BatchedHybridCache:
 
     def __init__(self, caches: list[NemotronHHybridCache]) -> None:
         self._caches = caches
+        self._device = caches[0].device
 
     @property
     def length(self) -> torch.Tensor:
-        return torch.tensor([c.length for c in self._caches]).view(-1, 1, 1, 1)
+        return torch.tensor([c.length for c in self._caches], device=self._device).view(-1, 1, 1, 1)
 
     def update_attention(
         self, layer_idx: int, k: torch.Tensor, v: torch.Tensor

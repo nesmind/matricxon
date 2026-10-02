@@ -122,12 +122,16 @@ class Qwen3VLVisionEncoder(nn.Module):
     def _rotary(self, gh: int, gw: int) -> tuple[torch.Tensor, torch.Tensor]:
         """cos/sin (n_patches, 1, head_dim): [row freqs | col freqs] duplicated for rotate-half."""
         head_dim = self.n_embd // self.n_head
+        device = self.position_embd.device
         inv_freq = 1.0 / (
             _ROPE_THETA
-            ** (torch.arange(0, head_dim // 2, 2, dtype=torch.float32) / (head_dim // 2))
+            ** (
+                torch.arange(0, head_dim // 2, 2, dtype=torch.float32, device=device)
+                / (head_dim // 2)
+            )
         )
-        rows = torch.arange(gh).repeat_interleave(gw).float()
-        cols = torch.arange(gw).repeat(gh).float()
+        rows = torch.arange(gh, device=device).repeat_interleave(gw).float()
+        cols = torch.arange(gw, device=device).repeat(gh).float()
         freqs = torch.cat([torch.outer(rows, inv_freq), torch.outer(cols, inv_freq)], dim=-1)
         emb = torch.cat([freqs, freqs], dim=-1)
         return emb.cos().unsqueeze(1), emb.sin().unsqueeze(1)

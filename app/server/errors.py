@@ -71,6 +71,12 @@ class InsufficientMemoryError(MatricxonError):
     status_code = 503
 
 
+class DeviceUnavailableError(MatricxonError):
+    """`MATRICXON_DEVICE` names a device this machine doesn't have, or the model can't run on it."""
+
+    status_code = 503
+
+
 class ErrorHandlerRegistrar:
     """Wires the MatricxonError hierarchy into FastAPI's exception handling."""
 

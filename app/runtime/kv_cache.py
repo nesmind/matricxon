@@ -32,15 +32,17 @@ class KVCache:
         layer_shapes: list[tuple[int, int]],
         max_seq_len: int,
         dtype: torch.dtype = torch.float32,
+        device: torch.device | str = "cpu",
     ) -> None:
         self._k = [
-            torch.zeros((1, n_head_kv, max_seq_len, head_dim), dtype=dtype)
+            torch.zeros((1, n_head_kv, max_seq_len, head_dim), dtype=dtype, device=device)
             for n_head_kv, head_dim in layer_shapes
         ]
         self._v = [
-            torch.zeros((1, n_head_kv, max_seq_len, head_dim), dtype=dtype)
+            torch.zeros((1, n_head_kv, max_seq_len, head_dim), dtype=dtype, device=device)
             for n_head_kv, head_dim in layer_shapes
         ]
+        self._device = torch.device(device)
         self._layer_shapes = list(layer_shapes)
         self._dtype = dtype
         self._max_seq_len = max_seq_len
@@ -49,6 +51,10 @@ class KVCache:
     @property
     def length(self) -> int:
         return self._length
+
+    @property
+    def device(self) -> torch.device:
+        return self._device
 
     def update(
         self, layer_idx: int, k: torch.Tensor, v: torch.Tensor
@@ -85,7 +91,7 @@ class KVCache:
         build on a shared prefix without destroying the first one's cache."""
         if not 0 <= length <= self._length:
             raise ValueError(f"can't fork a cache of length {self._length} at {length}")
-        forked = KVCache(self._layer_shapes, self._max_seq_len, self._dtype)
+        forked = KVCache(self._layer_shapes, self._max_seq_len, self._dtype, self._device)
         for src, dst in ((self._k, forked._k), (self._v, forked._v)):
             for layer_src, layer_dst in zip(src, dst, strict=True):
                 layer_dst[:, :, :length, :] = layer_src[:, :, :length, :]

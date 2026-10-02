@@ -12,15 +12,17 @@ from app.runtime.kv_cache import KVCache
 logger = logging.getLogger(__name__)
 
 
-def _causal_mask(q_len: int, kv_len: int, cache_offset: int) -> torch.Tensor:
+def _causal_mask(
+    q_len: int, kv_len: int, cache_offset: int, device: torch.device | None = None
+) -> torch.Tensor:
     """query i (local index) may attend to key j iff j <= i + cache_offset -
     i.e. its own absolute position and everything before it. `cache_offset=0`
     and `q_len == kv_len` reduces to plain causal masking (prefill); a
     one-token decode step (`q_len=1`) attends to the whole existing cache
     plus itself.
     """
-    q_idx = torch.arange(q_len).unsqueeze(1)
-    kv_idx = torch.arange(kv_len).unsqueeze(0)
+    q_idx = torch.arange(q_len, device=device).unsqueeze(1)
+    kv_idx = torch.arange(kv_len, device=device).unsqueeze(0)
     return kv_idx <= (q_idx + cache_offset)
 
 
@@ -78,7 +80,7 @@ class GroupedQueryAttention(nn.Module):
         # laptop: at a 200-token context that copy cost ~90 ms per generated token over 28
         # layers, vs ~7 ms without it; the gap grows with the conversation).
         if kv_cache is not None:
-            mask = _causal_mask(seq_len, k.shape[-2], cache_offset)
+            mask = _causal_mask(seq_len, k.shape[-2], cache_offset, q.device)
             out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, enable_gqa=True)
         else:
             out = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True)

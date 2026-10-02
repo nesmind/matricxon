@@ -28,6 +28,7 @@ class BertArchitecture(ModelArchitecture):
     """
 
     NAME = "bert"
+    SUPPORTS_GPU = True
 
     def __init__(self, metadata: GGUFMetadata, dtype: torch.dtype = torch.float32) -> None:
         super().__init__()

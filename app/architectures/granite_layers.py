@@ -7,9 +7,11 @@ from app.architectures.rope import apply_rotary_pos_emb
 from app.runtime.kv_cache import KVCache
 
 
-def _causal_mask(q_len: int, kv_len: int, cache_offset: int) -> torch.Tensor:
-    q_idx = torch.arange(q_len).unsqueeze(1)
-    kv_idx = torch.arange(kv_len).unsqueeze(0)
+def _causal_mask(
+    q_len: int, kv_len: int, cache_offset: int, device: torch.device | None = None
+) -> torch.Tensor:
+    q_idx = torch.arange(q_len, device=device).unsqueeze(1)
+    kv_idx = torch.arange(kv_len, device=device).unsqueeze(0)
     return kv_idx <= (q_idx + cache_offset)
 
 
@@ -74,7 +76,7 @@ class GraniteAttention(nn.Module):
         # laptop: at a 200-token context that copy cost ~90 ms per generated token over 28
         # layers, vs ~7 ms without it; the gap grows with the conversation).
         if kv_cache is not None:
-            mask = _causal_mask(seq_len, k.shape[-2], cache_offset)
+            mask = _causal_mask(seq_len, k.shape[-2], cache_offset, q.device)
             out = F.scaled_dot_product_attention(
                 q, k, v, attn_mask=mask, scale=self.attention_scale, enable_gqa=True
             )

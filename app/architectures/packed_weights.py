@@ -9,16 +9,29 @@ app/architectures/base.py, which every architecture's `ModelArchitecture` inheri
 import torch
 from torch import nn
 
+from app.architectures.device_packed import (
+    DevicePackedEmbedding,
+    DevicePackedLinear,
+    upload_packed,
+)
 from app.architectures.layers import unpermute_rope_rows
 from app.architectures.quantized_embedding import QuantizedEmbedding
 from app.architectures.quantized_linear import QuantizedLinear
 from app.gguf.dequant.quantized_gemv_registry import has_gemv_kernel
+from app.gguf.dequant.torch_dequant import TorchDequantizer
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.packed_rows import PackedRows
+
+# Either packed token-embedding table (CPU kernels / on-device torch); both have `as_linear`.
+PACKED_EMBEDDINGS = (QuantizedEmbedding, DevicePackedEmbedding)
 
 
 class PackedWeightLoading:
     _quantized_loader: GGUFModelLoader | None
+    # From DevicePlacement: `_device_packed` is True with `gpu_weight_mode="packed"` - supported
+    # quant types are then uploaded still packed (`DevicePackedLinear`).
+    _device_packed: bool
+    device: torch.device
 
     def _mark_quantized_native_used(self, loader: GGUFModelLoader) -> None:
         """Called once by `_materialize_weights` (idempotent - a real per-layer loop calls this
@@ -58,7 +71,17 @@ class PackedWeightLoading:
         path it reorders whole packed rows (a copy of just that tensor, still quantized) instead
         of forcing the tensor onto the float path, as it had to before.
         """
-        if enabled:
+        if enabled and self._device_packed:
+            raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
+            if TorchDequantizer.supports(ggml_type):
+                out_features, in_features = shape
+                if rope_heads is not None:
+                    order = unpermute_rope_rows(torch.arange(out_features), rope_heads)
+                    raw = PackedRows(raw, out_features).reordered(order)
+                bias = loader.load_tensor(bias_tensor_name) if bias_tensor_name else None
+                packed = upload_packed(raw, out_features, self.device)
+                return DevicePackedLinear(packed, in_features, ggml_type, bias, dtype)
+        elif enabled:
             raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
             if has_gemv_kernel(ggml_type):
                 self._mark_quantized_native_used(loader)
@@ -90,7 +113,12 @@ class PackedWeightLoading:
         kernel (the same rule `_load_projection` uses, so a tied lm_head built from it via
         `QuantizedEmbedding.as_linear()` is always supported too); otherwise `target` with the
         dequantized table copied in, exactly as before."""
-        if enabled:
+        if enabled and self._device_packed:
+            raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
+            if TorchDequantizer.supports(ggml_type):
+                packed = upload_packed(raw, shape[0], self.device)
+                return DevicePackedEmbedding(packed, shape[1], ggml_type, dtype)
+        elif enabled:
             raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
             if has_gemv_kernel(ggml_type):
                 self._mark_quantized_native_used(loader)

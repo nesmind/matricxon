@@ -29,8 +29,10 @@ from collections.abc import Callable
 import torch
 from torch import nn
 
+from app.architectures.device_packed import DevicePackedLinear, upload_packed
 from app.architectures.quantized_linear import QuantizedLinear
 from app.gguf.dequant.quantized_gemv_registry import has_gemv_kernel
+from app.gguf.dequant.torch_dequant import TorchDequantizer
 from app.gguf.loader import GGUFModelLoader
 
 
@@ -58,6 +60,15 @@ class QuantizedMoEExperts(nn.Module):
         self.gate_packed = nn.ModuleDict()
         self.up_packed = nn.ModuleDict()
         self.down_packed = nn.ModuleDict()
+        # Set by `DevicePlacement.place_on` in packed-GPU mode: experts then upload still packed.
+        self.pack_device: torch.device | None = None
+
+    def deferred_params(self) -> list[nn.Parameter]:
+        """The big dense placeholders `place_on` must not allocate on the device up front."""
+        return [self.gate_exps, self.up_exps, self.down_exps]
+
+    def use_device_packing(self, device: torch.device) -> None:
+        self.pack_device = device
 
     def _project(
         self, packed: nn.ModuleDict, dense: nn.Parameter, expert_id: int, x: torch.Tensor
@@ -74,7 +85,7 @@ class QuantizedMoEExperts(nn.Module):
         - the router's own output, in whatever real order/normalization that architecture's own
         router produces (this class doesn't care, it only ever reads the values it's handed)."""
         n_tokens, n_embd = x.shape
-        out = torch.zeros(n_tokens, n_embd, dtype=torch.float32)
+        out = torch.zeros(n_tokens, n_embd, dtype=torch.float32, device=x.device)
         for expert_id in top_k_idx.unique().tolist():
             token_idx, k_idx = (top_k_idx == expert_id).nonzero(as_tuple=True)
             x_e = x.index_select(0, token_idx)
@@ -101,7 +112,23 @@ def _materialize_one(
     eager `.copy_()`. Returns whether it packed (the caller only needs to keep this loader's mmap
     open past materialization - see `_mark_quantized_native_used` - if at least one real tensor
     actually did)."""
-    if enabled:
+    if enabled and experts.pack_device is not None:
+        raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
+        if TorchDequantizer.supports(ggml_type):
+            num_experts, out_features, in_features = shape
+            per_expert_bytes = len(raw) // num_experts
+            packed = getattr(experts, packed_attr)
+            for expert_id in range(num_experts):
+                start = expert_id * per_expert_bytes
+                rows = upload_packed(
+                    raw[start : start + per_expert_bytes], out_features, experts.pack_device
+                )
+                packed[str(expert_id)] = DevicePackedLinear(
+                    rows, in_features, ggml_type, None, dtype
+                )
+            setattr(experts, dense_attr, nn.Parameter(torch.empty(0, dtype=dtype)))
+            return False  # bytes were copied to the device: the mmap need not stay open
+    elif enabled:
         raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
         if has_gemv_kernel(ggml_type):
             num_experts, out_features, in_features = shape

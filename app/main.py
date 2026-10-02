@@ -26,7 +26,8 @@ from app.routers import (
     tags_router,
     version_router,
 )
-from app.server.errors import ErrorHandlerRegistrar
+from app.runtime.compute_device import ComputeDevice
+from app.server.errors import DeviceUnavailableError, ErrorHandlerRegistrar
 from app.server.pidfile import PidFile
 
 # Maps Settings.log_level (0-2, see its own docstring) onto Python's stdlib `logging` levels -
@@ -99,6 +100,21 @@ class MatricxonApp:
         finally:
             self._pid_file.remove()
 
+    @staticmethod
+    def require_device() -> None:
+        """Exits with a one-line log message (no traceback) when MATRICXON_DEVICE names a GPU that
+        isn't there - checked at import, before the server starts, not on the first request."""
+        log = logging.getLogger(__name__)
+        try:
+            device = ComputeDevice.resolve(settings.device)
+        except DeviceUnavailableError as error:
+            log.critical("matricxon cannot start: %s", error.message)
+            raise SystemExit(1) from None
+        if device.is_gpu:
+            log.warning(
+                "experimental GPU mode on %s (weights: %s)", device.name, settings.gpu_weight_mode
+            )
+
     def build(self) -> FastAPI:
         app = FastAPI(title="matricxon", lifespan=self._lifespan)
         for router in self.ROUTERS:
@@ -107,4 +123,6 @@ class MatricxonApp:
         return app
 
 
-app = MatricxonApp().build()
+_matricxon = MatricxonApp()
+_matricxon.require_device()
+app = _matricxon.build()
