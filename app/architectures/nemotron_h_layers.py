@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from app.architectures.fused_attention import fused_cached_attention
 from app.architectures.layers import RMSNorm
 from app.architectures.nemotron_h_mamba2 import NemotronHMamba2Mixer
 from app.gguf.loader import GGUFModelLoader
@@ -66,8 +67,10 @@ class NemotronHAttention(nn.Module):
         # laptop: at a 200-token context that copy cost ~90 ms per generated token over 28
         # layers, vs ~7 ms without it; the gap grows with the conversation).
         if hybrid_cache is not None:
-            mask = _causal_mask(seq_len, k.shape[-2], cache_offset, q.device)
-            out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, enable_gqa=True)
+            out = fused_cached_attention(q, k, v, cache_offset)
+            if out is None:
+                mask = _causal_mask(seq_len, k.shape[-2], cache_offset, q.device)
+                out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, enable_gqa=True)
         else:
             out = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True)
         out = out.transpose(1, 2).reshape(batch, seq_len, self.n_head * self.head_dim)

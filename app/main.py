@@ -8,6 +8,7 @@ import torch
 from fastapi import FastAPI
 
 from app.config import settings
+from app.native.fused_ops import FusedOps
 from app.native.gemm import NativeGemm
 from app.routers import (
     capabilities_router,
@@ -91,6 +92,7 @@ class MatricxonApp:
         torch.backends.nnpack.set_flags(False)
         # See Settings.gemv_backend - a no-op unless "native"; a failed build only logs a warning.
         NativeGemm.configure(settings.gemv_backend, settings.torch_threads)
+        FusedOps.configure(settings.enable_fused_ops)
 
     @asynccontextmanager
     async def _lifespan(self, _app: FastAPI) -> AsyncIterator[None]:

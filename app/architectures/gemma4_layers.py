@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from app.architectures.fused_attention import fused_cached_attention
 from app.architectures.layers import RMSNorm
 from app.architectures.rope import apply_rotary_pos_emb
 from app.runtime.kv_cache import KVCache
@@ -154,10 +155,14 @@ class Gemma4Attention(nn.Module):
         # laptop: at a 200-token context that copy cost ~90 ms per generated token over 28
         # layers, vs ~7 ms without it; the gap grows with the conversation).
         if kv_cache is not None or self.sliding_window is not None:
-            mask = _causal_mask(seq_len, k.shape[-2], cache_offset, self.sliding_window, q.device)
-            out = F.scaled_dot_product_attention(
-                q, k, v, attn_mask=mask, scale=1.0, enable_gqa=True
-            )
+            out = fused_cached_attention(q, k, v, cache_offset, 1.0, self.sliding_window)
+            if out is None:
+                mask = _causal_mask(
+                    seq_len, k.shape[-2], cache_offset, self.sliding_window, q.device
+                )
+                out = F.scaled_dot_product_attention(
+                    q, k, v, attn_mask=mask, scale=1.0, enable_gqa=True
+                )
         else:
             out = F.scaled_dot_product_attention(
                 q, k, v, is_causal=True, scale=1.0, enable_gqa=True

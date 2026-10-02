@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     # "cpu" (default) or "cuda"/"cuda:N" - EXPERIMENTAL GPU mode (dense architectures marked
     # `SUPPORTS_GPU`, weights in bf16/fp16, never quantized-native). A GPU that isn't there fails
     # the first model load with an error instead of silently running on the CPU.
+    # One native call instead of several torch dispatches for the per-layer RMSNorm, rotary
+    # embedding and decode-step attention, and for the sampler (top-k/top-p/softmax/draw) - see
+    # app/native/fused_ops.py. C kernels with gemv_backend "native", their Numba twins otherwise.
+    # Seeded sampling stays reproducible, but draws a different token stream than the torch path.
+    enable_fused_ops: bool = True
+
     device: str = "cpu"
     # How a GPU holds quantized weights (only with `device` = cuda): "dequantized" (default) keeps
     # every weight in bf16/fp16 - fastest, ~2 bytes of VRAM per parameter; "packed" keeps supported

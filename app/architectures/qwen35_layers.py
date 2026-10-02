@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from app.architectures.fused_attention import fused_cached_attention
 from app.architectures.layers import RMSNorm, SwiGLUMLP
 from app.architectures.qwen35_deltanet import Qwen35GatedDeltaNet
 from app.architectures.qwen_layers import _causal_mask
@@ -62,8 +63,10 @@ class Qwen35Attention(nn.Module):
             cache_offset = hybrid_cache.length
             k, v = hybrid_cache.update_attention(layer_idx, k, v)
             k, v = k.to(q.dtype), v.to(q.dtype)
-            mask = _causal_mask(seq_len, k.shape[-2], cache_offset, q.device)
-            out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, enable_gqa=True)
+            out = fused_cached_attention(q, k, v, cache_offset)
+            if out is None:
+                mask = _causal_mask(seq_len, k.shape[-2], cache_offset, q.device)
+                out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, enable_gqa=True)
         else:
             out = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True)
         out = out.transpose(1, 2) * torch.sigmoid(gate)

@@ -3,6 +3,7 @@ import time
 
 import torch
 
+from app.native.fused_ops import FusedOps
 from app.runtime.generation_request import SamplingConfig
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ class Sampler:
     """
 
     def __init__(self, sampling: SamplingConfig) -> None:
+        self._sampling = sampling
         self._repetition_penalty = RepetitionPenaltyFilter(sampling.repeat_penalty)
         self._temperature = TemperatureScaler(sampling.temperature)
         self._top_k = TopKFilter(sampling.top_k)
@@ -97,6 +99,16 @@ class Sampler:
     def sample(self, logits: torch.Tensor, generated_ids: list[int]) -> int:
         stage_started = time.monotonic()
         logits = logits.to(torch.float32)
+        ops = FusedOps.active()
+        if ops is not None and ops.can_sample(logits, self._sampling):
+            u = float(torch.rand((), generator=self._generator))
+            token_id = ops.sample(logits, generated_ids, self._sampling, u)
+            logger.debug(
+                "picking next word: fused sample -> token %d in %.2fms",
+                token_id,
+                (time.monotonic() - stage_started) * 1000,
+            )
+            return token_id
         logits = self._repetition_penalty.apply(logits, generated_ids)
 
         if self._temperature.is_greedy:

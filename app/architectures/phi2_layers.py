@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from app.architectures.fused_attention import fused_cached_attention
 from app.architectures.rope import apply_rotary_pos_emb_partial
 from app.runtime.kv_cache import KVCache
 
@@ -81,8 +82,10 @@ class Phi2Attention(nn.Module):
             cache_offset = 0
 
         if kv_cache is not None:
-            mask = _causal_mask(seq_len, k.shape[-2], cache_offset, q.device)
-            out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+            out = fused_cached_attention(q, k, v, cache_offset)
+            if out is None:
+                mask = _causal_mask(seq_len, k.shape[-2], cache_offset, q.device)
+                out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
         else:
             out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         out = out.transpose(1, 2).reshape(batch, seq_len, self.n_head * self.head_dim)

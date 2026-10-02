@@ -2,7 +2,7 @@
   <img src="assets/matricxon-logo.svg" alt="Matricxon - LLM inference runtime" width="460">
 </h1>
 
-A small, readable LLM inference runtime written from scratch in Python and PyTorch (C is used for the dequantization stages, for speed). It runs GGUF models locally - chat and text generation, embeddings, and vision-language
+A small, readable LLM inference runtime written from scratch in Python and PyTorch (optionally native C kernels are used for the dequantization stages and various forward-pass steps, for speed). It runs GGUF models locally - chat and text generation, embeddings, and vision-language
 models - and serves them through an HTTP API, so tools like [pAIring](https://github.com/nesmind/pairing) can use all of its features.
 
 The project started as part of the pAIring UI. We ran into limited advanced configuration options when working with Ollama, such as advanced memory management (for concurrent workloads) and others. We also made some important improvements to various inference stages, and everything is managed from the advanced pAIring UI, where Matricxon is the main inference engine.
@@ -58,6 +58,11 @@ raw integer types, which fail with a clear error.
 - **Quantized-native compute.** Weights stay packed in the memory-mapped file and are multiplied
   directly, with no full dequantized copy in RAM. A native C kernel (OpenMP threads) is the
   default; the Numba kernels are the fallback when there is no C compiler.
+- **GPU (experimental).** Set `MATRICXON_DEVICE=cuda` to run on an NVIDIA GPU, with weights in
+  bf16/fp16 (or, with `MATRICXON_GPU_WEIGHT_MODE=packed`, kept quantized in VRAM to save memory at
+  some speed cost). Works for the dense, mixture-of-experts and hybrid architectures listed above,
+  and refuses to start with a clear error if no GPU is found (it never silently uses the CPU). Treat it as
+  beta for now; the C kernels are CPU-only.
 - **Lazy loading.** Loading a model only builds its structure; weight data is read on first use.
 - **Hybrid models.** Linear-attention and state-space layers keep a
   fixed-size recurrent state instead of a growing KV cache.
@@ -140,6 +145,9 @@ variables win). All of them are listed in `app/config.py`.
 | `MATRICXON_ENABLE_QUANTIZED_NATIVE_COMPUTE` | `true` | Multiply packed weights directly |
 | `MATRICXON_GEMV_BACKEND` | `native` | `native` (C kernels) or `numba` |
 | `MATRICXON_TORCH_THREADS` | all cores | CPU threads; fewer runs cooler |
+| `MATRICXON_DEVICE` | `cpu` | `cpu` or `cuda` / `cuda:N` (experimental GPU mode) |
+| `MATRICXON_GPU_WEIGHT_MODE` | `dequantized` | On a GPU: `dequantized` (fast, more VRAM) or `packed` (less VRAM, slower) |
+| `MATRICXON_ENABLE_FUSED_OPS` | `true` | One native call for RMSNorm, RoPE, decode attention and sampling |
 | `MATRICXON_MAX_DECODE_BATCH` | `8` | Replies that run at once per model |
 | `MATRICXON_PROMPT_CACHE_SLOTS` | `4` | Conversations cached per model |
 | `MATRICXON_PROMPT_CACHE_BUDGET_MB` | `2048` | Memory those caches may use together |

@@ -84,6 +84,14 @@ class NativeGemm:
     def active(cls) -> "NativeGemm | None":
         return cls._active
 
+    @property
+    def library(self) -> ctypes.CDLL:
+        return self._lib
+
+    @property
+    def n_threads(self) -> int:
+        return self._n_threads
+
     def supports(self, ggml_type: int, in_features: int) -> bool:
         supported = bool(self._lib.mx_supports(int(ggml_type), in_features))
         if not supported and int(ggml_type) not in self._fallback_types_logged:

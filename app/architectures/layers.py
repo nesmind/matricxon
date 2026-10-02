@@ -2,6 +2,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from app.native.fused_ops import FusedOps
+
 
 def unpermute_rope_rows(weight: torch.Tensor, n_head: int) -> torch.Tensor:
     """Reverses the row permutation llama.cpp's HF->GGUF converter applies to
@@ -79,6 +81,10 @@ class RMSNorm(nn.Module):
         self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        ops = FusedOps.active()
+        fused = ops.rms_norm(x, self.weight, self.eps) if ops is not None else None
+        if fused is not None:
+            return fused
         input_dtype = x.dtype
         x = x.to(torch.float32)
         variance = x.pow(2).mean(dim=-1, keepdim=True)

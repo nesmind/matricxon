@@ -3,6 +3,8 @@ import math
 import torch
 from torch import nn
 
+from app.native.fused_ops import FusedOps
+
 
 class RotaryEmbedding(nn.Module):
     """Plain (unscaled) rotary position embedding: `inv_freq = 1/theta^(2i/dim)`,
@@ -151,6 +153,10 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 def apply_rotary_pos_emb(
     q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    ops = FusedOps.active()
+    fused = ops.rope(q, k, cos, sin) if ops is not None else None
+    if fused is not None:
+        return fused
     if cos.dim() == 3:  # batched decode: one position per sequence, (B, 1, dim) -> (B, 1, 1, dim)
         cos, sin = cos.unsqueeze(1), sin.unsqueeze(1)
     else:
