@@ -69,6 +69,9 @@ raw integer types, which fail with a clear error.
 - **Prompt cache.** Each model keeps several conversations' caches, so users sharing a model don't
   make each other re-read their whole history. A new prompt reuses the cache that shares its
   longest prefix; if it doesn't continue that conversation, it copies just the shared part.
+- **Persistent cache.** Caches evicted from RAM, or still held when a model unloads or the server
+  stops, are saved to disk (AES-encrypted), so returning to a chat doesn't re-read it. Some useful limits are configurable, either from the
+  pAIring UI (via `/api/cache/persistence`) or with Matricxon start variables.
 - **Concurrent users.** Replies on one model run side by side. A scheduler advances every active
   reply, and for most architectures their decode steps are batched into one forward pass.
   Batching helps most on memory-bandwidth-bound hardware; on a compute-bound CPU its main effect
@@ -92,8 +95,9 @@ raw integer types, which fail with a clear error.
 | `DELETE /api/delete`, `POST /api/copy`, `POST /api/create` | Remove, duplicate, re-tag (`create` supports only `FROM <tag>`) |
 | `GET /api/health` | Matricxon-only: supported architectures, quantizations, MoE and vision lists |
 | `GET /api/version` | Version string |
+| `GET`/`PUT`/`DELETE /api/cache/persistence` | Matricxon-only: show, change (`enabled`, `budget_mb`, `ttl_hours`) or empty the on-disk chat cache; no auth of its own |
 
-Pulling resolves only `hf.co/<repo>:<file>` tags; A generated `tool_calls` field is not parsed back out of
+Pulling resolves only `hf.co/<repo>:<file>` tags; a generated `tool_calls` field is not parsed back out of
 the model's text yet.
 
 ## Setup
@@ -151,6 +155,11 @@ variables win). All of them are listed in `app/config.py`.
 | `MATRICXON_MAX_DECODE_BATCH` | `8` | Replies that run at once per model |
 | `MATRICXON_PROMPT_CACHE_SLOTS` | `4` | Conversations cached per model |
 | `MATRICXON_PROMPT_CACHE_BUDGET_MB` | `2048` | Memory those caches may use together |
+| `MATRICXON_PERSIST_PROMPT_CACHE` | `true` | Keep chat caches on disk (first-run default; runtime changes are saved in `prompt_cache_policy.json`) |
+| `MATRICXON_PERSIST_CACHE_BUDGET_MB` | `4096` | Disk space for saved caches |
+| `MATRICXON_PERSIST_CACHE_TTL_HOURS` | `168` | Hours before a saved cache expires |
+| `MATRICXON_PROMPT_CACHE_DIR` | `./data/prompt_cache` | Where saved caches and the generated `prompt_cache.key` live |
+| `MATRICXON_CACHE_KEY` | generated | Encryption key; set it to supply your own instead of the generated file |
 | `MATRICXON_LOG_LEVEL` | `0` | `0` warnings, `1` per-request steps, `2` per-layer trace |
 
 ## Testing
