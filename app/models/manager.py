@@ -21,6 +21,8 @@ from app.models.memory_guard import ensure_enough_memory_to_load
 from app.models.tokenizer_dispatch import build_tokenizer
 from app.models.worker import ModelWorker
 from app.runtime.batch_decode import BatchDecoder
+from app.runtime.cache_store import PersistentCacheStore
+from app.runtime.cache_tier import ModelCacheTier
 from app.runtime.chat_stop_tokens import extra_eos_token_ids
 from app.runtime.chat_template import PromptBuilderFactory
 from app.runtime.compute_device import ComputeDevice
@@ -74,10 +76,12 @@ class ModelManager:
         max_decode_batch: int = 8,
         device: str = "cpu",
         gpu_weight_mode: str = "dequantized",
+        cache_store: PersistentCacheStore | None = None,
     ) -> None:
         # Raises DeviceUnavailableError for a GPU that isn't there (never a silent CPU fallback).
         self._device = ComputeDevice.resolve(device)
         self._gpu_weight_mode = gpu_weight_mode
+        self._cache_store = cache_store
         self._catalog = catalog
         self._max_loaded = max_loaded
         self._default_keep_alive_seconds = default_keep_alive_seconds
@@ -184,9 +188,23 @@ class ModelManager:
         if handle is not None:
             handle.worker.request_stop()
             handle.worker.wait_until_idle()
-            handle.architecture.close()
+            self._retire(handle)
         else:
             self._cancelled_loads.add(tag)
+
+    def _retire(self, handle: ModelHandle) -> None:
+        """Drops a handle for good: its idle cached conversations go to the disk tier first (a
+        background write - the slots are independent of the weights closed right after)."""
+        handle.prompt_cache.persist_all()
+        handle.architecture.close()
+
+    def shutdown(self) -> None:
+        """Server stop: halts every reply, saves every model's cached conversations to disk and
+        waits for the writes - what lets a restart keep long chats cheap to resume."""
+        for tag in list(self._handles):
+            self.unload(tag)
+        if self._cache_store is not None:
+            self._cache_store.flush()
 
     def _cache_budget_bytes(self, on_gpu: bool, free_before_load: int, weight_bytes: int) -> int:
         """Prompt-cache budget. On a GPU the cached KV lives in VRAM next to the weights, so it is
@@ -227,7 +245,7 @@ class ModelManager:
             for tag, handle in self._handles.items()
             if handle.is_expired(now) and not handle.worker.is_busy()
         ]:
-            self._handles.pop(tag).architecture.close()
+            self._retire(self._handles.pop(tag))
 
     def _evict_least_recently_used(self) -> None:
         # Same "never evict a busy handle" rule as _evict_expired above - if every currently-loaded
@@ -239,7 +257,7 @@ class ModelManager:
         if not idle:
             return
         lru_tag = min(idle, key=lambda tag: idle[tag].last_used_at)
-        self._handles.pop(lru_tag).architecture.close()
+        self._retire(self._handles.pop(lru_tag))
 
     def _load(self, tag: str, keep_alive_seconds: int | None, now: float) -> ModelHandle:
         installed = self._catalog.get(tag)
@@ -367,5 +385,8 @@ class ModelManager:
             prompt_cache=PromptCache(
                 self._prompt_cache_slots,
                 self._cache_budget_bytes(on_gpu, free_before_load, real_bytes_needed),
+                ModelCacheTier(self._cache_store, f"{tag}|{installed.size_bytes}")
+                if self._cache_store is not None
+                else None,
             ),
         )

@@ -3,6 +3,9 @@ from functools import lru_cache
 from app.config import settings
 from app.models.catalog import ModelCatalog
 from app.models.manager import ModelManager
+from app.runtime.cache_crypto import CacheKeyStore
+from app.runtime.cache_policy import PersistencePolicy
+from app.runtime.cache_store import PersistentCacheStore
 
 
 @lru_cache
@@ -11,9 +14,23 @@ def get_model_catalog() -> ModelCatalog:
 
 
 @lru_cache
+def get_cache_store() -> PersistentCacheStore:
+    state_dir = settings.prompt_cache_dir.parent
+    policy = PersistencePolicy.load(
+        state_dir / "prompt_cache_policy.json",
+        settings.persist_prompt_cache,
+        settings.persist_cache_budget_mb,
+        settings.persist_cache_ttl_hours,
+    )
+    cipher = CacheKeyStore(state_dir / "prompt_cache.key", settings.cache_key).load()
+    return PersistentCacheStore(settings.prompt_cache_dir, cipher, policy)
+
+
+@lru_cache
 def get_model_manager() -> ModelManager:
     return ModelManager(
         get_model_catalog(),
+        cache_store=get_cache_store(),
         max_loaded=settings.max_loaded_models,
         default_keep_alive_seconds=settings.default_keep_alive_seconds,
         memory_safety_margin=settings.memory_safety_margin,

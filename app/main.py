@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -8,9 +9,11 @@ import torch
 from fastapi import FastAPI
 
 from app.config import settings
+from app.dependencies import get_model_manager
 from app.native.fused_ops import FusedOps
 from app.native.gemm import NativeGemm
 from app.routers import (
+    cache_persistence_router,
     capabilities_router,
     chat_router,
     copy_router,
@@ -56,6 +59,7 @@ class MatricxonApp:
         push_router.router,
         health_router.router,
         capabilities_router.router,
+        cache_persistence_router.router,
     )
 
     def __init__(self) -> None:
@@ -100,6 +104,7 @@ class MatricxonApp:
         try:
             yield
         finally:
+            await asyncio.to_thread(get_model_manager().shutdown)
             self._pid_file.remove()
 
     @staticmethod

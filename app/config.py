@@ -36,6 +36,17 @@ class Settings(BaseSettings):
     # conversation is always kept. Raise both on a machine with spare RAM and many concurrent chats.
     prompt_cache_slots: int = Field(default=4, ge=1, le=64)
     prompt_cache_budget_mb: int = Field(default=2048, ge=64)
+    # Encrypted on-disk tier below the RAM pool above (see PersistentCacheStore): conversations
+    # evicted from RAM, or still cached when a model unloads / the server stops, are kept here so
+    # coming back to a chat does not re-read all of it. These three are only the first-run defaults:
+    # an admin can change them at runtime (GET/PUT /api/cache/persistence), saved in
+    # `prompt_cache_policy.json` next to the cache directory. The AES key is generated once into
+    # `prompt_cache.key` there (0600), or taken from MATRICXON_CACHE_KEY if set.
+    persist_prompt_cache: bool = True
+    persist_cache_budget_mb: int = Field(default=4096, ge=0)
+    persist_cache_ttl_hours: int = Field(default=168, ge=1)
+    prompt_cache_dir: Path = Path("./data/prompt_cache")
+    cache_key: str | None = None
     # Replies that run at the same time on one loaded model, and the most whose decode steps are
     # batched into a single forward pass (see ModelWorker / BatchDecoder). More concurrent users
     # than this wait in line. Batching helps once the native C kernels run the packed weights.

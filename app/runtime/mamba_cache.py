@@ -128,3 +128,13 @@ class NemotronHHybridCache:
         """Memory held: the attention KV plus the live recurrent state."""
         states = (*self.conv_state, *self.ssm_state)
         return self._kv_cache.nbytes() + sum(t.numel() * t.element_size() for t in states)
+
+    def export(self, length: int) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        """The attention KV's first `length` positions (see `KVCache.export`). The recurrent state
+        is not part of this: it is only meaningful as a `HybridSnapshot`."""
+        return self._kv_cache.export(length)
+
+    def load(self, keys: list[torch.Tensor], values: list[torch.Tensor]) -> None:
+        """Fills the attention KV from `export()` output; the recurrent state stays zero until a
+        snapshot is restored into it (`restore`), which is the only way a saved cache is used."""
+        self._kv_cache.load(keys, values)

@@ -1,64 +1,10 @@
-from dataclasses import dataclass, field
-
 import torch
 
 from app.architectures.base import ModelArchitecture
+from app.runtime.cache_tier import ModelCacheTier
 from app.runtime.kv_cache import KVCache
-from app.runtime.mamba_cache import HybridSnapshot, NemotronHHybridCache
-
-
-@dataclass
-class _Slot:
-    """One cached conversation: its cache, the exact token ids that cache holds (positions
-    0..len-1), and - for a hybrid cache - the recurrent-state snapshots it can be rewound to."""
-
-    cache: KVCache | NemotronHHybridCache
-    key: tuple[int, torch.dtype]
-    token_ids: list[int] = field(default_factory=list)
-    snapshots: dict[int, HybridSnapshot] = field(default_factory=dict)
-    last_used: int = 0
-    prompt_len: int = 0  # length of the prompt this slot was last prefilled for
-    in_use: bool = False  # a reply is running on this slot's cache right now
-
-    @property
-    def hybrid(self) -> bool:
-        return isinstance(self.cache, NemotronHHybridCache)
-
-    def match(self, prompt_ids: list[int]) -> tuple[int, int]:
-        """(common, reusable): how many leading prompt tokens equal this slot's tokens, and how
-        many of them it can supply without recomputing. At least the prompt's last token is always
-        recomputed (its logits start the reply). A plain KV cache can be cut back to any length; a
-        hybrid one only to a recurrent-state snapshot."""
-        common = 0
-        for cached, new in zip(self.token_ids, prompt_ids, strict=False):
-            if cached != new:
-                break
-            common += 1
-        common = min(common, len(prompt_ids) - 1)
-        if not self.hybrid:
-            return common, common
-        return common, max((pos for pos in self.snapshots if pos <= common), default=0)
-
-    def nbytes(self) -> int:
-        return self.cache.nbytes() + sum(s.nbytes() for s in self.snapshots.values())
-
-    def rewind(self, n: int) -> None:
-        """Cuts this slot back to its first `n` tokens, in place."""
-        if self.hybrid:
-            self.cache.restore(self.snapshots[n])
-            self.snapshots = {p: s for p, s in self.snapshots.items() if p <= n}
-        else:
-            self.cache.truncate(n)
-        del self.token_ids[n:]
-
-    def fork(self, n: int) -> "_Slot":
-        """A new slot holding a copy of the first `n` tokens; this slot is left untouched."""
-        if self.hybrid:
-            cache = self.cache.fork_from(self.snapshots[n])
-        else:
-            cache = self.cache.fork(n)
-        snapshots = {p: s for p, s in self.snapshots.items() if p <= n}
-        return _Slot(cache, self.key, self.token_ids[:n], snapshots, prompt_len=self.prompt_len)
+from app.runtime.mamba_cache import NemotronHHybridCache
+from app.runtime.prompt_slot import CacheSlot
 
 
 class PromptCache:
@@ -73,7 +19,7 @@ class PromptCache:
     that re-tokenizes differently just ends the match early instead of reusing anything wrong -
     and takes the slot sharing the longest prefix. If using it would throw away cached tokens
     another conversation might still need (it only shares a prefix, or the tail differs) and there
-    is room, the shared prefix is copied into a new slot instead (`_Slot.fork` - a memory copy,
+    is room, the shared prefix is copied into a new slot instead (`CacheSlot.fork` - a memory copy,
     far cheaper than recomputing); with no room it is reused in place.
 
     A plain `KVCache` can be cut back to any prefix length. A hybrid cache (`NemotronHHybridCache`:
@@ -105,10 +51,16 @@ class PromptCache:
     #: differently once the reply is in the history, e.g. Qwen's empty thinking block).
     CONTINUATION_TAIL_TOKENS = 16
 
-    def __init__(self, max_slots: int = 4, budget_bytes: int = 2 << 30) -> None:
+    def __init__(
+        self,
+        max_slots: int = 4,
+        budget_bytes: int = 2 << 30,
+        tier: ModelCacheTier | None = None,
+    ) -> None:
         self._max_slots = max(1, max_slots)
         self._budget_bytes = budget_bytes
-        self._slots: list[_Slot] = []
+        self._tier = tier  # the encrypted disk tier below this pool, if enabled
+        self._slots: list[CacheSlot] = []
         self._tick = 0
         self.reused_tokens = 0
 
@@ -129,6 +81,11 @@ class PromptCache:
         self.reused_tokens = 0
         if reusable:
             best, common, n = self._best_slot(prompt_ids, key)
+            if self._tier is not None:
+                restored = self._tier.restore(architecture, prompt_ids, num_ctx, dtype, n)
+                if restored is not None:  # a stored conversation beats what RAM had
+                    self._add(restored)
+                    best, common, n = self._best_slot(prompt_ids, key)
             if best is not None:
                 self.reused_tokens = n
                 slot = self._take(best, common, n)
@@ -137,13 +94,13 @@ class PromptCache:
                 return slot.cache, n
         cache = architecture.build_cache(max_seq_len=num_ctx, dtype=dtype)
         if reusable and isinstance(cache, (KVCache, NemotronHHybridCache)):
-            slot = self._add(_Slot(cache, key, prompt_len=len(prompt_ids)))
+            slot = self._add(CacheSlot(cache, key, prompt_len=len(prompt_ids)))
             slot.in_use = True
         return cache, 0
 
     def _best_slot(
         self, prompt_ids: list[int], key: tuple[int, torch.dtype]
-    ) -> tuple[_Slot | None, int, int]:
+    ) -> tuple[CacheSlot | None, int, int]:
         """The slot supplying the most tokens: (slot, common, reusable), or (None, 0, 0)."""
         best, best_common, best_n = None, 0, 0
         for slot in self._slots:
@@ -155,7 +112,7 @@ class PromptCache:
                 best, best_common, best_n = slot, common, n
         return best, best_common, best_n
 
-    def _take(self, slot: _Slot, common: int, n: int) -> _Slot:
+    def _take(self, slot: CacheSlot, common: int, n: int) -> CacheSlot:
         """Makes `slot`'s first `n` tokens the cache to prefill into and returns the slot that
         holds it. In place when the prompt continues this slot's conversation (only the old reply
         and the end of the last turn are dropped) or when little is dropped; otherwise - and
@@ -173,17 +130,17 @@ class PromptCache:
         self._use(slot)
         return slot
 
-    def _use(self, slot: _Slot) -> None:
+    def _use(self, slot: CacheSlot) -> None:
         self._tick += 1
         slot.last_used = self._tick
 
-    def _add(self, slot: _Slot) -> _Slot:
+    def _add(self, slot: CacheSlot) -> CacheSlot:
         self._slots.append(slot)
         self._use(slot)
         self._evict_over_limits(keep=slot)
         return slot
 
-    def _evict_over_limits(self, keep: _Slot | None = None) -> None:
+    def _evict_over_limits(self, keep: CacheSlot | None = None) -> None:
         """Drops least-recently-used idle slots (never one in use, nor `keep`) until within both
         limits - or until none are left to drop."""
         while True:
@@ -192,9 +149,12 @@ class PromptCache:
             idle = [s for s in self._slots if not s.in_use and s is not keep]
             if not (over_count or over_budget) or not idle or len(self._slots) <= 1:
                 return
-            self._slots.remove(min(idle, key=lambda s: s.last_used))
+            victim = min(idle, key=lambda s: s.last_used)
+            self._slots.remove(victim)
+            if self._tier is not None:
+                self._tier.spill(victim)
 
-    def _slot_of(self, cache: object) -> _Slot | None:
+    def _slot_of(self, cache: object) -> CacheSlot | None:
         return next((s for s in self._slots if s.cache is cache), None)
 
     def advanced(self, cache: object, token_ids: list[int]) -> None:
@@ -222,3 +182,11 @@ class PromptCache:
         if slot is not None:
             slot.in_use = False
             self._evict_over_limits()
+
+    def persist_all(self) -> None:
+        """Queues every idle slot for the disk tier - the model is being unloaded or the server
+        is shutting down, so nothing else will ever use these RAM copies."""
+        if self._tier is not None:
+            for slot in self._slots:
+                if not slot.in_use:
+                    self._tier.spill(slot)

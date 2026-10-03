@@ -101,3 +101,28 @@ class KVCache:
     def nbytes(self) -> int:
         """Memory held by the preallocated key/value tensors."""
         return sum(t.numel() * t.element_size() for t in (*self._k, *self._v))
+
+    def export(self, length: int) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        """Copies of the first `length` positions' keys and values, one tensor per layer - owning
+        only those positions (a bare slice would drag the whole preallocated buffer into a save)."""
+        if not 0 <= length <= self._length:
+            raise ValueError(f"can't export {length} positions of a cache of length {self._length}")
+        return (
+            [t[:, :, :length, :].clone() for t in self._k],
+            [t[:, :, :length, :].clone() for t in self._v],
+        )
+
+    def load(self, keys: list[torch.Tensor], values: list[torch.Tensor]) -> None:
+        """Fills an empty cache from `export()` output and sets its length to match. A mismatch
+        with this cache's layers/shapes/dtype (a stale or foreign save) raises `ValueError`."""
+        if len(keys) != len(self._k) or len(values) != len(self._v):
+            raise ValueError("saved cache has a different number of layers")
+        length = keys[0].shape[2] if keys else 0
+        if length > self._max_seq_len:
+            raise ValueError(f"saved cache has {length} positions, num_ctx is {self._max_seq_len}")
+        for dst_list, src_list in ((self._k, keys), (self._v, values)):
+            for dst, src in zip(dst_list, src_list, strict=True):
+                if src.shape != (*dst.shape[:2], length, dst.shape[3]) or src.dtype != dst.dtype:
+                    raise ValueError("saved cache layer shape or dtype differs from this model's")
+                dst[:, :, :length, :] = src
+        self._length = length
