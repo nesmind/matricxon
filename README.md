@@ -77,6 +77,10 @@ raw integer types, which fail with a clear error.
   Batching helps most on memory-bandwidth-bound hardware; on a compute-bound CPU its main effect
   is that users stream at the same time instead of waiting in line. Mixture-of-experts models and
   Nemotron-H take one reply per step.
+- **Tool calling.** Send `tools` to `/api/chat` and a call the model writes comes back as a
+  structured `message.tool_calls` (with an `id`), not as text; answer it with a `role: "tool"` message.
+  Formats are read from the model's chat template: Qwen/Hermes, Qwen3.5 XML, Mistral, Llama 3.x
+  and Gemma 4. Models where a format was found list `tools` in their capabilities.
 - **Vision.** CLIP/SigLIP-style projector files feed image embeddings into `llama` (LLaVA),
   `phi2` (moondream2) and `qwen35`.
 - **Safe memory use.** A model that would not fit in free RAM (with a safety margin) is refused. Idle models unload after a keep-alive time.
@@ -97,8 +101,7 @@ raw integer types, which fail with a clear error.
 | `GET /api/version` | Version string |
 | `GET`/`PUT`/`DELETE /api/cache/persistence` | Matricxon-only: show, change (`enabled`, `budget_mb`, `ttl_hours`) or empty the on-disk chat cache; no auth of its own |
 
-Pulling resolves only `hf.co/<repo>:<file>` tags; a generated `tool_calls` field is not parsed back out of
-the model's text yet.
+Pulling resolves only `hf.co/<repo>:<file>` tags.
 
 ## Setup
 

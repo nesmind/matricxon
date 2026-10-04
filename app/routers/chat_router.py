@@ -16,10 +16,9 @@ from app.runtime.chat_engine import ChatEngine
 from app.runtime.generation_request import GenerationRequest, SamplingConfig
 from app.runtime.prompt_builder import Mistral3PromptBuilder
 from app.runtime.qwen3vl_fusion import FusedPrompt, build_qwen3vl_prompt
-from app.runtime.special_token_filter import SpecialTokenTextFilter
-from app.runtime.tokenizer import IncrementalTextDecoder
+from app.runtime.reply_text_stream import ReplyTextStream
 from app.runtime.vision_fusion import build_prompt_with_images
-from app.schemas.chat import ChatChunk, ChatDoneChunk, ChatRequest, ChatStreamMessage
+from app.schemas.chat import ChatChunk, ChatDoneChunk, ChatRequest, ChatStreamMessage, ToolCall
 from app.server.errors import PromptTooLongError
 from app.server.ndjson import NDJSONResponse
 
@@ -84,6 +83,8 @@ class ChatRequestHandler:
             (time.monotonic() - stage_started) * 1000,
         )
 
+        self._log_tools_offered(request, handle)
+
         # Real vision support (LlamaArchitecture only, e.g. LLaVA) - see
         # app.runtime.vision_fusion's own module docstring. A request with real images but no
         # paired mmproj (see ModelCatalog.find_paired_mmproj) falls through to the plain
@@ -126,10 +127,56 @@ class ChatRequestHandler:
             request, prompt_token_ids, image_embeddings, fused
         )
         return NDJSONResponse(
-            self._stream(
-                handle, generation_request, len(prompt_token_ids), load_duration, request.request_id
-            )
+            self._stream(handle, generation_request, len(prompt_token_ids), load_duration, request)
         )
+
+    @staticmethod
+    def _log_tools_offered(request: ChatRequest, handle: ModelHandle) -> None:
+        """Tool-use trace: level 1 says whether tools were offered, level 2 which."""
+        if not request.tools:
+            return
+        names = [(t.get("function") or {}).get("name", "?") for t in request.tools]
+        fmt = type(handle.tool_call_format).__name__ if handle.tool_call_format else "none"
+        returned = sum(1 for m in request.messages if m.role == "tool")
+        logger.info(
+            "tools: %d offered, call format %s, %d tool results in the history",
+            len(names),
+            fmt,
+            returned,
+        )
+        logger.debug("tools offered: %s", ", ".join(names))
+
+    @staticmethod
+    def _log_stop(token_id: int, handle: ModelHandle, request: ChatRequest) -> None:
+        """Why a reply ended: the stop token, and whether it is the model's own end token."""
+        text = handle.tokenizer.decode([token_id])
+        own = token_id == handle.tokenizer.eos_token_id
+        logger.info(
+            "stopped on token %d %r (%s)",
+            token_id,
+            text,
+            "end of turn" if own else "extra stop token",
+        )
+        if request.tools:
+            logger.debug(
+                "stop token seen while tools were on - a tool call ends with <|tool_response>"
+            )
+
+    @staticmethod
+    def _log_tool_result(request: ChatRequest, tail: str, tool_calls: list[ToolCall]) -> None:
+        """What the reply turned into: tool calls, or plain text (no call was made)."""
+        if not request.tools:
+            return
+        if tool_calls:
+            names = ", ".join(c.function.name for c in tool_calls)
+            logger.info("tool calls parsed: %d (%s)", len(tool_calls), names)
+            for call in tool_calls:
+                logger.debug(
+                    "tool call %s arguments: %s", call.function.name, call.function.arguments
+                )
+        else:
+            logger.info("no tool call in the reply (%d chars of text)", len(tail))
+            logger.debug("reply text without a tool call: %.300s", tail)
 
     def _build_generation_request(
         self,
@@ -144,6 +191,7 @@ class ChatRequestHandler:
             image_embeddings=image_embeddings,
             position_ids=fused.position_ids if fused else None,
             position_delta=fused.position_delta if fused else 0,
+            cache_tag=request.cache_tag or "",
             sampling=SamplingConfig(
                 temperature=options.temperature,
                 top_p=options.top_p,
@@ -161,16 +209,16 @@ class ChatRequestHandler:
         generation_request: GenerationRequest,
         prompt_eval_count: int,
         load_duration: float,
-        request_id: str | None = None,
+        request: ChatRequest,
     ) -> AsyncIterator[dict]:
+        request_id = request.request_id
         eos_token_ids = {handle.tokenizer.eos_token_id} | handle.extra_eos_token_ids
         engine = ChatEngine(
             handle.architecture,
             eos_token_ids=eos_token_ids,
             prompt_cache=handle.prompt_cache,
         )
-        decoder = IncrementalTextDecoder(handle.tokenizer)
-        special_token_filter = SpecialTokenTextFilter()
+        reply = ReplyTextStream(handle.tokenizer, handle.tool_call_format, request.tools)
         # Cancelled in the gap between handle() and this stream starting: nothing to run.
         if request_id is not None and self._model_manager.pop_cancelled_request(request_id):
             return
@@ -198,14 +246,17 @@ class ChatRequestHandler:
             # text (e.g. literal "</s>") is never meant to reach the visible
             # message - `done: true` is how a client learns generation ended.
             if item in eos_token_ids:
+                self._log_stop(item, handle, request)
                 continue
-            text = special_token_filter.feed(decoder.push(item))
+            text = reply.push(item)
             if text:
                 yield ChatChunk(message=ChatStreamMessage(content=text)).to_ndjson_dict()
 
-        tail = special_token_filter.flush()
-        if tail:
-            yield ChatChunk(message=ChatStreamMessage(content=tail)).to_ndjson_dict()
+        tail, tool_calls = reply.finish()
+        self._log_tool_result(request, tail, tool_calls)
+        if tail or tool_calls:
+            message = ChatStreamMessage(content=tail, tool_calls=tool_calls or None)
+            yield ChatChunk(message=message).to_ndjson_dict()
 
         eval_duration = time.monotonic() - generation_started
         logger.info(

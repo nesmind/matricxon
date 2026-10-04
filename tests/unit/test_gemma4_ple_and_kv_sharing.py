@@ -84,3 +84,13 @@ def test_perturbing_per_layer_embedding_changes_the_output(tmp_path):
     model.close()
 
     assert not torch.allclose(baseline_logits, perturbed_logits)
+
+
+def test_last_logits_only_returns_just_the_last_position(tmp_path):
+    model = _load(build_tiny_gemma4_ple_kv_shared_gguf(tmp_path / "tiny-gemma4-ple.gguf"))
+    with torch.no_grad():
+        full = model.forward(INPUT_IDS)
+        last = model.forward(INPUT_IDS, last_logits_only=True)
+
+    assert last.shape[1] == 1 and torch.allclose(last[:, 0], full[:, -1], atol=1e-5)
+    model.close()

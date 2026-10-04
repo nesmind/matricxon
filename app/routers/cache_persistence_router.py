@@ -33,6 +33,10 @@ class CachePersistenceHandler:
         self._store.enforce_limits()
         return self.status()
 
+    def forget_chat(self, tag: str) -> CachePersistenceStatus:
+        self._store.forget(tag)
+        return self.status()
+
     def clear(self) -> CachePersistenceStatus:
         self._store.clear()
         return self.status()
@@ -57,3 +61,12 @@ def delete_cache_persistence(
     store: PersistentCacheStore = Depends(get_cache_store),
 ) -> CachePersistenceStatus:
     return CachePersistenceHandler(store).clear()
+
+
+@router.delete("/api/cache/persistence/chats/{tag}", response_model=CachePersistenceStatus)
+def delete_chat_cache(
+    tag: str, store: PersistentCacheStore = Depends(get_cache_store)
+) -> CachePersistenceStatus:
+    """Drops the stored prompt caches of one conversation (its `cache_tag`), e.g. after pAIring
+    deletes the chat."""
+    return CachePersistenceHandler(store).forget_chat(tag)

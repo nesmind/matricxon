@@ -132,6 +132,7 @@ class ChatEngine:
             sampling.num_ctx,
             model_dtype,
             reusable=request.image_embeddings is None,
+            tag=request.cache_tag,
         )
         sampler = Sampler(sampling)
         max_new_tokens = (

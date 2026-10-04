@@ -95,3 +95,13 @@ def test_image_prompts_are_never_reused_or_kept_and_leave_the_pool_alone(
     # Another user's image request didn't flush the first conversation's cache.
     _generate(model, cache, [1, 72, 105, 33, 44])
     assert cache.reused_tokens == 3
+
+
+def test_a_requests_cache_tag_lands_on_its_slot(model: LlamaArchitecture) -> None:
+    cache = PromptCache()
+    engine = ChatEngine(model, eos_token_ids={EOS_TOKEN_ID}, prompt_cache=cache)
+    request = GenerationRequest(torch.tensor([[1, 70, 71, 72]]), GREEDY, cache_tag="chat-a")
+
+    engine.generate(request)
+
+    assert [slot.tag for slot in cache._slots] == ["chat-a"]

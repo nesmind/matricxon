@@ -146,3 +146,18 @@ def test_effective_capabilities_does_not_flag_a_checkpoint_with_no_gap(tmp_path,
     capabilities = effective_capabilities(installed, has_paired_mmproj=False)
 
     assert "architecture_features_unsupported" not in capabilities
+
+
+def test_effective_capabilities_reports_tools_for_mistral3_but_not_an_untemplated_model(tmp_path):
+    mistral = build_tiny_mistral3_gguf(tmp_path / "m.gguf")
+    llama = _build_untemplated_llama_gguf(tmp_path / "l.gguf")
+
+    with_tools = effective_capabilities(
+        _installed("a:latest", mistral, "mistral3", ["completion"]), has_paired_mmproj=False
+    )
+    without = effective_capabilities(
+        _installed("b:latest", llama, "llama", ["completion"]), has_paired_mmproj=False
+    )
+
+    assert "tools" in with_tools
+    assert "tools" not in without

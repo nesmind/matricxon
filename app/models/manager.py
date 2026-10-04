@@ -27,6 +27,7 @@ from app.runtime.chat_stop_tokens import extra_eos_token_ids
 from app.runtime.chat_template import PromptBuilderFactory
 from app.runtime.compute_device import ComputeDevice
 from app.runtime.prompt_cache import PromptCache
+from app.runtime.tool_call_formats import ToolCallFormats
 from app.server.errors import DeviceUnavailableError
 
 # How many not-yet-started cancelled reply ids to remember (see ModelManager.cancel_request).
@@ -381,6 +382,9 @@ class ModelManager:
             ),
             last_used_at=now,
             prompt_builder=prompt_builder,
+            tool_call_format=ToolCallFormats.for_template(
+                loader.metadata.get("tokenizer.chat_template"), loader.metadata.architecture
+            ),
             extra_eos_token_ids=extra_eos_token_ids(loader.metadata),
             prompt_cache=PromptCache(
                 self._prompt_cache_slots,

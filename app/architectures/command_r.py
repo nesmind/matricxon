@@ -210,6 +210,8 @@ class CommandRArchitecture(ModelArchitecture):
                 )
                 raise GenerationCancelledError(f"stopped after layer {i + 1}/{self.n_layer}")
 
+        if self._last_logits_only:
+            x = x[:, -1:, :]
         x = self.output_norm(x)
         if self._tied_embeddings:
             logits = F.linear(x.to(self.token_embd.weight.dtype), self.token_embd.weight)

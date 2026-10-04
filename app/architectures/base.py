@@ -301,9 +301,9 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
         last_logits_only: bool = False,
     ) -> torch.Tensor:
         """`last_logits_only`: the caller only reads the last position's logits (`ChatEngine`),
-        so an architecture that honors `_last_logits_only` (llama, mistral3) runs its lm_head on
-        that one position - a prefill otherwise computes, then throws away, a full-vocabulary
-        row for every prompt token. Others ignore it and still return every position."""
+        so an architecture that honors `_last_logits_only` (every decoder architecture) runs its
+        lm_head on that one position - a prefill otherwise computes, then throws away, a
+        full-vocabulary row for every prompt token. Embedding models ignore it."""
         self._ensure_materialized(stop_check)
         self._last_logits_only = last_logits_only
         if self.device.type == "cpu":

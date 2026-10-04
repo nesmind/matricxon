@@ -41,3 +41,9 @@ def test_empty_when_there_is_no_template_at_all() -> None:
 def test_empty_when_the_template_is_chatml_shaped_but_the_token_is_missing_from_vocab() -> None:
     metadata = _metadata(_CHATML_TEMPLATE, tokens=["<|endoftext|>", "<|im_start|>", "hello"])
     assert extra_eos_token_ids(metadata) == frozenset()
+
+
+def test_gemma4_stops_after_a_tool_call_and_on_eos() -> None:
+    template = "{{ '<|tool_call>call:f{}<tool_call|>' }}{{ '<|tool_response>' }}"
+    tokens = ["<pad>", "<eos>", "<|tool_response>", "<turn|>", "hello"]
+    assert extra_eos_token_ids(_metadata(template, tokens)) == frozenset({1, 2, 3})

@@ -27,7 +27,7 @@ class TestCopyHappyPath:
 
         assert response.status_code == 200
         show = client.post("/api/show", json={"model": "dest:latest"}).json()
-        assert show["capabilities"] == ["completion"]
+        assert show["capabilities"] == ["completion", "tools"]
 
 
 class TestCopyErrors:

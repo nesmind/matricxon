@@ -20,5 +20,5 @@ def test_tags_lists_installed_models(
     assert response.status_code == 200
     [entry] = response.json()["models"]
     assert entry["name"] == "hf.co/test-org/test-repo:test-model"
-    assert entry["capabilities"] == ["completion"]
+    assert entry["capabilities"] == ["completion", "tools"]
     assert entry["details"]["family"] == "mistral3"

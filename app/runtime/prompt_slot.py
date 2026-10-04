@@ -18,6 +18,7 @@ class CacheSlot:
     last_used: int = 0
     prompt_len: int = 0  # length of the prompt this slot was last prefilled for
     in_use: bool = False  # a reply is running on this slot's cache right now
+    tag: str = ""  # the conversation it belongs to (opaque; lets a deleted chat's cache be dropped)
 
     @property
     def hybrid(self) -> bool:
@@ -57,4 +58,6 @@ class CacheSlot:
         else:
             cache = self.cache.fork(n)
         snapshots = {p: s for p, s in self.snapshots.items() if p <= n}
-        return CacheSlot(cache, self.key, self.token_ids[:n], snapshots, prompt_len=self.prompt_len)
+        return CacheSlot(
+            cache, self.key, self.token_ids[:n], snapshots, prompt_len=self.prompt_len, tag=self.tag
+        )

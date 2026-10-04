@@ -35,6 +35,9 @@ class _Entry:
     length: int
     blocks: list[str]
     saved_at: float
+    tag: str = (
+        ""  # the conversation it came from (opaque), so a deleted chat's files can be dropped
+    )
     size: int = 0  # the file's size - known only once written, so not part of the sealed meta
 
     def meta_json(self) -> bytes:
@@ -61,6 +64,9 @@ class PersistentCacheStore:
         self.policy = policy
         self._lock = threading.Lock()
         self._index: dict[str, _Entry] = {}
+        self._forgotten: set[str] = (
+            set()
+        )  # tags of deleted chats: a late spill of theirs is dropped
         self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cache-spill")
         self._dir.mkdir(parents=True, exist_ok=True)
         self._scan()
@@ -101,12 +107,12 @@ class PersistentCacheStore:
     def _spill(self, model_id: str, slot: CacheSlot) -> None:
         try:
             encoded = SlotCodec.encode(slot)
-            if encoded is not None:
-                self._write(model_id, encoded)
+            if encoded is not None and slot.tag not in self._forgotten:
+                self._write(model_id, encoded, slot.tag)
         except Exception:  # noqa: BLE001 - a failed spill only costs a later re-prefill
             logger.exception("persisting a prompt cache failed")
 
-    def _write(self, model_id: str, encoded: EncodedSlot) -> None:
+    def _write(self, model_id: str, encoded: EncodedSlot, tag: str = "") -> None:
         entry = _Entry(
             model_id,
             encoded.num_ctx,
@@ -114,6 +120,7 @@ class PersistentCacheStore:
             len(encoded.token_ids),
             self._cipher.prefix_fingerprints(encoded.token_ids, BLOCK_TOKENS),
             time.time(),
+            tag,
         )
         meta = self._cipher.seal(entry.meta_json(), MAGIC)
         body = self._cipher.seal(encoded.payload, MAGIC + meta)
@@ -128,6 +135,9 @@ class PersistentCacheStore:
         entry.size = len(blob)
         with self._lock:
             self._index[name] = entry
+            gone = tag in self._forgotten
+        if gone:  # the chat was deleted while this was being written
+            self._remove(name)
         self.enforce_limits()
 
     # ---- restoring ---------------------------------------------------------------------------
@@ -206,6 +216,18 @@ class PersistentCacheStore:
                 total -= entry.size
         for name in doomed:
             self._remove(name)
+
+    def forget(self, tag: str) -> int:
+        """Deletes every stored file of the chat `tag` (and refuses its later spills); returns how
+        many files went."""
+        if not tag:
+            return 0
+        with self._lock:
+            self._forgotten.add(tag)
+            names = [n for n, e in self._index.items() if e.tag == tag]
+        for name in names:
+            self._remove(name)
+        return len(names)
 
     def clear(self) -> None:
         with self._lock:

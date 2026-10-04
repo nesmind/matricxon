@@ -1,5 +1,6 @@
 from app.architectures.registry import ArchitectureRegistry, unsupported_features
 from app.models.installed_model import InstalledModel
+from app.models.tool_support import supports_tools
 from app.runtime.chat_template import has_confirmed_chat_format
 
 _THINKING_MARKERS = ("thinking", "reasoning")
@@ -90,7 +91,10 @@ def effective_capabilities(installed: InstalledModel, has_paired_mmproj: bool) -
     GGUF's Per-Layer Embeddings and cross-layer KV reuse were silently never read at all by the
     dense-only `Gemma4Architecture` class that otherwise claimed full "completion" support for
     it, with nothing in the model list distinguishing it from a fully-handled checkpoint until
-    that was found and fixed by hand."""
+    that was found and fixed by hand.
+
+    Also adds `"tools"` when the model's chat template shows a tool-call format matricxon can
+    parse back out of a reply (see `app.runtime.tool_call_formats`)."""
     capabilities = installed.capabilities
     has_real_fusion = has_paired_mmproj and installed.architecture in _VISION_FUSION_ARCHITECTURES
     if has_real_fusion and "vision" not in capabilities:
@@ -98,6 +102,8 @@ def effective_capabilities(installed: InstalledModel, has_paired_mmproj: bool) -
     format_confirmed = has_confirmed_chat_format(installed.path, tag=installed.tag)
     if "completion" in capabilities and not format_confirmed:
         capabilities = [*capabilities, "chat_format_unverified"]
+    if "completion" in capabilities and supports_tools(installed.path):
+        capabilities = [*capabilities, "tools"]
     if unsupported_features(installed.path):
         capabilities = [*capabilities, "architecture_features_unsupported"]
     return capabilities

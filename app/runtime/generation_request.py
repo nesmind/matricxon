@@ -37,6 +37,9 @@ class GenerationRequest:
     # positions sit from the cache length afterwards (an image spans fewer positions than tokens).
     position_ids: torch.Tensor | None = None
     position_delta: int = 0
+    cache_tag: str = (
+        ""  # which conversation the prompt cache slot belongs to (see ChatRequest.cache_tag)
+    )
 
 
 @dataclass(frozen=True)

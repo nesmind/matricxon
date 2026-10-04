@@ -75,6 +75,7 @@ class PromptCache:
         num_ctx: int,
         dtype: torch.dtype,
         reusable: bool,
+        tag: str = "",
     ) -> tuple[object, int]:
         """(cache, n): a cache already holding `prompt_ids[:n]`, so prefill starts at n."""
         key = (num_ctx, dtype)
@@ -91,10 +92,11 @@ class PromptCache:
                 slot = self._take(best, common, n)
                 slot.prompt_len = len(prompt_ids)
                 slot.in_use = True
+                slot.tag = tag or slot.tag
                 return slot.cache, n
         cache = architecture.build_cache(max_seq_len=num_ctx, dtype=dtype)
         if reusable and isinstance(cache, (KVCache, NemotronHHybridCache)):
-            slot = self._add(CacheSlot(cache, key, prompt_len=len(prompt_ids)))
+            slot = self._add(CacheSlot(cache, key, prompt_len=len(prompt_ids), tag=tag))
             slot.in_use = True
         return cache, 0
 

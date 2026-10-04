@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class ToolFunctionCall(BaseModel):
@@ -7,6 +7,8 @@ class ToolFunctionCall(BaseModel):
 
 
 class ToolCall(BaseModel):
+    # Set on calls matricxon parsed out of a reply; a client echoes it back as `tool_call_id`.
+    id: str | None = None
     function: ToolFunctionCall
 
 
@@ -18,6 +20,16 @@ class ChatMessage(BaseModel):
     # itself called a tool) - Ollama/OpenAI's real wire shape, matched
     # 1:1 so a real tool-calling client's conversation history round-trips.
     tool_calls: list[ToolCall] | None = None
+    # Only on a "tool" message: which call it answers (some templates, e.g. Gemma 4, need these).
+    tool_name: str | None = None
+    tool_call_id: str | None = None
+    name: str | None = None  # OpenAI's spelling of tool_name; templates read either
+
+    @model_validator(mode="after")
+    def _mirror_tool_name(self) -> "ChatMessage":
+        if self.role == "tool" and self.name is None:
+            self.name = self.tool_name
+        return self
 
 
 class ChatOptions(BaseModel):
@@ -47,6 +59,10 @@ class ChatRequest(BaseModel):
     # other users' replies are untouched; the same call without an id is the explicit "unload this
     # model now" (Ollama's convention).
     request_id: str | None = None
+    # Opaque label of the conversation this reply belongs to (pAIring sends its conversation id).
+    # Cached prompts carry it so `DELETE /api/cache/persistence/chats/{tag}` can drop a deleted
+    # chat's stored cache; never shown or used for matching.
+    cache_tag: str | None = None
 
     def is_unload_call(self) -> bool:
         return not self.messages and self.keep_alive == 0
@@ -54,6 +70,7 @@ class ChatRequest(BaseModel):
 
 class ChatStreamMessage(BaseModel):
     content: str
+    tool_calls: list[ToolCall] | None = None
 
 
 class ChatChunk(BaseModel):
@@ -61,7 +78,7 @@ class ChatChunk(BaseModel):
     done: bool = False
 
     def to_ndjson_dict(self) -> dict:
-        return self.model_dump()
+        return self.model_dump(exclude_none=True)
 
 
 class ChatDoneChunk(BaseModel):

@@ -169,3 +169,37 @@ def test_clear_and_stray_tmp_cleanup(tmp_path: Path) -> None:
     store.clear()
     assert store.usage()[0] == 0
     assert _store(tmp_path) and not os.listdir(tmp_path / "c")
+
+
+def test_forget_drops_only_that_chats_files_and_refuses_its_later_spills(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    mine, other = _slot(list(range(100, 124))), _slot(list(range(200, 224)))
+    mine.tag, other.tag = "chat-a", "chat-b"
+    for slot in (mine, other):
+        store.spill_async(MODEL, slot)
+    store.flush()
+    assert store.usage()[0] == 2
+
+    assert store.forget("chat-a") == 1
+    assert store.usage()[0] == 1
+    assert store.take(MODEL, list(range(100, 124)) + [1], CTX, DTYPE, 0) is None
+
+    store.spill_async(MODEL, _slot_with_tag(list(range(100, 124)), "chat-a"))
+    store.flush()
+    assert store.usage()[0] == 1  # the deleted chat's late spill is dropped
+    assert store.forget("") == 0
+
+
+def _slot_with_tag(token_ids: list[int], tag: str) -> CacheSlot:
+    slot = _slot(token_ids)
+    slot.tag = tag
+    return slot
+
+
+def test_tag_survives_a_restart_scan(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.spill_async(MODEL, _slot_with_tag(list(range(24)), "chat-a"))
+    store.flush()
+
+    reopened = _store(tmp_path)
+    assert reopened.forget("chat-a") == 1

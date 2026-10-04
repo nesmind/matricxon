@@ -242,6 +242,8 @@ class Phi2Architecture(ModelArchitecture):
                 raise GenerationCancelledError(f"stopped after layer {i + 1}/{self.n_layer}")
 
         stage_started = time.monotonic()
+        if self._last_logits_only:
+            x = x[:, -1:, :]
         x = self.output_norm(x)
         logits = self.lm_head(x)
         logger.debug(

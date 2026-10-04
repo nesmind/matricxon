@@ -6,6 +6,7 @@ from app.runtime.gemma_tokenizer import Gemma4Tokenizer
 from app.runtime.prompt_cache import PromptCache
 from app.runtime.sentencepiece_tokenizer import SentencePieceTokenizer
 from app.runtime.tokenizer import GGUFTokenizer
+from app.runtime.tool_call_formats import ToolCallFormat
 from app.runtime.wordpiece_tokenizer import WordPieceTokenizer
 
 # The tokenizer implementations a GGUF's `tokenizer.ggml.model` can resolve
@@ -42,6 +43,8 @@ class ModelHandle:
     # This model's own chat-template prompt builder (app.runtime.chat_template); None falls back
     # to Mistral3PromptBuilder in chat_router.
     prompt_builder: object | None = None
+    # How this model writes a tool call in its reply (None: unknown - tools aren't parsed back).
+    tool_call_format: ToolCallFormat | None = None
     # This model's KV cache kept between calls, so a chat's next turn only prefills its new tokens
     # (see PromptCache). Freed with the handle when the model is evicted/unloaded.
     prompt_cache: PromptCache = field(default_factory=PromptCache)

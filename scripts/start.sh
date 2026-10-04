@@ -3,6 +3,11 @@
 # scripts/status.sh. For Debian/Ubuntu, prefer scripts/matricxon.service instead.
 set -euo pipefail
 
+# Colored like uvicorn's own "INFO:" lines (plain text when not a terminal).
+if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; N=$'\033[0m'; else G=""; R=""; N=""; fi
+info() { printf '%sINFO:%s %s\n' "$G" "$N" "$*"; }
+err() { printf '%sERROR:%s %s\n' "$R" "$N" "$*"; }
+
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
@@ -14,15 +19,15 @@ LOG_FILE="logs/matricxon.log"
 mkdir -p run logs
 
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-    echo "matricxon is already running (pid $(cat "$PID_FILE"))"
+    info "matricxon is already running (pid $(cat "$PID_FILE"))"
     exit 1
 fi
 
 rm -f "$PID_FILE"
 
 if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
-    echo "port $PORT is already in use - is another matricxon running (e.g. pAIring's external/matricxon)?"
-    echo "Stop that one first, or start this one on another port: MATRICXON_PORT=8421 scripts/start.sh"
+    err "port $PORT is already in use - is another matricxon running (e.g. pAIring's external/matricxon)?"
+    info "Stop that one first, or start this one on another port: MATRICXON_PORT=8421 scripts/start.sh"
     exit 1
 fi
 
@@ -45,12 +50,12 @@ done
 
 if [[ ! -f "$PID_FILE" ]]; then
     if kill -0 "$SERVER_PID" 2>/dev/null; then
-        echo "matricxon did not finish starting within 10s (pid $SERVER_PID still running) - check $LOG_FILE"
+        err "matricxon did not finish starting within 10s (pid $SERVER_PID still running) - check $LOG_FILE"
     else
-        echo "matricxon exited during startup - last lines of $LOG_FILE:"
+        err "matricxon exited during startup - last lines of $LOG_FILE:"
         tail -n 5 "$LOG_FILE"
     fi
     exit 1
 fi
 
-echo "matricxon started (pid $(cat "$PID_FILE")) on $HOST:$PORT, logging to $LOG_FILE"
+info "matricxon started (pid $(cat "$PID_FILE")) on $HOST:$PORT, logging to $LOG_FILE"
