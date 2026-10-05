@@ -35,6 +35,9 @@ class ChatEngine:
     #: prompt usually diverges just before the generation-prompt suffix - the useful restore point.
     PREFILL_CHUNK = 512
     TAIL_SNAPSHOT_OFFSET = 16
+    #: A plain KV cache is split too, so a cancel or restart mid-prefill keeps the committed
+    #: pieces (tokens are recorded only after a whole forward pass) instead of losing it all.
+    PLAIN_PREFILL_CHUNK = 256
 
     def __init__(
         self,
@@ -42,11 +45,13 @@ class ChatEngine:
         eos_token_ids: set[int],
         prompt_cache: PromptCache | None = None,
         prefill_chunk: int = PREFILL_CHUNK,
+        plain_prefill_chunk: int = PLAIN_PREFILL_CHUNK,
     ) -> None:
         self._architecture = architecture
         self._eos_token_ids = eos_token_ids
         self._prompt_cache = prompt_cache or PromptCache()
         self._prefill_chunk = prefill_chunk
+        self._plain_prefill_chunk = plain_prefill_chunk
 
     @staticmethod
     def _images_in(
@@ -63,11 +68,17 @@ class ChatEngine:
                 pieces.append((lo - start, embeds[lo - span_start : hi - span_start]))
         return pieces or None
 
-    def _prefill_cuts(self, kv_cache: object, reused: int, prompt_len: int) -> list[int]:
-        """End positions of each prefill piece. One piece (the whole remaining prompt) for a plain
-        KV cache; split for a hybrid one (see `PREFILL_CHUNK`)."""
-        if not isinstance(kv_cache, NemotronHHybridCache):
+    def _prefill_cuts(
+        self, kv_cache: object, reused: int, prompt_len: int, has_images: bool = False
+    ) -> list[int]:
+        """End positions of each prefill piece: `PLAIN_PREFILL_CHUNK` tokens for a plain KV cache,
+        `PREFILL_CHUNK` for a hybrid one. A prompt with images stays one piece - its cache is
+        never pooled, so there is nothing to keep, and image fusion sees the whole prompt."""
+        if has_images:
             return [prompt_len]
+        if not isinstance(kv_cache, NemotronHHybridCache):
+            step = self._plain_prefill_chunk
+            return sorted({prompt_len, *range(reused + step, prompt_len, step)})
         cuts = {prompt_len, *range(reused + self._prefill_chunk, prompt_len, self._prefill_chunk)}
         if prompt_len - self.TAIL_SNAPSHOT_OFFSET > reused:
             cuts.add(prompt_len - self.TAIL_SNAPSHOT_OFFSET)
@@ -141,7 +152,9 @@ class ChatEngine:
 
         try:
             forward_started = time.monotonic()
-            cuts = self._prefill_cuts(kv_cache, reused, prompt_len)
+            cuts = self._prefill_cuts(
+                kv_cache, reused, prompt_len, request.image_embeddings is not None
+            )
             start = reused
             for end in cuts:
                 positions = (
