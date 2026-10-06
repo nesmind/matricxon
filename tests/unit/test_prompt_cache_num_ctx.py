@@ -90,3 +90,15 @@ def test_a_disk_file_saved_with_another_num_ctx_is_restored(model, tmp_path):
     warm = _run(model, after, TURN2, 160)
 
     assert warm == cold and after.reused_tokens > 0
+
+
+def test_a_reply_stops_at_the_end_of_the_context_instead_of_failing(model):
+    """num_predict larger than the room left (long chat, long reply): the reply is cut at num_ctx
+    finishes as "length" - it used to raise PromptTooLongError halfway through the stream."""
+    ids = TURN1  # 30 tokens
+    sampling = SamplingConfig(temperature=0.0, num_predict=500, num_ctx=len(ids) + 6)
+    engine = ChatEngine(model, set(), prompt_cache=PromptCache(4), prefill_chunk=8)
+
+    result = engine.generate(GenerationRequest(torch.tensor([ids]), sampling, cache_tag="c"))
+
+    assert len(result.token_ids) == 6 and result.finish_reason == "length"

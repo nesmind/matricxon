@@ -151,14 +151,15 @@ class PersistentCacheStore:
         prompt_ids: list[int],
         dtype: torch.dtype,
         min_tokens: int,
-    ) -> bytes | None:
+    ) -> tuple[bytes, str] | None:
         """The serialized slot sharing the longest prefix (more than `min_tokens`) with
-        `prompt_ids`, removed from disk - or None. Matching uses the sealed per-block hashes, so a
-        file that would not help is never read, let alone consumed."""
+        `prompt_ids`, removed from disk, with the chat tag it was saved under - or None. Matching
+        uses the sealed per-block hashes, so a file that would not help is never read, let alone
+        consumed."""
         if not self.policy.enabled or not self._index:
             return None
         wanted = self._cipher.prefix_fingerprints(prompt_ids, BLOCK_TOKENS)
-        best: tuple[int, str] | None = None
+        best: tuple[int, str, str] | None = None
         with self._lock:
             for name, entry in self._index.items():
                 if (entry.model_id, entry.dtype_name) != (model_id, str(dtype)):
@@ -169,10 +170,11 @@ class PersistentCacheStore:
                         break
                     shared += 1
                 if shared * BLOCK_TOKENS > min_tokens and (best is None or shared > best[0]):
-                    best = (shared, name)
+                    best = (shared, name, entry.tag)
         if best is None:
             return None
-        return self._consume(best[1])
+        body = self._consume(best[1])
+        return None if body is None else (body, best[2])
 
     def inspect(self, prompt_ids: list[int]) -> tuple[list[StoredEntry], list[str]]:
         """The files' headers plus `prompt_ids`' block hashes, to explain a miss."""

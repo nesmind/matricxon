@@ -33,14 +33,16 @@ class ModelCacheTier:
     ) -> CacheSlot | None:
         """A slot rebuilt from disk that shares more than `min_tokens` leading tokens with
         `prompt_ids`, or None (nothing stored, or the file no longer fits this model)."""
-        payload = self._store.take(self._model_id, prompt_ids, dtype, min_tokens)
-        if payload is None:
+        taken = self._store.take(self._model_id, prompt_ids, dtype, min_tokens)
+        if taken is None:
             return None
+        payload, tag = taken
         try:
             slot = SlotCodec.decode(payload, architecture, num_ctx, dtype)
         except (ValueError, KeyError, RuntimeError):
             logger.warning("a stored prompt cache no longer fits its model, ignoring it")
             return None
+        slot.tag = tag  # which chat it belongs to, so a trimmed chat can be cut (PromptCache)
         logger.info("restored a %d-token prompt cache from disk", len(slot.token_ids))
         return slot
 

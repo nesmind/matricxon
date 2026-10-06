@@ -100,6 +100,8 @@ class PromptCache:
                 restored = self._tier.restore(architecture, prompt_ids, num_ctx, dtype, n)
                 if restored is not None:  # a stored conversation beats what RAM had
                     self._add(restored)
+                    if self._context_shift and tag:
+                        self._shift_trimmed_chat(architecture, prompt_ids, key, tag)
                     best, common, n = self._best_slot(prompt_ids, key)
             if best is not None:
                 self.reused_tokens = n

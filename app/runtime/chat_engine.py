@@ -152,9 +152,8 @@ class ChatEngine:
                 self._prompt_cache.miss_reason,
             )
         sampler = Sampler(sampling)
-        max_new_tokens = (
-            sampling.num_predict if sampling.num_predict >= 0 else sampling.num_ctx - prompt_len
-        )
+        room = max(sampling.num_ctx - prompt_len, 0)  # a reply may never outgrow the context
+        max_new_tokens = room if sampling.num_predict < 0 else min(sampling.num_predict, room)
 
         try:
             forward_started = time.monotonic()

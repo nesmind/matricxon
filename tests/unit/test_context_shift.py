@@ -133,3 +133,30 @@ def test_another_chats_cache_is_never_cut(model, caplog):
         _run(model, cache, SYSTEM + MID + TAIL1 + [9, 8, 7], tag="chat-b")
 
     assert "context shift" not in caplog.text
+
+
+def test_after_a_restart_the_stored_chat_is_cut_too(model, tmp_path, caplog, monkeypatch):
+    """The disk copy of a chat comes back with its tag, so a chat trimmed while the server was down
+    still shifts instead of being read again."""
+    from app.runtime import cache_store, slot_codec
+    from app.runtime.cache_crypto import CacheCipher
+    from app.runtime.cache_policy import PersistencePolicy
+    from app.runtime.cache_store import PersistentCacheStore
+    from app.runtime.cache_tier import ModelCacheTier
+
+    monkeypatch.setattr(cache_store, "BLOCK_TOKENS", 8)
+    monkeypatch.setattr(slot_codec, "MIN_PERSIST_TOKENS", 8)
+    store = PersistentCacheStore(
+        tmp_path / "cache", CacheCipher(bytes(range(32))), PersistencePolicy(True, 100, 24)
+    )
+    before = PromptCache(4, tier=ModelCacheTier(store, "m|1"))
+    _run(model, before, SYSTEM + OLD + MID + TAIL1)
+    before.persist_all()
+    store.flush()
+
+    after = PromptCache(4, tier=ModelCacheTier(store, "m|1"))  # a new process: RAM is empty
+    with caplog.at_level(logging.INFO):
+        _run(model, after, SYSTEM + MID + TAIL1 + [9, 8, 7])
+
+    assert "restored a" in caplog.text and "context shift: dropped" in caplog.text
+    assert after.reused_tokens >= len(SYSTEM) + len(MID)

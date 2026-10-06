@@ -62,8 +62,9 @@ def test_spilled_slot_is_encrypted_private_and_restorable(tmp_path: Path) -> Non
     assert b"1000" not in raw and b"m|1" not in raw  # neither tokens nor model id in the clear
     assert store.usage()[0] == 1
 
-    payload = store.take(MODEL, ids + [5, 6], DTYPE, min_tokens=0)
-    assert payload is not None
+    taken = store.take(MODEL, ids + [5, 6], DTYPE, min_tokens=0)
+    assert taken is not None
+    payload, _tag = taken
     slot = slot_codec.SlotCodec.decode(payload, StubArchitecture(), CTX, DTYPE)
     assert slot.token_ids == ids and slot.cache.length == 24
     assert store.usage() == (0, 0) and not list((tmp_path / "c").glob("*.mxc"))
@@ -83,7 +84,7 @@ def test_longest_shared_prefix_wins(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _spill(store, list(range(16)) + [700 + i for i in range(8)])
     _spill(store, list(range(24)))
-    payload = store.take(MODEL, list(range(40)), DTYPE, 0)
+    payload, _tag = store.take(MODEL, list(range(40)), DTYPE, 0)
     slot = slot_codec.SlotCodec.decode(payload, StubArchitecture(), CTX, DTYPE)
     assert slot.token_ids == list(range(24))
 
