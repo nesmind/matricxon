@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     # conversation is always kept. Raise both on a machine with spare RAM and many concurrent chats.
     prompt_cache_slots: int = Field(default=4, ge=1, le=64)
     prompt_cache_budget_mb: int = Field(default=2048, ge=64)
+    # When pAIring trims a chat's oldest messages, cut those tokens out of the cache and keep the
+    # rest
+    # instead of re-reading the whole chat (see PromptCache._shift_trimmed_chat). Slightly
+    # approximate:
+    # turn off to always re-read exactly.
+    prompt_cache_context_shift: bool = True
     # Encrypted on-disk tier below the RAM pool above (see PersistentCacheStore): conversations
     # evicted from RAM, or still cached when a model unloads / the server stops, are kept here so
     # coming back to a chat does not re-read all of it. These three are only the first-run defaults:

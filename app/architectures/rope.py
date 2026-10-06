@@ -29,6 +29,16 @@ class RotaryEmbedding(nn.Module):
         emb = torch.cat([freqs, freqs], dim=-1)
         return emb.cos() * self.attention_factor, emb.sin() * self.attention_factor
 
+    def shift_table(self, count: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """cos/sin `(dim,)` of a rotation by -`count` positions (never scaled by
+        `attention_factor`).
+        Applied like `apply_rotary_pos_emb` to keys already rotated for their position, it moves
+        them
+        `count` positions earlier: rotations by angles add, so this equals rotating them afresh."""
+        freqs = -float(count) * self.inv_freq
+        emb = torch.cat([freqs, freqs], dim=-1)
+        return emb.cos(), emb.sin()
+
 
 class InterleavedMRopeEmbedding(RotaryEmbedding):
     """Qwen3-VL/Qwen3.5 interleaved multi-axis RoPE. `position_ids` is either `(T,)` (text: every

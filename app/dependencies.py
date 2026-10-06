@@ -38,6 +38,7 @@ def get_model_manager() -> ModelManager:
         enable_quantized_native_compute=settings.enable_quantized_native_compute,
         prompt_cache_slots=settings.prompt_cache_slots,
         prompt_cache_budget_mb=settings.prompt_cache_budget_mb,
+        prompt_cache_context_shift=settings.prompt_cache_context_shift,
         max_decode_batch=settings.max_decode_batch,
         device=settings.device,
         gpu_weight_mode=settings.gpu_weight_mode,

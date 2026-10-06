@@ -44,6 +44,9 @@ class _Entry:
         return json.dumps({k: v for k, v in asdict(self).items() if k != "size"}).encode()
 
 
+StoredEntry = _Entry
+
+
 class PersistentCacheStore:
     """Encrypted, size- and age-limited prompt-cache files on disk: the tier below the RAM pool.
 
@@ -146,7 +149,6 @@ class PersistentCacheStore:
         self,
         model_id: str,
         prompt_ids: list[int],
-        num_ctx: int,
         dtype: torch.dtype,
         min_tokens: int,
     ) -> bytes | None:
@@ -159,11 +161,7 @@ class PersistentCacheStore:
         best: tuple[int, str] | None = None
         with self._lock:
             for name, entry in self._index.items():
-                if (entry.model_id, entry.num_ctx, entry.dtype_name) != (
-                    model_id,
-                    num_ctx,
-                    str(dtype),
-                ):
+                if (entry.model_id, entry.dtype_name) != (model_id, str(dtype)):
                     continue
                 shared = 0
                 for mine, theirs in zip(wanted, entry.blocks, strict=False):
@@ -175,6 +173,12 @@ class PersistentCacheStore:
         if best is None:
             return None
         return self._consume(best[1])
+
+    def inspect(self, prompt_ids: list[int]) -> tuple[list[StoredEntry], list[str]]:
+        """The files' headers plus `prompt_ids`' block hashes, to explain a miss."""
+        with self._lock:
+            entries = list(self._index.values())
+        return entries, self._cipher.prefix_fingerprints(prompt_ids, BLOCK_TOKENS)
 
     def _consume(self, name: str) -> bytes | None:
         path = self._dir / name

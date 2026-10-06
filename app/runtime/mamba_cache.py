@@ -115,11 +115,16 @@ class NemotronHHybridCache:
         self.conv_state = [t.clone() for t in snapshot.conv_state]
         self.ssm_state = [t.clone() for t in snapshot.ssm_state]
 
-    def fork_from(self, snapshot: HybridSnapshot) -> "NemotronHHybridCache":
+    def fork_from(
+        self, snapshot: HybridSnapshot, max_seq_len: int | None = None
+    ) -> "NemotronHHybridCache":
         """A new cache at `snapshot.length`: a copy of this one's attention KV up to there plus the
-        snapshot's recurrent state; this cache is left untouched (see `KVCache.fork`)."""
-        forked = NemotronHHybridCache(*self._spec)
-        forked._kv_cache = self._kv_cache.fork(snapshot.length)
+        snapshot's recurrent state; this cache is left untouched (see `KVCache.fork`, which also
+        explains `max_seq_len`)."""
+        spec = list(self._spec)
+        spec[4] = max_seq_len or spec[4]
+        forked = NemotronHHybridCache(*spec)
+        forked._kv_cache = self._kv_cache.fork(snapshot.length, max_seq_len)
         forked.conv_state = [t.clone() for t in snapshot.conv_state]
         forked.ssm_state = [t.clone() for t in snapshot.ssm_state]
         return forked

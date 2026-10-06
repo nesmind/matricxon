@@ -10,6 +10,7 @@ from torch import nn
 
 from app.architectures.device_placement import DevicePlacement
 from app.architectures.packed_weights import PackedWeightLoading
+from app.architectures.rope import RotaryEmbedding
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
 from app.runtime.kv_cache import KVCache
@@ -75,6 +76,24 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
         # model's *entire* lifetime, not just through materialization - see
         # `_ensure_materialized`'s own docstring for why this changes when the mmap gets closed.
         self._quantized_loader: GGUFModelLoader | None = None
+
+    # : True when every layer caches keys already rotated by a plain `RotaryEmbedding` (whole head),
+    # so
+    #: `context_shift_rotations` is exact. Off for hybrid caches and partial/multi-axis rotary.
+    supports_context_shift: ClassVar[bool] = False
+
+    def _rope_for_layer(self, layer_idx: int) -> RotaryEmbedding:
+        return self.rope
+
+    def context_shift_rotations(self, count: int) -> list[tuple[torch.Tensor, torch.Tensor]] | None:
+        """One `(cos, sin)` per KV-cache layer that moves its cached keys `count` positions earlier
+        (see `KVCache.drop_range`), or None when this architecture can't shift its cache."""
+        if not self.supports_context_shift:
+            return None
+        return [
+            self._rope_for_layer(i).shift_table(count)
+            for i in range(len(self.kv_cache_layer_shapes))
+        ]
 
     def build_cache(self, max_seq_len: int, dtype: torch.dtype) -> object:
         """Builds the cache object `ChatEngine.stream()` passes into every real `forward()` call

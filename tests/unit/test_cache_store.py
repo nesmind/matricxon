@@ -62,7 +62,7 @@ def test_spilled_slot_is_encrypted_private_and_restorable(tmp_path: Path) -> Non
     assert b"1000" not in raw and b"m|1" not in raw  # neither tokens nor model id in the clear
     assert store.usage()[0] == 1
 
-    payload = store.take(MODEL, ids + [5, 6], CTX, DTYPE, min_tokens=0)
+    payload = store.take(MODEL, ids + [5, 6], DTYPE, min_tokens=0)
     assert payload is not None
     slot = slot_codec.SlotCodec.decode(payload, StubArchitecture(), CTX, DTYPE)
     assert slot.token_ids == ids and slot.cache.length == 24
@@ -72,19 +72,18 @@ def test_spilled_slot_is_encrypted_private_and_restorable(tmp_path: Path) -> Non
 def test_take_needs_a_real_prefix_match_and_leaves_the_file_otherwise(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _spill(store, list(range(24)))
-    assert store.take(MODEL, [9] + list(range(1, 30)), CTX, DTYPE, 0) is None  # first block differs
-    assert store.take("other|1", list(range(30)), CTX, DTYPE, 0) is None  # other model
-    assert store.take(MODEL, list(range(30)), 64, DTYPE, 0) is None  # other num_ctx
-    assert store.take(MODEL, list(range(30)), CTX, DTYPE, min_tokens=24) is None  # RAM has more
+    assert store.take(MODEL, [9] + list(range(1, 30)), DTYPE, 0) is None  # first block differs
+    assert store.take("other|1", list(range(30)), DTYPE, 0) is None  # other model
+    assert store.take(MODEL, list(range(30)), DTYPE, min_tokens=24) is None  # RAM has more
     assert store.usage()[0] == 1
-    assert store.take(MODEL, list(range(30)), CTX, DTYPE, 0) is not None
+    assert store.take(MODEL, list(range(30)), DTYPE, 0) is not None
 
 
 def test_longest_shared_prefix_wins(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _spill(store, list(range(16)) + [700 + i for i in range(8)])
     _spill(store, list(range(24)))
-    payload = store.take(MODEL, list(range(40)), CTX, DTYPE, 0)
+    payload = store.take(MODEL, list(range(40)), DTYPE, 0)
     slot = slot_codec.SlotCodec.decode(payload, StubArchitecture(), CTX, DTYPE)
     assert slot.token_ids == list(range(24))
 
@@ -96,7 +95,7 @@ def test_disabled_policy_neither_writes_nor_serves(tmp_path: Path) -> None:
     store.policy.enabled = True
     _spill(store, list(range(24)))
     store.policy.enabled = False
-    assert store.take(MODEL, list(range(30)), CTX, DTYPE, 0) is None
+    assert store.take(MODEL, list(range(30)), DTYPE, 0) is None
 
 
 def test_short_slots_and_oversized_files_are_not_stored(tmp_path: Path) -> None:
@@ -158,7 +157,7 @@ def test_a_tampered_body_is_rejected_and_deleted(tmp_path: Path) -> None:
     blob = bytearray(file.read_bytes())
     blob[-5] ^= 0xFF
     file.write_bytes(bytes(blob))
-    assert store.take(MODEL, list(range(30)), CTX, DTYPE, 0) is None
+    assert store.take(MODEL, list(range(30)), DTYPE, 0) is None
     assert not file.exists()
 
 
@@ -182,7 +181,7 @@ def test_forget_drops_only_that_chats_files_and_refuses_its_later_spills(tmp_pat
 
     assert store.forget("chat-a") == 1
     assert store.usage()[0] == 1
-    assert store.take(MODEL, list(range(100, 124)) + [1], CTX, DTYPE, 0) is None
+    assert store.take(MODEL, list(range(100, 124)) + [1], DTYPE, 0) is None
 
     store.spill_async(MODEL, _slot_with_tag(list(range(100, 124)), "chat-a"))
     store.flush()

@@ -50,6 +50,7 @@ class Qwen2Architecture(ModelArchitecture):
     """
 
     NAME = "qwen2"
+    supports_context_shift = True
     SUPPORTS_GPU = True
     SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
 

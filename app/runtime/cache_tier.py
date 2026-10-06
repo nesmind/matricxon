@@ -3,7 +3,8 @@ import logging
 import torch
 
 from app.architectures.base import ModelArchitecture
-from app.runtime.cache_store import PersistentCacheStore
+from app.runtime.cache_miss_diagnosis import CacheMissDiagnosis
+from app.runtime.cache_store import BLOCK_TOKENS, PersistentCacheStore
 from app.runtime.prompt_slot import CacheSlot
 from app.runtime.slot_codec import SlotCodec
 
@@ -32,7 +33,7 @@ class ModelCacheTier:
     ) -> CacheSlot | None:
         """A slot rebuilt from disk that shares more than `min_tokens` leading tokens with
         `prompt_ids`, or None (nothing stored, or the file no longer fits this model)."""
-        payload = self._store.take(self._model_id, prompt_ids, num_ctx, dtype, min_tokens)
+        payload = self._store.take(self._model_id, prompt_ids, dtype, min_tokens)
         if payload is None:
             return None
         try:
@@ -42,3 +43,16 @@ class ModelCacheTier:
             return None
         logger.info("restored a %d-token prompt cache from disk", len(slot.token_ids))
         return slot
+
+    def explain(self, prompt_ids: list[int], dtype: torch.dtype, tag: str) -> str:
+        """Why the disk tier had nothing for this prompt (for the log)."""
+        entries, wanted = self._store.inspect(prompt_ids)
+        return CacheMissDiagnosis.disk(
+            entries,
+            wanted,
+            BLOCK_TOKENS,
+            self._model_id,
+            dtype,
+            tag,
+            self._store.policy.enabled,
+        )

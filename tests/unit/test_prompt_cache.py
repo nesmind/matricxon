@@ -73,13 +73,13 @@ def test_a_diverging_prompt_reuses_only_the_common_part(model: LlamaArchitecture
     assert result == _generate(model, PromptCache(), [1, 72, 200, 201])
 
 
-def test_no_reuse_across_a_num_ctx_change(model: LlamaArchitecture) -> None:
+def test_reuse_survives_a_num_ctx_change(model: LlamaArchitecture) -> None:
     cache = PromptCache()
     _generate(model, cache, [1, 72, 105])
 
     _generate(model, cache, [1, 72, 105, 33], sampling=SamplingConfig(temperature=0.0, num_ctx=32))
 
-    assert cache.reused_tokens == 0
+    assert cache.reused_tokens == 3  # num_ctx is only capacity (see test_prompt_cache_num_ctx.py)
 
 
 def test_image_prompts_are_never_reused_or_kept_and_leave_the_pool_alone(

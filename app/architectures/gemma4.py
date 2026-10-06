@@ -43,6 +43,7 @@ class Gemma4Architecture(ModelArchitecture):
     """
 
     NAME = "gemma4"
+    supports_context_shift = True
     SUPPORTS_GPU = True
     SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
     SUPPORTS_MOE = True  # real Gemma4TextExperts/Gemma4TextRouter - see gemma4_moe.py
@@ -188,6 +189,9 @@ class Gemma4Architecture(ModelArchitecture):
         correction from `rope_freqs.weight` once available - see `_materialize_weights`."""
         self.rope_local = RotaryEmbedding(**self._rope_kwargs_local)
         self.rope_global = RotaryEmbedding(**self._rope_kwargs_global)
+
+    def _rope_for_layer(self, layer_idx: int) -> RotaryEmbedding:
+        return self.rope_local if self._is_sliding[layer_idx] else self.rope_global
 
     @property
     def kv_cache_layer_shapes(self) -> list[tuple[int, int]]:

@@ -73,6 +73,7 @@ class ModelManager:
         enable_quantized_native_compute: bool = False,
         clock: Callable[[], float] = time.monotonic,
         prompt_cache_slots: int = 4,
+        prompt_cache_context_shift: bool = True,
         prompt_cache_budget_mb: int = 2048,
         max_decode_batch: int = 8,
         device: str = "cpu",
@@ -96,6 +97,7 @@ class ModelManager:
         self._enable_quantized_native_compute = enable_quantized_native_compute
         self._clock = clock
         self._prompt_cache_slots = prompt_cache_slots
+        self._prompt_cache_context_shift = prompt_cache_context_shift
         self._prompt_cache_budget_bytes = prompt_cache_budget_mb << 20
         self._max_decode_batch = max_decode_batch
         self._handles: dict[str, ModelHandle] = {}
@@ -392,5 +394,6 @@ class ModelManager:
                 ModelCacheTier(self._cache_store, f"{tag}|{installed.size_bytes}")
                 if self._cache_store is not None
                 else None,
+                self._prompt_cache_context_shift,
             ),
         )

@@ -51,6 +51,7 @@ class LlamaArchitecture(ModelArchitecture):
     """
 
     NAME = "llama"
+    supports_context_shift = True
     SUPPORTS_GPU = True
     SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
     SUPPORTS_VISION = True

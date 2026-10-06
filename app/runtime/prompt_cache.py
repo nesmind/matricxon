@@ -1,10 +1,15 @@
+import logging
+
 import torch
 
 from app.architectures.base import ModelArchitecture
+from app.runtime.cache_miss_diagnosis import CacheMissDiagnosis
 from app.runtime.cache_tier import ModelCacheTier
 from app.runtime.kv_cache import KVCache
 from app.runtime.mamba_cache import NemotronHHybridCache
 from app.runtime.prompt_slot import CacheSlot
+
+logger = logging.getLogger(__name__)
 
 
 class PromptCache:
@@ -35,8 +40,9 @@ class PromptCache:
 
     Not reused (a fresh, unpooled cache is built, and the pool is left alone) when the prompt
     carries image embeddings - their placeholder token ids are identical for different images, so
-    an id match wouldn't mean the same content. A different `num_ctx` or dtype never matches a
-    slot.
+    an id match wouldn't mean the same content. Only a different dtype never matches a slot:
+    `num_ctx` is just capacity, so a slot built for a smaller one is copied into a bigger cache
+    and one built for a larger one is used as is.
 
     One instance per loaded model (`ModelHandle.prompt_cache`); only ever used from that model's
     own `ModelWorker` thread, which runs one generation at a time.
@@ -56,13 +62,18 @@ class PromptCache:
         max_slots: int = 4,
         budget_bytes: int = 2 << 30,
         tier: ModelCacheTier | None = None,
+        context_shift: bool = True,
     ) -> None:
         self._max_slots = max(1, max_slots)
         self._budget_bytes = budget_bytes
         self._tier = tier  # the encrypted disk tier below this pool, if enabled
+        self._context_shift = context_shift
         self._slots: list[CacheSlot] = []
         self._tick = 0
         self.reused_tokens = 0
+        self.miss_reason = (
+            ""  # why the last acquire reused nothing (empty when it reused something)
+        )
 
     @property
     def slot_count(self) -> int:
@@ -80,7 +91,10 @@ class PromptCache:
         """(cache, n): a cache already holding `prompt_ids[:n]`, so prefill starts at n."""
         key = (num_ctx, dtype)
         self.reused_tokens = 0
+        self.miss_reason = "" if reusable else "the prompt contains images (never reused)"
         if reusable:
+            if self._context_shift and tag:
+                self._shift_trimmed_chat(architecture, prompt_ids, key, tag)
             best, common, n = self._best_slot(prompt_ids, key)
             if self._tier is not None:
                 restored = self._tier.restore(architecture, prompt_ids, num_ctx, dtype, n)
@@ -89,16 +103,58 @@ class PromptCache:
                     best, common, n = self._best_slot(prompt_ids, key)
             if best is not None:
                 self.reused_tokens = n
-                slot = self._take(best, common, n)
+                slot = self._take(best, common, n, num_ctx)
                 slot.prompt_len = len(prompt_ids)
                 slot.in_use = True
                 slot.tag = tag or slot.tag
                 return slot.cache, n
+            self.miss_reason = self._explain_miss(prompt_ids, key, tag)
         cache = architecture.build_cache(max_seq_len=num_ctx, dtype=dtype)
         if reusable and isinstance(cache, (KVCache, NemotronHHybridCache)):
             slot = self._add(CacheSlot(cache, key, prompt_len=len(prompt_ids), tag=tag))
             slot.in_use = True
         return cache, 0
+
+    def _shift_trimmed_chat(
+        self,
+        architecture: ModelArchitecture,
+        prompt_ids: list[int],
+        key: tuple[int, torch.dtype],
+        tag: str,
+    ) -> None:
+        """If this chat's cached prompt is the new one with its oldest messages trimmed away, cuts
+        those
+        tokens out of the cache (re-rotating the rest) instead of re-reading the whole chat.
+        Approximate:
+        the kept tokens were read while the dropped ones were still visible, so they carry a trace
+        of
+        them - the same trade llama.cpp's context shifting makes."""
+        for slot in self._slots:
+            if slot.tag != tag or slot.key[1] != key[1] or slot.in_use:
+                continue
+            gap = slot.find_gap(prompt_ids)
+            if gap is None:
+                continue
+            keep, dropped, run = gap
+            rotations = architecture.context_shift_rotations(dropped)
+            if rotations is None:
+                return
+            slot.shift_out(keep, dropped, rotations)
+            logger.info(
+                "context shift: dropped %d trimmed tokens after the first %d, kept the next %d",
+                dropped,
+                keep,
+                run,
+            )
+            return
+
+    def _explain_miss(self, prompt_ids: list[int], key: tuple[int, torch.dtype], tag: str) -> str:
+        parts = [CacheMissDiagnosis.ram(self._slots, prompt_ids, key, tag)]
+        if self._tier is not None:
+            parts.append(self._tier.explain(prompt_ids, key[1], tag))
+        return "; ".join(
+            f"{label}: {text}" for label, text in zip(("RAM", "disk"), parts, strict=False)
+        )
 
     def _best_slot(
         self, prompt_ids: list[int], key: tuple[int, torch.dtype]
@@ -106,7 +162,7 @@ class PromptCache:
         """The slot supplying the most tokens: (slot, common, reusable), or (None, 0, 0)."""
         best, best_common, best_n = None, 0, 0
         for slot in self._slots:
-            if slot.key != key or (slot.in_use and self._max_slots == 1):
+            if slot.key[1] != key[1] or (slot.in_use and self._max_slots == 1):
                 continue
             common, n = slot.match(prompt_ids)
             newer = best is not None and slot.last_used > best.last_used
@@ -114,7 +170,7 @@ class PromptCache:
                 best, best_common, best_n = slot, common, n
         return best, best_common, best_n
 
-    def _take(self, slot: CacheSlot, common: int, n: int) -> CacheSlot:
+    def _take(self, slot: CacheSlot, common: int, n: int, num_ctx: int) -> CacheSlot:
         """Makes `slot`'s first `n` tokens the cache to prefill into and returns the slot that
         holds it. In place when the prompt continues this slot's conversation (only the old reply
         and the end of the last turn are dropped) or when little is dropped; otherwise - and
@@ -126,6 +182,13 @@ class PromptCache:
         dropped = len(slot.token_ids) - n
         forkable = self._max_slots > 1
         wanted = slot.in_use or (not continues and dropped >= self.FORK_MIN_DROPPED_TOKENS)
+        if (
+            slot.key[0] < num_ctx
+        ):  # a bigger `num_ctx` than it was built for: copy into a bigger cache
+            bigger = slot.fork(n, num_ctx)
+            if continues and not slot.in_use:  # the same chat: the copy supersedes the small one
+                self._slots.remove(slot)
+            return self._add(bigger)
         if forkable and wanted:
             return self._add(slot.fork(n))
         slot.rewind(n)

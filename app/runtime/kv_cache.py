@@ -1,5 +1,6 @@
 import torch
 
+from app.architectures.rope import rotate_half
 from app.server.errors import PromptTooLongError
 
 
@@ -85,13 +86,39 @@ class KVCache:
             raise ValueError(f"can't truncate a cache of length {self._length} to {length}")
         self._length = length
 
-    def fork(self, length: int) -> "KVCache":
+    def drop_range(
+        self, start: int, count: int, rotations: list[tuple[torch.Tensor, torch.Tensor]]
+    ) -> None:
+        """Removes positions `[start, start + count)`: everything after slides down by `count` and
+        its
+        keys are rotated (one `(cos, sin)` per layer, see `RotaryEmbedding.shift_table`) to carry
+        the
+        new position, so the kept tokens need no recomputing. Values hold no position - just
+        moved."""
+        end = self._length
+        if start < 0 or count <= 0 or start + count > end or len(rotations) != len(self._k):
+            raise ValueError(f"can't drop {count} positions at {start} of a cache of length {end}")
+        for layer, (cos, sin) in enumerate(rotations):
+            keys = self._k[layer][:, :, start + count : end, :]
+            moved = keys.float()
+            moved = moved * cos.to(moved.device) + rotate_half(moved) * sin.to(moved.device)
+            self._k[layer][:, :, start : end - count, :] = moved.to(self._dtype)
+            self._v[layer][:, :, start : end - count, :] = self._v[layer][
+                :, :, start + count : end, :
+            ].clone()
+        self._length = end - count
+
+    def fork(self, length: int, max_seq_len: int | None = None) -> "KVCache":
         """A new cache holding a copy of the first `length` positions; this one is left untouched.
         Cheap next to recomputing those positions - how `PromptCache` lets a second conversation
-        build on a shared prefix without destroying the first one's cache."""
+        build on a shared prefix without destroying the first one's cache. `max_seq_len` gives the
+        copy a different capacity (a larger `num_ctx` than this cache was built for)."""
         if not 0 <= length <= self._length:
             raise ValueError(f"can't fork a cache of length {self._length} at {length}")
-        forked = KVCache(self._layer_shapes, self._max_seq_len, self._dtype, self._device)
+        capacity = max_seq_len or self._max_seq_len
+        if capacity < length:
+            raise ValueError(f"can't fork {length} positions into a capacity of {capacity}")
+        forked = KVCache(self._layer_shapes, capacity, self._dtype, self._device)
         for src, dst in ((self._k, forked._k), (self._v, forked._v)):
             for layer_src, layer_dst in zip(src, dst, strict=True):
                 layer_dst[:, :, :length, :] = layer_src[:, :, :length, :]

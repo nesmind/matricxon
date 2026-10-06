@@ -145,6 +145,12 @@ class ChatEngine:
             reusable=request.image_embeddings is None,
             tag=request.cache_tag,
         )
+        if reused == 0 and prompt_len > 1:
+            logger.info(
+                "re-reading the entire chat (%d tokens) - no cached tokens reused. %s",
+                prompt_len,
+                self._prompt_cache.miss_reason,
+            )
         sampler = Sampler(sampling)
         max_new_tokens = (
             sampling.num_predict if sampling.num_predict >= 0 else sampling.num_ctx - prompt_len
