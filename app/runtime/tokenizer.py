@@ -6,18 +6,17 @@ from app.gguf.metadata import GGUFMetadata
 from app.runtime.gemma_tokenizer import Gemma4Tokenizer
 from app.runtime.sentencepiece_tokenizer import SentencePieceTokenizer
 
-# GPT-2's original pre-tokenizer split pattern (llama.cpp's `tokenizer.ggml.pre
-# = "default"`) - requires \p{L}/\p{N} Unicode-property matching, which is why
-# this uses the third-party `regex` package rather than stdlib `re`.
+# GPT-2's pre-tokenizer split pattern (llama.cpp's `tokenizer.ggml.pre = "default"`); needs
+# \p{L}/\p{N} Unicode properties, hence the third-party `regex` package, not stdlib `re`.
 _GPT2_SPLIT_PATTERN = regex.compile(
     r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"
 )
 
 # Split patterns for other `tokenizer.ggml.pre` values, from llama.cpp's llama-vocab.cpp. Llama 3's
-# ("llama-bpe") keeps a newline run together (`\s*[\r\n]+`) and caps digit runs at 3 - under the
-# GPT-2 pattern "\n\nSay" split into two "\n" tokens instead of Llama 3's single "\n\n" token
-# (found 2026-09-23 comparing a chat prompt's token count with Ollama's). Any other value keeps the
-# GPT-2 pattern, which is today's behavior.
+# ("llama-bpe") keeps a newline run together (`\s*[\r\n]+`) and caps digit runs at 3: under the
+# GPT-2 pattern "\n\nSay" split into two "\n" tokens instead of Llama 3's single "\n\n" (found
+# comparing a prompt's token count with Ollama's). Any other value keeps the GPT-2
+# pattern (today's behavior).
 _SPLIT_PATTERNS_BY_PRE = {
     "llama-bpe": regex.compile(
         r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?\p{L}+"
@@ -30,12 +29,10 @@ _CONTROL_TOKEN_TYPE = 3
 
 @functools.lru_cache(maxsize=1)
 def _byte_to_unicode() -> dict[int, str]:
-    """GPT-2's byte<->unicode mapping: every byte value gets its own printable
-    unicode codepoint, so BPE merges operate on ordinary strings instead of
-    choking on raw/unprintable bytes - the standard table from OpenAI's
-    original `gpt2/encoder.py` (a generic BPE technique, not llama.cpp/ggml
-    code), reused by every byte-level BPE tokenizer including HF's.
-    """
+    """GPT-2's byte<->unicode mapping: every byte value gets its own printable codepoint, so BPE
+    merges work on ordinary strings instead of raw/unprintable bytes. The standard table from
+    OpenAI's `gpt2/encoder.py` (a generic BPE technique, not llama.cpp/ggml code) used by every
+    byte-level BPE tokenizer including HF's."""
     byte_values = (
         list(range(ord("!"), ord("~") + 1))
         + list(range(ord("¡"), ord("¬") + 1))
@@ -52,20 +49,14 @@ def _byte_to_unicode() -> dict[int, str]:
 
 
 class GGUFTokenizer:
-    """Byte-level BPE tokenizer built directly from a GGUF file's
-    `tokenizer.ggml.*` metadata - matches `tokenizer.ggml.model = "gpt2"`,
-    the format llama.cpp's converter normalizes every supported model's
-    tokenizer into (confirmed against `ministral-3:3b`'s real metadata: a
-    plain byte-level BPE vocab/merge list, not a proprietary format).
+    """Byte-level BPE tokenizer built from a GGUF's `tokenizer.ggml.*` metadata for
+    `tokenizer.ggml.model = "gpt2"`, the format llama.cpp's converter normalizes supported models'
+    tokenizers into (checked on `ministral-3:3b`). No HF `transformers` dependency (dev-only, for
+    the oracle cross-check).
 
-    Deliberately has no HF `transformers` dependency - that's dev-only, used
-    for the M3 oracle cross-check, never imported from here.
-
-    Control tokens (type 3 in `tokenizer.ggml.token_type` - `<s>`, `[INST]`,
-    `[TOOL_CALLS]`, etc.) are matched literally and short-circuit BPE for
-    that span, exactly like every other real BPE tokenizer does - otherwise
-    a literal `"[INST]"` in a prompt would get shredded into unrelated
-    byte-level pieces instead of encoding as its own single token.
+    Control tokens (type 3 in `tokenizer.ggml.token_type`: `<s>`, `[INST]`, `[TOOL_CALLS]`, ...) are
+    matched literally and short-circuit BPE for that span, as in every BPE tokenizer: otherwise a
+    literal `"[INST]"` in a prompt would be shredded into byte-level pieces instead of one token.
     """
 
     def __init__(self, metadata: GGUFMetadata) -> None:
@@ -96,13 +87,10 @@ class GGUFTokenizer:
 
     def encode(self, text: str, add_bos: bool = False) -> list[int]:
         """`add_bos` defaults to False and is the caller's explicit call, not
-        `tokenizer.ggml.add_bos_token` - that GGUF metadata flag turned out to
-        not match this model's real behavior (verified against the HF
-        oracle: its tokenizer_config.json sets `add_bos_token=False` for a
-        bare encode call, and instead inserts BOS itself as part of chat
-        template application, which matricxon doesn't implement yet). Trust
-        the caller (a future chat-template builder) over that flag.
-        """
+        `tokenizer.ggml.add_bos_token`: that GGUF flag didn't match this model's behavior (the HF
+        oracle's tokenizer_config.json sets `add_bos_token=False` for a bare encode, inserting BOS
+        in chat-template application, which matricxon doesn't implement yet). Trust the caller (a
+        future chat-template builder) over that flag."""
         token_ids: list[int] = []
         if add_bos and self.bos_token_id is not None:
             token_ids.append(self.bos_token_id)
@@ -160,14 +148,9 @@ class GGUFTokenizer:
 
 
 class IncrementalTextDecoder:
-    """Buffers raw bytes across a stream of tokens and only emits text once a
-    full UTF-8 character boundary is reached.
-
-    A single multi-byte character (most emoji, accented letters) can span
-    two adjacent BPE tokens - decoding each streamed token in isolation
-    would otherwise emit a stray replacement character instead of holding
-    the partial sequence back until the rest of it arrives.
-    """
+    """Buffers raw bytes across a token stream and emits text only at a full UTF-8 character
+    boundary: one multi-byte character (most emoji, accented letters) can span two BPE tokens, and
+    decoding each in isolation would emit a stray replacement character."""
 
     def __init__(
         self, tokenizer: "GGUFTokenizer | SentencePieceTokenizer | Gemma4Tokenizer"

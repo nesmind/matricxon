@@ -12,11 +12,10 @@ class TagEntry(BaseModel):
     capabilities: list[str]
     size: int
     details: ModelDetails
-    # Matricxon's own real, current minimum RAM to actually load this exact tag - see
-    # app.models.load_dtype.estimate_ram_gb's own docstring for the full reasoning (same real
-    # number `/api/show` reports, exposed here too so a caller listing every installed model - see
-    # ../pAIring/app/services/model_catalog_service.py - gets it for all of them in one call,
-    # rather than needing a separate `/api/show` round trip per tag).
+    # Matricxon's minimum RAM to load this tag; see app.models.load_dtype.estimate_ram_gb (the same
+    # number `/api/show` reports, exposed here so a caller listing every installed model,
+    # ../pAIring/app/services/model_catalog_service.py, gets all in one call instead of an
+    # `/api/show` per tag).
     estimated_ram_gb: float
 
 

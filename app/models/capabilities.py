@@ -5,47 +5,32 @@ from app.runtime.chat_template import has_confirmed_chat_format
 
 _THINKING_MARKERS = ("thinking", "reasoning")
 _ENCODER_ARCHITECTURES = ("bert", "nomic-bert")
-# A `clip` mmproj file (a real vision tower + projector, e.g. a real LLaVA pull's `:mmproj`
-# suffix) is never `ArchitectureRegistry`-resolvable on its own (confirmed: "clip" isn't in its
-# `_ARCHITECTURES` list) - a real `/api/chat` against one directly would just fail, so it must
-# never be reported "completion" (a real bug this fixes: it previously fell into the same
-# "anything else registered" default as an actual text model).
+# A `clip` mmproj file (a vision tower + projector, e.g. a LLaVA pull's `:mmproj` suffix) isn't
+# `ArchitectureRegistry`-resolvable alone ("clip" isn't in `_ARCHITECTURES`): a `/api/chat` against
+# it would fail, so it must never be reported "completion" (it previously fell into the "anything
+# else registered" default of a text model).
 _MMPROJ_ARCHITECTURE = "clip"
-# Real image-embedding fusion (see LlamaArchitecture._forward_impl's own docstring) is only wired
-# up for this one architecture today - a same-directory clip file paired with any OTHER
-# architecture (mistral3/gemma4/bert/nomic-bert) still gets `image_embeddings` accepted-and-ignored
-# (see each one's own `del image_embeddings` comment), so reporting "vision" for one would be a
-# real, live false claim - confirmed exactly the kind of gap worth guarding against explicitly
-# rather than assuming "a paired mmproj exists" alone always means real support (2026-09-21, found
-# while making this check robust for future models: e.g. a real gemma4 vision model paired with its
-# own real mmproj would otherwise have been wrongly reported vision-capable here). Extend this set,
-# not the pairing-detection logic itself, whenever a future architecture gets real fusion wiring.
-# "phi2" added once Phi2Architecture._forward_impl grew the same real image_embeddings splice
-# LlamaArchitecture's own already has (moondream2, its own real reference vision model).
+# Image-embedding fusion (LlamaArchitecture._forward_impl) is wired only for these architectures. A
+# clip file paired with any other (mistral3/gemma4/bert/nomic-bert) has `image_embeddings` accepted
+# and ignored, so reporting "vision" for it would be false. Extend this set, not the pairing
+# detection, when a new architecture gets fusion. "phi2" was added once
+# Phi2Architecture._forward_impl got the same splice (moondream2 is its reference vision model).
 _VISION_FUSION_ARCHITECTURES = frozenset(ArchitectureRegistry().vision_supported_names())
 
 
 class CapabilityInferer:
-    """GGUF has no standardized capabilities field - this is Ollama's own
-    manifest-layer convention, not a GGUF one - so it has to be inferred.
+    """GGUF has no standard capabilities field (it is Ollama's manifest-layer convention), so they
+    are inferred.
 
-    "embedding" for the registered encoder architectures (`bert`,
-    `nomic-bert` - matched by `general.architecture` string rather than
-    resolving through `ArchitectureRegistry`, to avoid a needless import
-    cycle for what's just a name check), "completion" for anything else
-    registered (only `mistral3` so far), empty for a `clip` mmproj file (see
-    `_MMPROJ_ARCHITECTURE`'s own comment). "thinking" is a small manual
-    override by repo/filename substring, per ROADMAP.md - no real local
-    model needs it yet, so this is deliberately minimal rather than a real
-    classifier. "vision" is never reported *here* - see `effective_capabilities`
-    for why that's a real, separate, dynamic concern rather than something
-    inferable at pull time from one file's own metadata alone.
+    "embedding" for the registered encoder architectures (`bert`, `nomic-bert`, matched by
+    `general.architecture` string, not via `ArchitectureRegistry`, to avoid an import cycle),
+    "completion" for anything else registered, empty for a `clip` mmproj (`_MMPROJ_ARCHITECTURE`).
+    "thinking" is a small manual override by repo/filename substring (no local model needs it yet).
+    "vision" is never reported here; see `effective_capabilities`.
 
-    Takes a bare `architecture` string rather than a full `GGUFMetadata` (the only field this
-    ever read off one) - lets a caller with just that one string, not a whole parsed GGUF header,
-    call this directly too, e.g. app.routers.capabilities_router's `/api/infer-capabilities`,
-    added for pAIring's own direct-from-Hugging-Face download path (2026-09-21) so it can get a
-    real capabilities verdict without reimplementing this logic on its own side.
+    Takes a bare `architecture` string, so a caller with only that, e.g. `/api/infer-capabilities`
+    (app.routers.capabilities_router, for pAIring's direct Hugging Face download), can use it
+    without reimplementing this.
     """
 
     def infer(self, repo_id: str, filename: str, architecture: str) -> list[str]:
@@ -60,41 +45,26 @@ class CapabilityInferer:
 
 
 def effective_capabilities(installed: InstalledModel, has_paired_mmproj: bool) -> list[str]:
-    """The real, request-time-visible capability list for `installed` - its own stored
-    `capabilities` (computed once, at pull time, by `CapabilityInferer.infer` above) plus
-    `"vision"` when `has_paired_mmproj` (see `ModelCatalog.find_paired_mmproj`) is true *and*
-    `installed.architecture` actually has real image-embedding fusion wired up (see
-    `_VISION_FUSION_ARCHITECTURES`'s own comment) - a paired mmproj file existing is necessary
-    but not sufficient: it only proves a vision tower is available to encode with, not that this
-    specific text architecture knows how to consume the result.
+    """The request-time capability list for `installed`: its stored `capabilities` (computed at pull
+    time by `CapabilityInferer.infer`) plus:
 
-    Deliberately *not* folded into `CapabilityInferer.infer` itself: a paired mmproj can be
-    pulled *after* the text model (confirmed live, 2026-09-21, this exact real case - LLaVA's
-    text half was pulled in an earlier session, its mmproj only during this one), so baking
-    "vision" into the stored sidecar at pull time would miss it for every model already
-    installed before its sibling exists - this is computed fresh by the caller (see
-    `tags_router.py`/`show_router.py`) against the *current* catalog state instead.
-
-    Also adds `"chat_format_unverified"` for a "completion"-capable model with no confirmed real
-    chat template (see `app.runtime.chat_template.has_confirmed_chat_format` - True for a genuine
-    mistral3 model or one with its own real/builtin template, False for anything landing in
-    `LegacyMistralPromptBuilder`'s generic guess). Surfaced so a caller (pAIring's model list) can
-    flag "we don't actually know this model's real instruction format" - real, confirmed-live
-    gap this closes (2026-09-27): Hebrew-Mistral-7B-Q5_K_M produced incoherent, non-chat-like
-    output no matter which prompt format it was given, with nothing distinguishing it from a
-    normal, well-behaved chat model in the model list.
-
-    Also adds `"architecture_features_unsupported"` when `installed`'s own resolved architecture
-    class reports a real gated-variant gap for THIS checkpoint (see
-    `app.architectures.registry.unsupported_features`/`ModelArchitecture.unsupported_features`'s
-    own docstring) - real, confirmed-live gap this closes (2026-09-29): a real gemma-4-E2B-it
-    GGUF's Per-Layer Embeddings and cross-layer KV reuse were silently never read at all by the
-    dense-only `Gemma4Architecture` class that otherwise claimed full "completion" support for
-    it, with nothing in the model list distinguishing it from a fully-handled checkpoint until
-    that was found and fixed by hand.
-
-    Also adds `"tools"` when the model's chat template shows a tool-call format matricxon can
-    parse back out of a reply (see `app.runtime.tool_call_formats`)."""
+    - `"vision"` when `has_paired_mmproj` (`ModelCatalog.find_paired_mmproj`) is true and
+      `installed.architecture` has image-embedding fusion (`_VISION_FUSION_ARCHITECTURES`): a paired
+      mmproj proves a vision tower exists, not that this text architecture can use its output.
+      Computed per request, not at pull time, since an mmproj can be pulled after the text model
+      (`tags_router.py`/`show_router.py` pass the current catalog).
+    - `"chat_format_unverified"` for a "completion" model with no confirmed chat template
+      (`app.runtime.chat_template.has_confirmed_chat_format`: True for mistral3 or a model with its
+      own/builtin template, False for `LegacyMistralPromptBuilder`'s generic guess), so pAIring's
+      list can flag an unknown instruction format (a Hebrew Mistral fine-tune gave incoherent output
+      with any prompt format yet looked like a normal model).
+    - `"architecture_features_unsupported"` when the architecture class reports a gated-variant gap
+      for this checkpoint (`app.architectures.registry.unsupported_features`; e.g. a gemma-4-E2B-it
+      GGUF's Per-Layer Embeddings and cross-layer KV reuse were silently ignored by the dense-only
+      `Gemma4Architecture`).
+    - `"tools"` when the chat template shows a tool-call format matricxon can parse
+      (`app.runtime.tool_call_formats`).
+    """
     capabilities = installed.capabilities
     has_real_fusion = has_paired_mmproj and installed.architecture in _VISION_FUSION_ARCHITECTURES
     if has_real_fusion and "vision" not in capabilities:

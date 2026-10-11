@@ -1,11 +1,7 @@
-"""M10: ClipVisionEncoder against a tiny but real `clip` mmproj GGUF (see
-
-tests/tiny_gguf_clip.py) - fast, memory-safe wiring proof. The real
-numeric/statistical validation against the real moondream2 mmproj pull
-(910MB) was done manually (see ROADMAP.md's M10 vision entry) - this
-covers shape correctness, the real ffn_up/ffn_down naming swap, and
-end-to-end no-crash/no-NaN behavior.
-"""
+"""M10: ClipVisionEncoder against a tiny `clip` mmproj GGUF (tests/tiny_gguf_clip.py): a fast,
+memory-safe wiring proof. Numeric validation on the moondream2 mmproj pull (910MB) was manual; this
+covers shape correctness, the ffn_up/ffn_down naming swap and
+end-to-end no-crash/no-NaN."""
 
 from pathlib import Path
 
@@ -34,8 +30,8 @@ class TestSupports:
     def test_rejects_a_text_architecture(self, tiny_clip_path: Path) -> None:
         metadata = GGUFReader(tiny_clip_path).read().metadata
         assert metadata.architecture == "clip"
-        # A real clip file with no vision encoder (has_vision_encoder=False,
-        # e.g. a text-only CLIP export) must not be mistaken for one.
+        # A clip file with no vision encoder (has_vision_encoder=False, e.g. a text-only CLIP
+        # export) must not be mistaken for one.
         from app.gguf.metadata import GGUFMetadata
 
         text_only = GGUFMetadata({**metadata._values, "clip.has_vision_encoder": False})
@@ -88,13 +84,9 @@ class TestForward:
         assert torch.equal(first, second)
 
     def test_ffn_layers_use_the_real_confirmed_shapes(self, tiny_clip_path: Path) -> None:
-        """Regression guard for the real, confirmed-by-bias-length finding
-
-        that "ffn_up"/"ffn_down" naming in this GGUF format is the
-        opposite of what the names suggest (see ClipVisionEncoderLayer's
-        own docstring) - fc1 must expand to ffn_len, fc2 must contract
-        back to n_embd, regardless of which GGUF tensor name feeds which.
-        """
+        """Guards the bias-length finding that "ffn_up"/"ffn_down" in this GGUF format are the
+        opposite of the names (ClipVisionEncoderLayer): fc1 must expand to ffn_len and fc2 contract
+        to n_embd, whichever tensor name feeds which."""
         loader = GGUFModelLoader(tiny_clip_path, dtype=torch.float32)
         model = ClipVisionEncoder.from_gguf(loader)
 

@@ -1,10 +1,8 @@
-"""GEMV kernels for IQ3_XXS, IQ3_S - same real, honest performance profile as
-`quantized_gemv_extended.py` (register-only accumulators, no heap scratch buffer). Correctness
-cross-checked against each type's own already-oracle-validated `QuantStrategy.dequantize()` in
-`iq3_family.py`. As much of each block's own per-sub-block bit-unpacking as possible is
-precomputed once outside the njit hot loop, only the final per-lane grid lookup + accumulate
-happens inside numba - same split as quantized_gemv_iq2.py.
-"""
+"""GEMV kernels for IQ3_XXS, IQ3_S, with the performance profile of `quantized_gemv_extended.py`
+(register-only accumulators, no heap scratch). Correctness cross-checked against each type's
+oracle-validated `QuantStrategy.dequantize` in `iq3_family.py`. As much per-sub-block
+bit-unpacking as possible is precomputed outside the njit hot loop; only the per-lane grid lookup +
+accumulate runs in numba (same split as quantized_gemv_iq2.py)."""
 
 import numba
 import numpy as np
@@ -13,8 +11,8 @@ import torch
 from app.gguf.dequant.iq_grids import iq3s_grid_i8, iq3xxs_grid_i8, kmask_iq2xs, ksigns_iq2xs
 
 _QK_K = 256
-IQ3_XXS_TYPE_SIZE = 2 + 96  # 98
-IQ3_S_TYPE_SIZE = 2 + 64 + 8 + 32 + 4  # 110
+IQ3_XXS_TYPE_SIZE = 2 + 96
+IQ3_S_TYPE_SIZE = 2 + 64 + 8 + 32 + 4
 
 
 def _require_divisible(in_features: int, block_size: int) -> int:
@@ -65,7 +63,7 @@ def qgemv_iq3_xxs(
     grid_idx_bytes = np.ascontiguousarray(blocks[:, :, 2:66])
     aux32 = np.ascontiguousarray(blocks[:, :, 66:98]).view("<u4").reshape(out_features, n_super, 8)
 
-    db = d[:, :, None] * (0.5 + (aux32 >> 28).astype(np.float32)) * 0.5  # (of, ns, 8)
+    db = d[:, :, None] * (0.5 + (aux32 >> 28).astype(np.float32)) * 0.5
 
     x_np = np.ascontiguousarray(x.detach().numpy(), dtype=np.float32)
     grid_table, signs_table, mask = iq3xxs_grid_i8(), ksigns_iq2xs(), kmask_iq2xs()
@@ -122,9 +120,9 @@ def qgemv_iq3_s(
     qs = np.ascontiguousarray(blocks[:, :, 2:66])
     qh = np.ascontiguousarray(blocks[:, :, 66:74])
     signs = np.ascontiguousarray(blocks[:, :, 74:106])
-    scales = blocks[:, :, 106:110]  # (of, ns, 4)
+    scales = blocks[:, :, 106:110]
 
-    db1 = d[:, :, None] * (1 + 2 * (scales & 0x0F).astype(np.float32))  # (of, ns, 4)
+    db1 = d[:, :, None] * (1 + 2 * (scales & 0x0F).astype(np.float32))
     db2 = d[:, :, None] * (1 + 2 * (scales >> 4).astype(np.float32))
 
     x_np = np.ascontiguousarray(x.detach().numpy(), dtype=np.float32)

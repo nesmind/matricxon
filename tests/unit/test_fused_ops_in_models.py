@@ -1,6 +1,6 @@
-"""A whole decode (prefill, then token-by-token through the KV cache) with the fused ops switched
-on must give the same logits as without them - for every architecture's attention/norm/rope wiring,
-on both backends. Tiny fixtures (tests/unit/test_batched_decode.py's cases)."""
+"""A whole decode (prefill, then token by token through the KV cache) with the fused ops on must
+give the same logits as without, for every architecture's attention/norm/rope wiring on both
+backends. Tiny fixtures (tests/unit/test_batched_decode.py's cases)."""
 
 from pathlib import Path
 

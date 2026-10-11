@@ -1,13 +1,13 @@
-"""Correctness for the native C quantized matmul (app/native/, see ROADMAP.md's "In-house native (C)
-quantized kernels" entry). Every kernel is cross-checked against the already oracle-validated
-`*Strategy.dequantize()` + float matmul path, same approach as tests/unit/test_quantized_gemv.py.
+"""Correctness of the native C quantized matmul (app/native/)
+quantized kernels"). Every kernel is cross-checked against the oracle-validated
+`*Strategy.dequantize` + float matmul, as tests/unit/test_quantized_gemv.py.
 
 Two checks per type:
-- **exact**: activations that are already integers with a +-127 peak in every 256-value block
-  survive the kernel's int8 activation quantization unchanged, so the result must match to float
-  precision - any bit-layout mistake shows up here, not hidden inside rounding noise;
-- **realistic**: random float activations, where int8 rounding (which llama.cpp has too) is allowed
-  a small relative error.
+- **exact**: integer activations with a +-127 peak in every 256-value block survive the kernel's
+  int8 activation quantization unchanged, so the result must match to float precision: a bit-layout
+  mistake shows here, not hidden in rounding noise;
+- **realistic**: random float activations, where int8 rounding (llama.cpp has it too) is allowed a
+  small relative error.
 
 The library is compiled into a per-session temp dir, so the tests never touch app/native/build/.
 """
@@ -37,10 +37,10 @@ def _f16(rng: random.Random, lo: float, hi: float) -> bytes:
 
 
 def _iq1m_sc(rng: random.Random) -> bytes:
-    """IQ1_M has no `d` field - the scale is reassembled from the top nibble of each `sc` word
-    (see mx_vec_dot_iq1_m_f32). Forcing sc2/sc3's top nibble keeps the reassembled fp16 exponent
-    away from 0/31 (denormal/inf/nan) so the reference comparison stays finite; sc0/sc1's top
-    nibbles and every word's low 12 bits (the real dl1/dl2 fields) stay fully random."""
+    """IQ1_M has no `d` field: the scale is reassembled from the top nibble of each `sc` word
+    (mx_vec_dot_iq1_m_f32). Forcing sc2/sc3's top nibble keeps the reassembled fp16 exponent away
+    from 0/31 (denormal/inf/nan) so the comparison stays finite; sc0/sc1's top nibbles and every
+    word's low 12 bits (the dl1/dl2 fields) stay random."""
     sc0 = rng.randrange(0x10000)
     sc1 = rng.randrange(0x10000)
     sc2 = (rng.randrange(0x10000) & 0x0FFF) | 0x3000
@@ -95,7 +95,7 @@ def _reference(ggml_type: T, raw: bytes, x: torch.Tensor, out_f: int, in_f: int)
 def _integer_activations(n_tokens: int, in_features: int, seed: int) -> torch.Tensor:
     g = torch.Generator().manual_seed(seed)
     x = torch.randint(-127, 128, (n_tokens, in_features), generator=g).to(torch.float32)
-    x[:, ::256] = 127.0  # pin every block's peak so the int8 scale is exactly 1
+    x[:, ::256] = 127.0
     return x
 
 
@@ -130,11 +130,11 @@ def test_close_on_float_activations(gemm: NativeGemm, ggml_type: T) -> None:
 
 def test_supports_only_implemented_types_and_block_multiples(gemm: NativeGemm) -> None:
     assert gemm.supports(T.Q4_K, 3072)
-    assert not gemm.supports(T.Q4_K, 3000)  # not a multiple of 256
-    assert not gemm.supports(T.Q2_K, 3072)  # no native kernel yet - numba keeps it
-    # IQ4_NL's real block is 32, not 256 like every other native-kernel type here.
+    assert not gemm.supports(T.Q4_K, 3000)
+    assert not gemm.supports(T.Q2_K, 3072)
+    # IQ4_NL's block is 32, not 256 like every other native-kernel type here.
     assert gemm.supports(T.IQ4_NL, 3072)
-    assert not gemm.supports(T.IQ4_NL, 3000)  # not a multiple of 32
+    assert not gemm.supports(T.IQ4_NL, 3000)
     assert gemm.supports(T.IQ4_XS, 3072)
     assert gemm.supports(T.TQ1_0, 3072)
     assert gemm.supports(T.TQ2_0, 3072)
@@ -156,8 +156,8 @@ def test_configure_numba_leaves_native_inactive() -> None:
 def test_quantized_linear_native_matches_numba_path(
     gemm: NativeGemm, monkeypatch: pytest.MonkeyPatch, seq_len: int
 ) -> None:
-    """Same QuantizedLinear, same weights: the native backend must agree with today's Numba
-    decode / dequant-prefill path it replaces."""
+    """Same QuantizedLinear, same weights: the native backend must agree with the Numba decode /
+    dequant-prefill path it replaces."""
     out_f, in_f = 12, 512
     raw = memoryview(_weight(T.Q4_K, out_f, in_f, seed=42))
     x = torch.randn(1, seq_len, in_f, generator=torch.Generator().manual_seed(3))
@@ -176,9 +176,9 @@ def test_quantized_linear_native_matches_numba_path(
 
 @pytest.mark.parametrize("ggml_type", list(_BLOCKS))
 def test_decode_kernel_is_bit_identical_to_the_prefill_path(gemm: NativeGemm, ggml_type: T) -> None:
-    """One token takes the fused per-token kernel (with SSSE3), several tokens the unpack-once
-    path - every token must come out bit-identical either way, or a reply would depend on whether
-    a token happened to be computed in prefill or decode."""
+    """One token takes the fused per-token kernel (with SSSE3), several tokens the unpack-once path;
+    every token must come out bit-identical either way, or a reply would depend on whether a token
+    was computed in prefill or decode."""
     out_f, in_f = 9, 768
     raw = memoryview(_weight(ggml_type, out_f, in_f, seed=77))
     x = torch.randn(6, in_f, generator=torch.Generator().manual_seed(5))

@@ -1,15 +1,14 @@
-"""GGUFTokenizer picks its pre-tokenizer split pattern from `tokenizer.ggml.pre` (see
-app/runtime/tokenizer.py). Token counts for Llama-3.2 with the "llama-bpe" pattern were checked
-against Ollama's own prompt_eval_count on newline runs, digit runs, contractions and non-ASCII
-text (2026-09-23)."""
+"""GGUFTokenizer picks its pre-tokenizer split pattern from `tokenizer.ggml.pre`
+(app/runtime/tokenizer.py). Token counts for Llama-3.2 with the "llama-bpe" pattern were checked
+against Ollama's prompt_eval_count on newline runs, digit runs, contractions and non-ASCII text."""
 
 from app.gguf.metadata import GGUFMetadata
 from app.runtime.tokenizer import GGUFTokenizer
 
 
 def _tokenizer(pre: str | None) -> GGUFTokenizer:
-    # Single-byte tokens only, no merges: every split chunk encodes to one token per byte, so
-    # the token list shows exactly how the pre-tokenizer split the text.
+    # Single-byte tokens only, no merges: every chunk encodes to one token per byte, so the token
+    # list shows exactly how the pre-tokenizer split the text.
     tokens = [chr(c) for c in range(ord("!"), ord("~") + 1)] + ["Ċ", "Ġ"]
     values = {
         "tokenizer.ggml.tokens": tokens,

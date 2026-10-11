@@ -1,10 +1,10 @@
-"""Fused Gated DeltaNet recurrence for Qwen3.5 - one Numba kernel and one C kernel
-(`app/native/src/mx_delta_rule.c`) computing the identical float32 math, kept in sync (see
-CLAUDE.md). `gated_delta_rule` picks the native one when `Settings.gemv_backend == "native"` built
-fine, else Numba; `gated_delta_rule_reference` is the plain torch loop both are tested against.
+"""Fused Gated DeltaNet recurrence for Qwen3.5: a Numba kernel and a C kernel
+(`app/native/src/mx_delta_rule.c`) with the same float32 math, kept in sync (CLAUDE.md).
+`gated_delta_rule` uses the native one when `Settings.gemv_backend == "native"` and built, else
+Numba; `gated_delta_rule_reference` is the plain torch loop both are tested against.
 
 Per token and head (state S: d_k x d_v): S *= exp(g); delta = (v - S^T k) * beta; S += k (x) delta;
-out = S^T q. Heads are independent across time, so both kernels parallelize over heads.
+out = S^T q. Heads are independent over time, so both kernels parallelize over heads.
 """
 
 import numba
@@ -48,8 +48,8 @@ def gated_delta_rule_reference(
     beta: torch.Tensor,
     state: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Plain per-token torch loop. q/k (T,H,dk), v (T,H,dv), g/beta (T,H), state (H,dk,dv),
-    all float32. Returns (outputs (T,H,dv), new state)."""
+    """Plain per-token torch loop. q/k (T,H,dk), v (T,H,dv), g/beta (T,H), state (H,dk,dv), all
+    float32. Returns (outputs (T,H,dv), new state)."""
     outputs = torch.empty_like(v)
     for t in range(q.shape[0]):
         state = state * torch.exp(g[t]).view(-1, 1, 1)
@@ -70,15 +70,19 @@ def gated_delta_rule_chunked(
     chunk: int = 64,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Same maths as `gated_delta_rule_reference` (same shapes, `q` already scaled), but the T
-    tokens are processed in chunks of `chunk`: inside a chunk the recurrence becomes a few batched
-    matmuls (a small triangular solve, built row by row), and only the state hand-off between
-    chunks is sequential - so a long prefill on a GPU is T/chunk steps instead of T. Algorithm of
-    HF's `torch_chunk_gated_delta_rule`; pure torch, so it runs on any device."""
+    tokens go in chunks of `chunk`: within a
+    chunk the recurrence becomes a few batched matmuls (a small triangular solve built row by row),
+    and only the state hand-off
+    between chunks is sequential, so a long GPU prefill is T/chunk steps instead of T. The algorithm
+    of HF's
+    `torch_chunk_gated_delta_rule`; pure torch, so it runs on any device.
+    """
     n_tokens = q.shape[0]
     pad = (-n_tokens) % chunk
 
-    # (T, H, D) -> (H, n_chunks, chunk, D), zero-padded: a padded token has beta 0 (no write) and
-    # g 0 (no decay), so it leaves the state alone and its output rows are dropped below.
+    # (T, H, D) -> (H, n_chunks, chunk, D), zero-padded: a padded token has beta 0 (no write) and g
+    # 0 (no decay), so it leaves the
+    # state alone and its output rows are dropped below.
     def heads(x: torch.Tensor) -> torch.Tensor:
         x = (
             torch.nn.functional.pad(x, (0, 0, 0, 0, 0, pad))
@@ -88,14 +92,14 @@ def gated_delta_rule_chunked(
         return x.transpose(0, 1).reshape(x.shape[1], -1, chunk, *x.shape[2:])
 
     q, k, v = heads(q), heads(k), heads(v)
-    g, beta = heads(g), heads(beta)  # (H, nc, chunk)
+    g, beta = heads(g), heads(beta)
     g = g.cumsum(dim=-1)
     k_beta, v_beta = k * beta.unsqueeze(-1), v * beta.unsqueeze(-1)
     eye = torch.eye(chunk, device=q.device)
     upper = torch.triu(torch.ones(chunk, chunk, dtype=torch.bool, device=q.device))
     decay = (g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().tril()
     attn = -((k_beta @ k.transpose(-1, -2)) * decay).masked_fill(upper, 0)
-    for i in range(1, chunk):  # forward substitution for (I + A)^-1, one row at a time
+    for i in range(1, chunk):
         row = attn[..., i, :i].clone()
         attn[..., i, :i] = row + (row.unsqueeze(-1) * attn[..., :i, :i].clone()).sum(-2)
     attn = attn + eye
@@ -127,9 +131,11 @@ def gated_delta_rule(
     beta: torch.Tensor,
     state: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Same contract as `gated_delta_rule_reference`; `state` is updated in place and returned
-    (on the CPU). Tensors on a GPU run in torch instead - the compiled kernels read CPU memory -
-    and return a new state: the chunked form for a prefill, the plain step for one token."""
+    """Same contract as `gated_delta_rule_reference`; `state` is updated in place and returned (on
+    the CPU). Tensors on a GPU run in
+    torch instead (the compiled kernels read CPU memory) and return a new state: the chunked form
+    for a prefill, the plain step for one token.
+    """
     if q.device.type != "cpu":
         fn = gated_delta_rule_chunked if q.shape[0] > 1 else gated_delta_rule_reference
         return fn(q.float(), k.float(), v.float(), g.float(), beta.float(), state.float())

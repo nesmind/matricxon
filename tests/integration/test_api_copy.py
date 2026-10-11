@@ -37,3 +37,39 @@ class TestCopyErrors:
         )
 
         assert response.status_code == 404
+
+
+class TestCopyIsAnAlias:
+    def test_the_original_cannot_be_deleted_while_a_copy_exists_but_the_copy_can(
+        self, client: TestClient, model_factory
+    ) -> None:
+        model_factory.create(tag="source:latest")
+        client.post("/api/copy", json={"source": "source:latest", "destination": "dest:latest"})
+
+        refused = client.request("DELETE", "/api/delete", json={"model": "source:latest"})
+        assert refused.status_code == 409 and "dest:latest" in refused.json()["error"]
+
+        assert (
+            client.request("DELETE", "/api/delete", json={"model": "dest:latest"}).status_code
+            == 200
+        )
+        tags = {m["name"] for m in client.get("/api/tags").json()["models"]}
+        assert tags == {"source:latest"}
+        assert (
+            client.request("DELETE", "/api/delete", json={"model": "source:latest"}).status_code
+            == 200
+        )
+
+    def test_a_refused_delete_does_not_unload_the_model(
+        self, client: TestClient, model_factory
+    ) -> None:
+        from unittest.mock import patch
+
+        from app.dependencies import get_model_manager
+
+        model_factory.create(tag="source:latest")
+        client.post("/api/copy", json={"source": "source:latest", "destination": "dest:latest"})
+        with patch.object(get_model_manager(), "unload") as unload:
+            refused = client.request("DELETE", "/api/delete", json={"model": "source:latest"})
+        assert refused.status_code == 409
+        unload.assert_not_called()

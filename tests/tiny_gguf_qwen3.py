@@ -1,21 +1,20 @@
-"""Builds a tiny, complete, valid `qwen3` GGUF file - mirrors `tiny_gguf_qwen2.py`'s structure,
-plus real QK-norm tensors (non-identity weights, so a permutation bug changes the numeric output,
-not just shapes) and a `HEAD_DIM` deliberately *not* equal to `N_EMBD // N_HEAD` (mirrors the real
-Qwen3-0.6B trap: `head_dim=128` vs a naive `hidden_size/num_heads=64`) - proves
-`Qwen3Architecture` actually reads `attention.key_length` rather than deriving it.
-"""
+"""Builds a tiny, complete, valid `qwen3` GGUF, mirroring `tiny_gguf_qwen2.py`, plus QK-norm tensors
+(non-identity weights, so a permutation bug changes the numeric output, not just shapes) and a
+`HEAD_DIM` deliberately *not* `N_EMBD // N_HEAD` (as Qwen3-0.6B: `head_dim=128` vs a naive
+`hidden_size/num_heads=64`), proving `Qwen3Architecture` reads `attention.key_length` rather than
+deriving it."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2
 N_HEAD_KV = 1
-HEAD_DIM = 6  # deliberately != N_EMBD // N_HEAD (4) - see module docstring
+HEAD_DIM = 6
 N_LAYER = 1
 FFN_LEN = 16
 

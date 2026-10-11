@@ -15,16 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 class BertArchitecture(ModelArchitecture):
-    """Classic (encoder-only, non-causal) BERT: learned absolute position
-    embeddings + token-type embeddings, post-LN encoder layers, GELU FFN.
+    """Classic encoder-only, non-causal BERT: learned absolute position embeddings + token-type
+    embeddings, post-LN
+    encoder layers, GELU FFN.
 
-    Structurally separate from the decoder classes since encoder-only is
-    not autoregressive: `forward()` here returns final hidden states
-    (batch, seq_len, hidden_dim), never logits or a vocab projection - there
-    isn't one in this GGUF (no LM head tensor), and `kv_cache` is always
-    unused (a KVCache belongs to one autoregressive generation call; nothing
-    here ever generates). `EmbeddingEngine` does the actual mean-pooling
-    into a single embedding vector on top of this.
+    Separate from the decoder classes: `forward` returns final hidden states (batch, seq_len,
+    hidden_dim), never
+    logits (this GGUF has no LM head), and `kv_cache` is unused (nothing generates).
+    `EmbeddingEngine` mean-pools them into an embedding vector.
     """
 
     NAME = "bert"
@@ -63,7 +61,7 @@ class BertArchitecture(ModelArchitecture):
         cls, loader: GGUFModelLoader, dtype: torch.dtype = torch.float32
     ) -> "BertArchitecture":
         model = cls._construct_without_init(loader.metadata, dtype=dtype)
-        model._rebuild_derived_buffers()  # no-op here (no rope) - see the base class's own contract
+        model._rebuild_derived_buffers()
         model._defer_materialization(loader)
         return model
 
@@ -123,7 +121,7 @@ class BertArchitecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # real vision support is LlamaArchitecture-only - see base.py
+        del image_embeddings
         _, seq_len = input_ids.shape
         logger.debug("forward start: seq_len=%d", seq_len)
         if position_ids is None:

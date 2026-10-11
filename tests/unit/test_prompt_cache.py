@@ -1,5 +1,5 @@
 """PromptCache: a chat's next turn reuses the KV cache for the prefix it shares with the previous
-turn (see app/runtime/prompt_cache.py) - and must generate exactly what a fresh cache would."""
+turn, and must generate what a fresh cache would."""
 
 from collections.abc import Iterator
 from pathlib import Path
@@ -49,7 +49,7 @@ def test_next_turn_reuses_the_shared_prefix_and_matches_a_fresh_cache(
 
     result = _generate(model, cache, turn2)
 
-    # Every reply token but the last was fed back through the model, so it's in the cache.
+    # All reply tokens but the last were fed back, so they are in the cache.
     assert cache.reused_tokens == len(turn1) + len(reply) - 1
     assert result == _generate(model, PromptCache(), turn2)
 
@@ -79,7 +79,7 @@ def test_reuse_survives_a_num_ctx_change(model: LlamaArchitecture) -> None:
 
     _generate(model, cache, [1, 72, 105, 33], sampling=SamplingConfig(temperature=0.0, num_ctx=32))
 
-    assert cache.reused_tokens == 3  # num_ctx is only capacity (see test_prompt_cache_num_ctx.py)
+    assert cache.reused_tokens == 3
 
 
 def test_image_prompts_are_never_reused_or_kept_and_leave_the_pool_alone(
@@ -89,10 +89,10 @@ def test_image_prompts_are_never_reused_or_kept_and_leave_the_pool_alone(
     _generate(model, cache, [1, 72, 105])
 
     _generate(model, cache, [1, 72, 105, 33], images=True)
-    assert cache.reused_tokens == 0  # an image prompt never reuses a cache...
-    assert cache.slot_count == 1  # ...and never adds one
+    assert cache.reused_tokens == 0
+    assert cache.slot_count == 1
 
-    # Another user's image request didn't flush the first conversation's cache.
+    # Another user's image request did not flush the first conversation's cache.
     _generate(model, cache, [1, 72, 105, 33, 44])
     assert cache.reused_tokens == 3
 

@@ -9,14 +9,10 @@ router = APIRouter()
 
 
 class HealthRequestHandler:
-    """A genuine matricxon-only extension, not part of Ollama's own API
-
-    (same category as the hf.co:-only pull syntax M7 established) - lets a
-    caller (pAIring, or anyone else) ask "can you run this?" directly
-    instead of hand-maintaining its own separate, driftable copy of
-    matricxon's real supported-architecture/quantization lists. See
-    ROADMAP.md's "Expose supported architectures/quantizations" entry.
-    """
+    """A matricxon-only extension, not Ollama API (like the hf.co:-only pull syntax of M7): lets a
+    caller (pAIring or others) ask "can you run this?" instead of keeping a driftable copy of
+    matricxon's supported-architecture/quantization lists. ROADMAP.md "Expose supported
+    architectures/quantizations"."""
 
     def __init__(
         self, architecture_registry: ArchitectureRegistry, quant_registry: QuantStrategyRegistry

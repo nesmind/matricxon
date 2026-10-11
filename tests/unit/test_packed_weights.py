@@ -1,8 +1,7 @@
-"""Packed (still quantized) weights beyond the per-layer projections: PackedRows, the packed
-token-embedding table (QuantizedEmbedding, also the tied lm_head), attn_q/attn_k with their
-`unpermute_rope_rows` applied to packed rows, and `last_logits_only`. Each packed path is checked
-against the float path on the exact same quantized file (tests/tiny_gguf_llama_q8.py).
-"""
+"""Packed (still quantized) weights beyond the per-layer projections: PackedRows, the packed token
+embedding (also the tied lm_head), attn_q/attn_k with `unpermute_rope_rows` on packed rows, and
+`last_logits_only`. Each is checked against the float path on the same quantized file
+(tests/tiny_gguf_llama_q8.py)."""
 
 from pathlib import Path
 
@@ -122,15 +121,11 @@ def test_ram_estimate_counts_packed_qk_and_embedding_for_llama(gguf_path: Path) 
 
 
 class TestPackedNemotronH:
-    """attn_v/attn_output/ffn_up/ffn_down/output.weight wiring added 2026-09-29 - see
-    `app/models/load_dtype.py`'s own `_QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH["nemotron_h"]`
-    comment for why (real, non-marginal RAM savings on an installed 12B checkpoint, not the
-    "marginal" call this repo's own comment used to make) - including the Mamba mixer's own
-    `in_proj`/`out_proj` (real `ssm_in`/`ssm_out` tensors, plain 2D `nn.Linear` despite living in
-    the "SSM block"). attn_q/attn_k/token_embd/every other SSM tensor are never eligible (see
-    `NemotronHArchitecture`'s own docstring) and must stay plain `nn.Linear`/`nn.Parameter`/
-    `nn.Embedding` either way - checked below alongside the ones that do become `QuantizedLinear`.
-    """
+    """attn_v/attn_output/ffn_up/ffn_down/output.weight and the Mamba mixer's `in_proj`/`out_proj`
+    (`ssm_in`/`ssm_out`) become `QuantizedLinear` (see
+    `_QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH["nemotron_h"]` in `app/models/load_dtype.py`).
+    attn_q/attn_k/token_embd/other SSM tensors stay plain
+    `nn.Linear`/`nn.Parameter`/`nn.Embedding`."""
 
     @pytest.fixture
     def gguf_path(self, tmp_path: Path) -> Path:
@@ -145,9 +140,8 @@ class TestPackedNemotronH:
     def test_only_the_eligible_projections_become_quantized_linear(self, gguf_path: Path) -> None:
         model = self._load(gguf_path, packed=True)
         with torch.no_grad():
-            # Materialization is deferred until the first real forward pass (see
-            # ModelArchitecture._ensure_materialized) - the placeholder nn.Linear built in
-            # __init__ never becomes QuantizedLinear until this runs.
+            # Materialization is deferred to the first forward pass
+            # (ModelArchitecture._ensure_materialized).
             cache = model.build_cache(max_seq_len=4, dtype=torch.float32)
             model.forward(torch.tensor([[1, 2]]), cache)
 

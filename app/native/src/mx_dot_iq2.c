@@ -1,8 +1,4 @@
-/*
- * IQ2_XXS, IQ2_XS, IQ2_S - ported directly from their own already-oracle-validated Numba
- * kernels (app/gguf/dequant/quantized_gemv_iq2.py). Plain portable C, no SIMD - same rationale
- * as mx_dot_f32.c: correctness first for these new, numerically sensitive grid lookups.
- */
+/* IQ2_XXS, IQ2_XS, IQ2_S, ported from the Numba kernels (app/gguf/dequant/quantized_gemv_iq2.py). Plain C, no SIMD (as mx_dot_f32.c). */
 #include "mx_common.h"
 #include "mx_iq_grids.h"
 

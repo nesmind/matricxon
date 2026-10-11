@@ -1,11 +1,10 @@
 """app/models/capabilities.py's effective_capabilities and the has_confirmed_chat_format check it
-now folds in (app/runtime/chat_template.py) - the "chat_format_unverified" capability this powers,
-added 2026-09-27 after Hebrew-Mistral-7B-Q5_K_M produced incoherent, non-chat-like output no matter
-which prompt format it was given, with nothing in the model list distinguishing it from a normal,
-well-behaved chat model - and "architecture_features_unsupported" (app.architectures.registry.
-unsupported_features), added 2026-09-29 after a real gemma-4-E2B-it GGUF's Per-Layer Embeddings
-and cross-layer KV reuse were silently never read at all by the dense-only Gemma4Architecture
-class that otherwise claimed full "completion" support for it."""
+folds in (app/runtime/chat_template.py): the "chat_format_unverified" capability (
+after a Hebrew Mistral fine-tune gave incoherent, non-chat output with any prompt format and nothing
+in the model list set it apart) and "architecture_features_unsupported"
+(app.architectures.registry.unsupported_features, after a gemma-4-E2B-it GGUF's
+Per-Layer Embeddings and cross-layer KV reuse were silently ignored by the dense-only
+Gemma4Architecture that otherwise claimed full "completion" support)."""
 
 from pathlib import Path
 
@@ -14,15 +13,14 @@ from app.gguf.reader import GGUFReader
 from app.models.capabilities import effective_capabilities
 from app.models.installed_model import InstalledModel
 from app.runtime.chat_template import has_confirmed_chat_format
-from scripts.make_tiny_gguf import GGUFBuilder
 from tests.tiny_gguf import build_tiny_mistral3_gguf
+from tools.make_tiny_gguf import GGUFBuilder
 
 
 def _build_untemplated_llama_gguf(path: Path) -> Path:
-    """A minimal, metadata-only GGUF for an architecture that isn't mistral3 and carries no
-    tokenizer.chat_template - the exact shape PromptBuilderFactory.for_metadata falls back to
-    LegacyMistralPromptBuilder for (see that class's own docstring), which is what
-    has_confirmed_chat_format should report as unconfirmed."""
+    """A metadata-only GGUF for a non-mistral3 architecture with no tokenizer.chat_template: the
+    shape PromptBuilderFactory.for_metadata falls back to LegacyMistralPromptBuilder for, which
+    has_confirmed_chat_format must report as unconfirmed."""
     return (
         GGUFBuilder()
         .set_str("general.architecture", "llama")
@@ -58,8 +56,8 @@ def test_has_confirmed_chat_format_is_false_for_an_untemplated_non_mistral3_mode
 
 
 def test_has_confirmed_chat_format_is_true_for_a_vicuna_tagged_model(tmp_path):
-    """A tag-name match, not metadata - see VicunaPromptBuilder's own docstring for why
-    (llava-v1.6-vicuna-7b, 2026-09-27: no metadata-only way to detect this format)."""
+    """A tag-name match, not metadata (VicunaPromptBuilder; a LLaVA-Vicuna model: no
+    metadata-only way to detect it)."""
     gguf_path = _build_untemplated_llama_gguf(tmp_path / "model.gguf")
 
     assert has_confirmed_chat_format(gguf_path, tag="hf.co/org/llava-v1.6-vicuna-7b:Q4_K_M") is True
@@ -112,8 +110,8 @@ def test_effective_capabilities_does_not_flag_a_vicuna_tagged_model(tmp_path):
 
 
 def test_effective_capabilities_does_not_flag_a_non_completion_model(tmp_path):
-    """An embedding-only model has no "chat format" to be unverified about - the flag only makes
-    sense for something actually meant to be chatted with."""
+    """An embedding-only model has no "chat format" to be unverified about; the flag applies only to
+    something meant to be chatted with."""
     gguf_path = _build_untemplated_llama_gguf(tmp_path / "model.gguf")
     installed = _installed("test:latest", gguf_path, "bert", ["embedding"])
 
@@ -125,10 +123,10 @@ def test_effective_capabilities_does_not_flag_a_non_completion_model(tmp_path):
 def test_effective_capabilities_flags_a_checkpoint_with_a_real_gated_variant_gap(
     tmp_path, monkeypatch
 ):
-    """Decoupled from any specific architecture's own real gap (those get fixed over time - see
-    Gemma4Architecture's own MoE support, added 2026-09-29, the same day this flag was added for
-    a *different* gap that GGUF happened to have) - proves effective_capabilities' own wiring to
-    app.architectures.registry.unsupported_features, not any one architecture's current state."""
+    """Decoupled from any architecture's real gap (those get fixed: Gemma4's MoE support, the day
+    this flag was added for a *different* gap in that GGUF): proves
+    effective_capabilities's wiring to app.architectures.registry.unsupported_features, not an
+    architecture's current state."""
     gguf_path = _build_untemplated_llama_gguf(tmp_path / "model.gguf")
     installed = _installed("test:latest", gguf_path, "llama", ["completion"])
     monkeypatch.setattr("app.models.capabilities.unsupported_features", lambda path: ["fake-gap"])

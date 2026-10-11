@@ -1,4 +1,3 @@
-import json
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,22 +18,17 @@ _ALREADY_DOWNLOADED_STATUS = "already downloaded"
 
 
 class PullJob:
-    """Orchestrates one `/api/pull` call: resolve -> download -> write a
-    sidecar from a header-only GGUF parse -> done.
+    """Orchestrates one `/api/pull`: resolve -> download -> write a sidecar from a header-only GGUF
+    parse -> done.
 
-    Yields Ollama-shaped NDJSON progress dicts; any failure becomes an
-    in-band `{"error": ...}` line rather than an HTTP error - `/api/pull`
-    has a looser contract than `/api/chat` (any real Ollama-API client,
-    pAIring's admin UI included, reads that field directly instead of an
-    HTTP status).
+    Yields Ollama-shaped NDJSON progress dicts; any failure becomes an in-band `{"error":...}` line,
+    not an HTTP error: `/api/pull` has a looser contract than `/api/chat` (Ollama-API clients,
+    pAIring's admin UI included, read that field).
 
-    `cancel_event`, when the caller sets it (see pull_router.PullRequestHandler, set the moment
-    its own client disconnects), aborts the download in progress instead of letting it run to
-    completion unseen - see app.pull.download_coordinator's own docstring for the real bug this
-    closes. The download step is also serialized per-destination-file via DownloadCoordinator:
-    two PullJobs racing for the same tag (a retry while an earlier, now-orphaned pull was still
-    running, say) wait their turn instead of both writing the same `.partial` file, and the
-    second one skips straight to "already downloaded" once it finds the first already finished.
+    `cancel_event`, set by the caller (pull_router.PullRequestHandler, when its client disconnects),
+    aborts a download in progress. The download is also serialized per destination file via
+    DownloadCoordinator: two PullJobs for one tag wait their turn instead of both writing the same
+    `.partial`, and the second skips to "already downloaded" once the first finishes.
     """
 
     def __init__(
@@ -104,8 +98,7 @@ class PullJob:
             parameter_size=self._format_parameter_size(metadata),
             context_length=metadata.get_u32(metadata.arch_key("context_length"), 0),
         )
-        sidecar_path = gguf_path.parent / f"{gguf_path.stem}{ModelCatalog.SIDECAR_SUFFIX}"
-        sidecar_path.write_text(json.dumps(installed.__dict__))
+        ModelCatalog(self._models_dir).write_sidecar(installed)
 
     @staticmethod
     def _format_parameter_size(metadata: GGUFMetadata) -> str:

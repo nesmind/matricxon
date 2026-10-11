@@ -1,17 +1,15 @@
-"""Builds a tiny, complete, valid `granite` GGUF file - mirrors `tiny_gguf_llama.py`'s exact
-structure/philosophy, plus IBM Granite's four real "Power"-scaling metadata keys
-(`granite.attention.scale`/`embedding_scale`/`residual_scale`/`logit_scale`) set to deliberately
-non-default (non-1.0) values, so a bug that silently no-ops any one multiplier changes the
-numeric forward-pass output, not just shapes - this proves the wiring is real, not that it
-numerically matches a real Granite checkpoint (see `scripts/oracle/validate_granite.py` for that).
-"""
+"""Builds a tiny, complete, valid `granite` GGUF, mirroring `tiny_gguf_llama.py`, plus IBM Granite's
+four "Power"-scaling keys
+(`granite.attention.scale`/`embedding_scale`/`residual_scale`/`logit_scale`) at non-1.0 values, so a
+bug no-oping any multiplier changes the numeric output, not just shapes. Proves the wiring, not a
+numeric match to a real Granite (tools/oracle/validate_granite.py)."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2

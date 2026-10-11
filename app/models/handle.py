@@ -9,13 +9,11 @@ from app.runtime.tokenizer import GGUFTokenizer
 from app.runtime.tool_call_formats import ToolCallFormat
 from app.runtime.wordpiece_tokenizer import WordPieceTokenizer
 
-# The tokenizer implementations a GGUF's `tokenizer.ggml.model` can resolve
-# to (see app.models.tokenizer_dispatch.build_tokenizer): byte-level BPE for
-# "gpt2", WordPiece for "bert", SentencePiece BPE for "llama" (M10),
-# Gemma4's own rank-based BPE for "gemma4" (M10). They share no common base
-# class (their real capabilities genuinely differ - only the three decoder
-# tokenizers have an eos_token_id, for instance), so callers narrow by the
-# endpoint they're serving rather than a forced shared interface.
+# The tokenizers a GGUF's `tokenizer.ggml.model` can resolve to
+# (app.models.tokenizer_dispatch.build_tokenizer): byte-level BPE for "gpt2", WordPiece for "bert",
+# SentencePiece BPE for "llama" (M10), Gemma4's rank-based BPE for "gemma4" (M10). They share no
+# base class (their capabilities differ: only the decoder tokenizers have an eos_token_id), so
+# callers narrow by the endpoint they serve.
 Tokenizer = GGUFTokenizer | WordPieceTokenizer | SentencePieceTokenizer | Gemma4Tokenizer
 
 
@@ -23,13 +21,10 @@ Tokenizer = GGUFTokenizer | WordPieceTokenizer | SentencePieceTokenizer | Gemma4
 class ModelHandle:
     """One resident (loaded-into-memory) model.
 
-    `last_used_at` is monotonic-clock time (whatever `ModelManager`'s
-    injected `clock` returns), never wall-clock - it's only ever compared
-    against another call to that same clock for eviction, and the caller
-    (not this class) decides what "now" is, so eviction logic stays
-    deterministically testable with a fake clock. `/api/ps`'s ISO-8601
-    `expires_at` is computed from `expires_in()` at the API boundary
-    instead, in ps_router.py.
+    `last_used_at` is monotonic-clock time (whatever `ModelManager`'s injected `clock` returns),
+    never wall-clock: only compared against that same clock for eviction, and the caller decides
+    "now", keeping eviction deterministically testable with a fake clock. `/api/ps`'s ISO-8601
+    `expires_at` comes from `expires_in` at the API boundary (ps_router.py).
     """
 
     tag: str
@@ -40,18 +35,17 @@ class ModelHandle:
     size_bytes: int
     keep_alive_seconds: int
     last_used_at: float
-    # This model's own chat-template prompt builder (app.runtime.chat_template); None falls back
-    # to Mistral3PromptBuilder in chat_router.
+    # This model's chat-template prompt builder (app.runtime.chat_template); None falls back to
+    # Mistral3PromptBuilder in chat_router.
     prompt_builder: object | None = None
-    # How this model writes a tool call in its reply (None: unknown - tools aren't parsed back).
+    # How this model writes a tool call in its reply (None: unknown, tools aren't parsed back).
     tool_call_format: ToolCallFormat | None = None
     # This model's KV cache kept between calls, so a chat's next turn only prefills its new tokens
-    # (see PromptCache). Freed with the handle when the model is evicted/unloaded.
+    # (PromptCache). Freed with the handle on eviction/unload.
     prompt_cache: PromptCache = field(default_factory=PromptCache)
-    # Real stop-token ids beyond tokenizer.eos_token_id (see app.runtime.chat_stop_tokens) -
-    # computed once at load time from this model's own real metadata, empty for anything not
-    # ChatML-shaped. Routers union this with {tokenizer.eos_token_id} for both ChatEngine's own
-    # stop condition and hiding the closing token's text from the visible stream.
+    # Stop-token ids beyond tokenizer.eos_token_id (app.runtime.chat_stop_tokens), computed at load
+    # time from this model's metadata; empty for anything not ChatML-shaped. Routers union it with
+    # {tokenizer.eos_token_id} for ChatEngine's stop condition and to hide the closing token's text.
     extra_eos_token_ids: frozenset[int] = frozenset()
 
     @property

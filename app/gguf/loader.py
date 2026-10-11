@@ -12,12 +12,10 @@ from app.server.errors import UnknownModelError
 class GGUFModelLoader:
     """Loads dequantized tensors from a GGUF file on demand, by name.
 
-    Tensors are dequantized lazily, one at a time, straight into whatever
-    dtype the caller wants (see `dtype`) - the raw memoryview into the mmap
-    is always dropped immediately after (a live view blocks mmap.close(),
-    see GGUFMemoryMap), keeping peak RAM near the loaded model's own size
-    rather than 2x it. A tensor an architecture never requests (e.g. a
-    vision tower's weights) is never read or dequantized at all.
+    Tensors are dequantized lazily, one at a time, straight into the caller's `dtype`; the raw
+    memoryview into the mmap is dropped at once (a live view blocks mmap.close; GGUFMemoryMap),
+    keeping peak RAM near the model's size, not 2x. A tensor an architecture never requests (e.g. a
+    vision tower's weights) is never read or dequantized.
     """
 
     def __init__(self, path: Path, dtype: torch.dtype = torch.bfloat16) -> None:
@@ -52,17 +50,14 @@ class GGUFModelLoader:
         return flat.reshape(torch_shape).to(self._dtype)
 
     def raw_tensor_bytes_and_type(self, name: str) -> tuple[memoryview, int, tuple[int, ...]]:
-        """The real, still-quantized bytes for `name` - `int(type_size)` * n_blocks of them,
-        never dequantized - plus its real `ggml_type` and PyTorch-order shape (`ne[]` reversed,
-        same as `load_tensor`'s own reshape). For `QuantizedLinear` (see
-        app/architectures/quantized_linear.py's own docstring for why): a real fused GEMV kernel
-        needs the packed bytes themselves, not a dequantized tensor - calling `load_tensor` here
-        would defeat the entire point of this real quantized-native compute path.
+        """The still-quantized bytes for `name` (`int(type_size)` * n_blocks, never dequantized),
+        its `ggml_type` and PyTorch-order shape (`ne[]` reversed, as `load_tensor`'s reshape). For
+        `QuantizedLinear`: a fused GEMV kernel needs the packed bytes, which `load_tensor` would
+        defeat.
 
-        The returned `memoryview` stays valid only as long as this loader's own mmap does (see
-        `GGUFMemoryMap`'s own docstring) - `QuantizedLinear` holding onto it is exactly why
-        `ModelManager` already keeps a loaded model's loader/mmap alive for its whole lifetime,
-        same requirement `_pending_loader` already has today, just extended past first use.
+        The `memoryview` is valid only while this loader's mmap is (GGUFMemoryMap), which is why
+        `ModelManager` keeps a loaded model's loader/mmap alive for its whole lifetime (the
+        `_pending_loader` requirement, extended past first use).
         """
         info = self._tensor_infos_by_name.get(name)
         if info is None:

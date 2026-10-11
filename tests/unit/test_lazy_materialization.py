@@ -1,10 +1,7 @@
-"""M10: on-the-fly dequant - `ModelArchitecture` defers copying real weight
-
-data in until its first real forward pass, caching the result after that
-(see app/architectures/base.py's own docstring). Exercised here against the
-real `Mistral3TextArchitecture`/tiny GGUF pipeline, not a fake stand-in -
-this is precisely the mechanism that matters, not just wiring.
-"""
+"""M10: on-the-fly dequant: `ModelArchitecture` defers copying weight data to the first forward
+pass, then caches it (app/architectures/base.py). Exercised against the real
+`Mistral3TextArchitecture`/tiny GGUF pipeline, not a fake stand-in: the mechanism itself is what
+matters."""
 
 from pathlib import Path
 
@@ -55,7 +52,7 @@ class TestDeferredMaterialization:
         input_ids = torch.tensor([[1, 2, 3]], dtype=torch.long)
 
         first = model(input_ids)
-        second = model(input_ids)  # would crash if this tried to re-read the (closed) loader
+        second = model(input_ids)
 
         assert torch.equal(first, second)
 
@@ -74,7 +71,7 @@ class TestDeferredMaterialization:
         input_ids = torch.tensor([[1, 2, 3]], dtype=torch.long)
         model(input_ids)
 
-        model.close()  # must not raise
+        model.close()
 
         assert model.is_materialized is True
 

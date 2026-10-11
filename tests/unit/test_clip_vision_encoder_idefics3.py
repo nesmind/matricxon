@@ -1,12 +1,7 @@
-"""ClipVisionEncoder against a tiny but real Idefics3/SmolVLM-shaped mmproj
-
-GGUF (see tests/tiny_gguf_idefics3.py) - fast, memory-safe wiring proof for
-the `idefics3` projector path (pixel-shuffle merge + a single bias-free
-linear), mirroring test_clip_vision_encoder.py's MLP-path coverage. The
-real numeric/statistical validation against the real
-`ggml-org/SmolVLM-256M-Instruct-GGUF` mmproj pull is done manually (see
-ROADMAP.md's vision-fusion entry).
-"""
+"""ClipVisionEncoder against a tiny Idefics3/SmolVLM-shaped mmproj GGUF
+(tests/tiny_gguf_idefics3.py): a fast, memory-safe wiring proof for the `idefics3` projector
+(pixel-shuffle merge + a single bias-free linear), mirroring test_clip_vision_encoder.py's MLP path.
+Numeric validation on the `ggml-org/SmolVLM-256M-Instruct-GGUF` mmproj is manual."""
 
 from pathlib import Path
 

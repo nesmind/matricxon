@@ -1,12 +1,13 @@
-/* Causal attention for a few query tokens against the KV cache (decode, or a short continuation):
- * for each (head, query) a numerically stable softmax over the visible keys, then the weighted sum
- * of the values - what torch's scaled_dot_product_attention plus a boolean mask does in several
- * dispatches. Numba twin: app/native/fused_ops_numba.py (kept in sync, see CLAUDE.md).
- *
- * q is (n_heads, n_q, dim), k/v are (n_kv_heads, n_kv, dim), each with element strides for the
- * head and token axes (last axis contiguous); out is contiguous (n_heads, n_q, dim). Query i sits
- * at absolute position i + offset and sees keys j <= i + offset (and j > i + offset - window when
- * window > 0). GQA: query head h reads key/value head h / (n_heads / n_kv_heads). */
+/*
+ * Causal attention for a few query tokens against the KV cache: per (head, query) a stable softmax
+ * over visible keys, then the weighted sum of values. Numba twin: app/native/fused_ops_numba.py
+ * (keep in sync).
+ * 
+ * q is (n_heads, n_q, dim); k/v are (n_kv_heads, n_kv, dim) with element strides for head and token
+ * (last axis contiguous); out is contiguous. Query i sits at position i + offset and sees keys j <=
+ * i + offset (and j > i + offset - window if window > 0). GQA: query head h reads kv head h /
+ * (n_heads / n_kv_heads).
+ */
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>

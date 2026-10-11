@@ -6,23 +6,16 @@ _MAX_CHARS_PER_WORD = 100
 
 
 class WordPieceTokenizer:
-    """WordPiece tokenizer for GGUF's `tokenizer.ggml.model = "bert"` vocab
-    format - used by both `bert` and `nomic-bert` arch GGUF files (confirmed
-    against the real `all-MiniLM-L6-v2`/`nomic-embed-text-v1.5` GGUFs, not
-    assumed).
+    """WordPiece tokenizer for GGUF's `tokenizer.ggml.model = "bert"`, used by `bert` and
+    `nomic-bert` GGUFs (checked on `all-MiniLM-L6-v2`/`nomic-embed-text-v1.5`).
 
-    llama.cpp's converter rewrites the classic HF WordPiece vocab into a
-    SentencePiece-style representation: a word-initial piece is stored with
-    a leading `"▁"` (the same marker SentencePiece itself uses), and a
-    continuation piece is stored bare - the *opposite* of the original
-    vocab.txt convention, where the initial piece is bare and continuations
-    carry a `"##"` prefix. Verified byte-for-byte against the real HF
-    tokenizer: HF's `"hello"`/`"##ing"` land on the exact same ids as this
-    vocab's `"▁hello"`/`"ing"`.
+    llama.cpp's converter rewrites the HF WordPiece vocab into a SentencePiece-style form: a
+    word-initial piece is stored with a leading `"▁"` and a continuation piece bare, the opposite of
+    vocab.txt (initial bare, continuations `"##"`). Verified byte for byte against the HF tokenizer:
+    HF's `"hello"`/`"##ing"` land on the same ids as this vocab's `"▁hello"`/`"ing"`.
 
-    v1 always lowercases (`do_lower_case=True`) - both real local fixtures
-    use an uncased vocab, and GGUF carries no explicit cased/uncased flag
-    to branch on.
+    Always lowercases (`do_lower_case=True`): both local fixtures use an uncased vocab, and GGUF has
+    no cased/uncased flag.
     """
 
     _WORD_INITIAL_MARKER = "▁"
@@ -32,11 +25,10 @@ class WordPieceTokenizer:
         self._token_to_id = {token: i for i, token in enumerate(tokens)}
         self._id_to_token = tokens
 
-        # cls_token_id/seperator_token_id aren't always present - confirmed against two real
-        # nomic-embed-text-v1.5 GGUF pulls that otherwise look identical (same tensor/kv count):
-        # one had explicit cls_token_id/mask_token_id, one didn't. llama.cpp's own bert.cpp treats
-        # bos_token_id/eos_token_id as the CLS/SEP aliases in exactly this situation, so this
-        # mirrors that fallback rather than hard-failing on a spec-valid file.
+        # cls_token_id/seperator_token_id aren't always present: two `nomic-embed-text-v1.5` pulls
+        # with the same tensor/kv count differed (one had explicit cls_token_id/mask_token_id).
+        # llama.cpp's bert.cpp treats bos_token_id/eos_token_id as CLS/SEP aliases then; this
+        # mirrors it instead of failing on a spec-valid file.
         cls_token_id = metadata.get("tokenizer.ggml.cls_token_id")
         self.cls_token_id: int = (
             cls_token_id
@@ -52,9 +44,8 @@ class WordPieceTokenizer:
         self.unk_token_id: int = metadata.require("tokenizer.ggml.unknown_token_id")
 
     def encode(self, text: str) -> list[int]:
-        """Returns `[CLS], <wordpiece ids>, [SEP]` - the standard BERT
-        single-sequence input shape (v1 has no need for sentence-pair
-        `[SEP]`-joined inputs)."""
+        """Returns `[CLS], <wordpiece ids>, [SEP]`, the standard BERT single-sequence input (v1
+        doesn't need sentence-pair inputs)."""
         token_ids = [self.cls_token_id]
         for word in self._basic_tokenize(text):
             token_ids.extend(self._wordpiece_tokenize(word))
@@ -99,10 +90,10 @@ class WordPieceTokenizer:
     def _is_punctuation(char: str) -> bool:
         codepoint = ord(char)
         ascii_punctuation_ranges = (
-            (33, 47),  # ! " # $ % & ' ( ) * + , - . /
-            (58, 64),  # : ; < = > ? @
-            (91, 96),  # [ \ ] ^ _ `
-            (123, 126),  # { | } ~
+            (33, 47),
+            (58, 64),
+            (91, 96),
+            (123, 126),
         )
         if any(lo <= codepoint <= hi for lo, hi in ascii_punctuation_ranges):
             return True
@@ -131,8 +122,8 @@ class WordPieceTokenizer:
         return token_ids
 
     def decode(self, token_ids: list[int]) -> str:
-        """Debug/inspection convenience - EmbeddingEngine never decodes its
-        own output, only encode() is on the real request path."""
+        """Debug/inspection convenience: EmbeddingEngine never decodes its output; only encode is
+        on the request path."""
         words: list[str] = []
         for token_id in token_ids:
             piece = self._id_to_token[token_id]

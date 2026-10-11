@@ -1,10 +1,7 @@
-"""M10: /api/embed (plural, batched) against a tiny but real bert GGUF - the
-
-batched sibling of test_api_embeddings.py. Each input gets its own
-EmbeddingEngine.embed() call under the hood (no real padded batching, see
-app/routers/embed_router.py's own docstring), but the wire contract (accept
-a string or a list, return a list of vectors) is what's under test here.
-"""
+"""M10: /api/embed (plural, batched) against a tiny bert GGUF, the batched sibling of
+test_api_embeddings.py. Each input gets its own EmbeddingEngine.embed (no padded batching;
+app/routers/embed_router.py); the wire contract is under test: accept a string or a list, return a
+list of vectors."""
 
 from fastapi.testclient import TestClient
 
@@ -20,7 +17,7 @@ class TestEmbedHappyPath:
         assert response.status_code == 200
         embeddings = response.json()["embeddings"]
         assert len(embeddings) == 1
-        assert len(embeddings[0]) == 8  # N_EMBD in tiny_gguf_bert.py
+        assert len(embeddings[0]) == 8
 
     def test_list_input_returns_one_embedding_per_item_in_order(
         self, client: TestClient, tiny_bert_model: InstalledModel
@@ -32,7 +29,7 @@ class TestEmbedHappyPath:
         assert response.status_code == 200
         embeddings = response.json()["embeddings"]
         assert len(embeddings) == 3
-        assert embeddings[0] == embeddings[2]  # same text -> same vector
+        assert embeddings[0] == embeddings[2]
 
     def test_empty_list_input_returns_no_embeddings(
         self, client: TestClient, tiny_bert_model: InstalledModel

@@ -1,20 +1,13 @@
-"""Builds a tiny, complete, valid `gemma4` GGUF file - real architecture
+"""Builds a tiny, complete, valid `gemma4` GGUF with the architecture's shape (local/sliding and
+global layer types, different head_dim per type, the `rope_freqs.weight` correction tensor and
+final-logit softcapping), minimal Gemma4Tokenizer-shaped metadata, all F32, so integration tests run
+the *entire* pipeline (GGUFReader -> GGUFModelLoader -> Gemma4Architecture -> Gemma4Tokenizer ->
+ChatEngine -> NDJSON) fast and memory-safely.
 
-shape (including both local/sliding and global layer types in one model,
-different head_dim per type, the `rope_freqs.weight` correction tensor,
-and final-logit softcapping), real (if minimal) Gemma4Tokenizer-shaped
-metadata, all F32 - so integration tests can run the *entire* real pipeline
-(GGUFReader -> GGUFModelLoader -> Gemma4Architecture -> Gemma4Tokenizer ->
-ChatEngine -> NDJSON) end to end, fast and memory-safely.
-
-This proves the *wiring* (shapes, per-layer-type dispatch, sliding-window
-masking, the v-from-k reuse on the global layer, the rope_freqs code path,
-sandwich-norm ordering) doesn't crash and produces correctly-shaped output -
-not that it numerically matches the real `google/gemma-4-12b-it` model,
-which a much larger real GGUF pull (7GB) makes impractical to fully
-validate on this project's 15GB-RAM target hardware even in bf16 (~28GB
-estimated) - see ROADMAP.md's M10 gemma4 entry for the accepted gap this
-leaves and why.
+It proves the *wiring* (shapes, per-layer-type dispatch, sliding-window masking, v-from-k reuse on
+the global layer, the rope_freqs path, sandwich-norm ordering) doesn't crash and gives correctly
+shaped output, not a numeric match to `google/gemma-4-12b-it`, whose 7GB GGUF is impractical to
+validate on 15GB-RAM hardware even in bf16 (~28GB estimated); ROADMAP.md M10 gemma4: accepted gap.
 """
 
 from pathlib import Path
@@ -22,17 +15,17 @@ from pathlib import Path
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2
-N_LAYER = 6  # one full real sliding_window_pattern cycle: 5 local + 1 global
+N_LAYER = 6
 FFN_LEN = 16
 SLIDING_WINDOW = 4
 HEAD_DIM_LOCAL = 4
-HEAD_DIM_GLOBAL = 6  # deliberately different from local, to prove per-layer-type dispatch
-N_HEAD_KV_LOCAL = 2  # plain MHA on local layers - no GQA repeat needed
-N_HEAD_KV_GLOBAL = 1  # MQA on the global layer - exercises the repeat_interleave path
+HEAD_DIM_GLOBAL = 6
+N_HEAD_KV_LOCAL = 2
+N_HEAD_KV_GLOBAL = 1
 FINAL_LOGIT_SOFTCAPPING = 30.0
 
 _CONTROL_TOKENS = ["<pad>", "<eos>", "<bos>", "<unk>"]
@@ -90,16 +83,16 @@ def build_tiny_gemma4_gguf(path: Path, seed: int = 0) -> Path:
     )
 
     def add(name: str, array: np.ndarray) -> None:
-        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed) - see
-        # the row-permute note in app/architectures/layers.py.
+        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed); see the row-permute note in
+        # app/architectures/layers.py.
         builder.add_tensor(
             name, list(reversed(array.shape)), GGMLQuantizationType.F32, array.tobytes()
         )
 
     add("token_embd.weight", _random_weight(rng, vocab_size, N_EMBD))
     add("output_norm.weight", np.ones(N_EMBD, dtype="<f4"))
-    # Real llama.cpp freq_factors convention - a no-op correction (all 1.0) is enough to
-    # exercise the code path without needing to fake a numerically meaningful value.
+    # llama.cpp's freq_factors convention: a no-op correction (all 1.0) exercises the code path
+    # without a faked meaningful value.
     add("rope_freqs.weight", np.ones(HEAD_DIM_GLOBAL // 2, dtype="<f4"))
 
     for i in range(N_LAYER):
@@ -127,13 +120,13 @@ def build_tiny_gemma4_gguf(path: Path, seed: int = 0) -> Path:
     return builder.write(path)
 
 
-# --- Per-Layer Embeddings + cross-layer KV reuse (real gemma-4-E2B-it features, 2026-09-29) ---
-# 4 layers: [sliding(own kv, HAS attn_v), full(own kv, NO attn_v - use_v_from_k), sliding(shared,
-# reuses layer 0's kv), full(shared, reuses layer 1's kv)] - n_kv_shared_layers=2 puts the
-# provider/shared split exactly at n_layer_kv_from_start=2, and layer 1 (full, non-shared) is
-# deliberately given NO attn_v.weight - the opposite of the plain fixture above - to prove
-# `use_v_from_k` now follows real per-layer tensor presence, not an is_sliding proxy. Shared
-# layers also get double-width ffn (real `use_double_wide_mlp` behavior, plain per-layer array).
+# Per-Layer Embeddings + cross-layer KV reuse (gemma-4-E2B-it features): 4 layers
+# [sliding(own kv, HAS attn_v), full(own kv, NO attn_v: use_v_from_k), sliding(shared, reuses layer
+# 0's kv), full(shared, reuses layer 1's kv)]; n_kv_shared_layers=2 puts the provider/shared split
+# at n_layer_kv_from_start=2, and layer 1 (full, non-shared) deliberately has NO attn_v.weight,
+# opposite of the plain fixture above, proving `use_v_from_k` follows per-layer tensor presence, not
+# an is_sliding proxy. Shared layers get double-width ffn (`use_double_wide_mlp`, a plain per-layer
+# array).
 PLE_N_LAYER = 4
 PLE_PER_LAYER_DIM = 4
 PLE_N_KV_SHARED_LAYERS = 2
@@ -142,7 +135,7 @@ _PLE_IS_SLIDING = [True, False, True, False]
 _PLE_HEAD_DIM = [HEAD_DIM_LOCAL, HEAD_DIM_GLOBAL, HEAD_DIM_LOCAL, HEAD_DIM_GLOBAL]
 _PLE_N_HEAD_KV = [N_HEAD_KV_LOCAL, N_HEAD_KV_GLOBAL, N_HEAD_KV_LOCAL, N_HEAD_KV_GLOBAL]
 _PLE_HAS_OWN_KV = [True, True, False, False]
-_PLE_HAS_ATTN_V = [True, False]  # only meaningful for the 2 own-kv layers (0, 1)
+_PLE_HAS_ATTN_V = [True, False]
 
 
 def build_tiny_gemma4_ple_kv_shared_gguf(path: Path, seed: int = 0) -> Path:
@@ -221,10 +214,9 @@ def build_tiny_gemma4_ple_kv_shared_gguf(path: Path, seed: int = 0) -> Path:
     return builder.write(path)
 
 
-# --- Mixture-of-Experts (real gemma-4-*-A*B-it feature, 2026-09-29 - see gemma4_moe.py's own
-# docstring; no real MoE GGUF exists to validate against, this proves the wiring/op-order only).
-# 2 plain, uniform (non-sliding) layers - kept separate from the PLE/kv-sharing fixture above so
-# each new mechanism's own test surface stays isolated and easy to reason about.
+# Mixture-of-Experts (gemma-4-*-A*B-it feature,; gemma4_moe.py): no real MoE GGUF exists,
+# so this proves the wiring/op order only. 2 plain uniform (non-sliding) layers, separate from the
+# PLE/kv-sharing fixture above so each mechanism's test surface stays isolated.
 MOE_N_LAYER = 2
 MOE_HEAD_DIM = 4
 MOE_N_HEAD_KV = 2

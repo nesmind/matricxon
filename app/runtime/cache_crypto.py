@@ -15,7 +15,7 @@ NONCE_BYTES = 12
 
 
 class CacheDecryptError(Exception):
-    """Wrong key, corrupted file, or a file that was modified."""
+    """Wrong key, corrupted file, or a modified file."""
 
 
 class CacheCipher:
@@ -40,7 +40,7 @@ class CacheCipher:
     def prefix_fingerprints(self, token_ids: list[int], block: int) -> list[str]:
         """One short keyed hash per whole `block` of tokens: entry i covers `token_ids[:(i+1) *
         block]`. Two token lists share their first k blocks exactly when the first k entries are
-        equal - how a saved cache is matched to a new prompt without being decrypted first."""
+        equal: how a saved cache is matched to a new prompt without decrypting it."""
         running = hmac.new(self._mac_key, digestmod=hashlib.sha256)
         hashes: list[str] = []
         for start in range(0, len(token_ids) - block + 1, block):
@@ -49,19 +49,32 @@ class CacheCipher:
         return hashes
 
 
-class CacheKeyStore:
-    """Where the key comes from: `MATRICXON_CACHE_KEY` if set (any passphrase, hashed to 32
-    bytes), else a random key generated once into a 0600 file."""
+class CacheKeyMissingError(RuntimeError):
+    """A cluster node has no provisioned key (it must never invent one)."""
 
-    def __init__(self, key_file: Path, env_value: str | None = None) -> None:
+
+class CacheKeyStore:
+    """Where the key comes from: `MATRICXON_CACHE_KEY` if set (any passphrase, hashed to 32 bytes),
+    else a random key generated once into a 0600 file, unless `allow_create` is False (a cluster
+    node: every node must share one provisioned key)."""
+
+    def __init__(
+        self, key_file: Path, env_value: str | None = None, allow_create: bool = True
+    ) -> None:
         self._key_file = key_file
         self._env_value = env_value
+        self._allow_create = allow_create
 
     def load(self) -> CacheCipher:
         if self._env_value:
             return CacheCipher(hashlib.sha256(self._env_value.encode()).digest())
         if self._key_file.exists():
             return CacheCipher(self._key_file.read_bytes())
+        if not self._allow_create:
+            raise CacheKeyMissingError(
+                "cluster node: set MATRICXON_CACHE_KEY or provide the shared key file "
+                f"{self._key_file}"
+            )
         self._key_file.parent.mkdir(parents=True, exist_ok=True)
         key = os.urandom(KEY_BYTES)
         fd = os.open(self._key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

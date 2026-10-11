@@ -1,8 +1,4 @@
-/*
- * IQ3_XXS, IQ3_S - ported directly from their own already-oracle-validated Numba kernels
- * (app/gguf/dequant/quantized_gemv_iq3.py). Grid entries here are 4-value (not 8 like the IQ2
- * family), so each group of 8 activations pulls from two adjacent grid rows.
- */
+/* IQ3_XXS, IQ3_S, ported from the Numba kernels (app/gguf/dequant/quantized_gemv_iq3.py). Grid entries are 4 values (8 in IQ2), so each group of 8 activations uses two adjacent grid rows. */
 #include "mx_common.h"
 #include "mx_iq_grids.h"
 

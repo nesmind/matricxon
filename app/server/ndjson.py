@@ -5,11 +5,9 @@ from starlette.responses import StreamingResponse
 
 
 class NDJSONResponse(StreamingResponse):
-    """Streams an async iterator of dicts as newline-delimited JSON.
-
-    No compression middleware may sit in front of routes using this response —
-    that would buffer the whole body and destroy token-by-token latency.
-    """
+    """Streams an async iterator of dicts as newline-delimited JSON. No compression middleware may
+    sit in front of routes using it: that would buffer the whole body and destroy token-by-token
+    latency."""
 
     media_type = "application/x-ndjson"
 

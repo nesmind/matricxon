@@ -28,8 +28,8 @@ class _Job:
         self.request_id = request_id
         self.stop_event = stop_event
         self.iterator: Iterator[object] | None = None
-        self.waiting: DecodeStep | None = None  # wants logits - the next batched decode gives them
-        self.reply: object = None  # what to send the generator when it next runs
+        self.waiting: DecodeStep | None = None
+        self.reply: object = None
         self.done = False
 
     def emit(self, item: object) -> None:
@@ -37,26 +37,22 @@ class _Job:
 
 
 class ModelWorker:
-    """One dedicated background thread per loaded model, running every reply on that model.
+    """One dedicated background thread per loaded model, running every reply on it.
 
-    Two things this buys, per ROADMAP.md's M6 design: PyTorch's blocking CPU compute never stalls
-    FastAPI's event loop (a chat stream can run for many seconds, and the loop also has to keep
-    answering `/api/tags` health probes), and the model's caches and weights are only ever touched
-    from this one thread, so forward passes can never race each other.
+    Why: blocking PyTorch CPU compute never stalls FastAPI's event loop (a chat stream can run many
+    seconds while the loop answers `/api/tags` health probes), and the model's caches and weights
+    are touched from one thread, so forward passes can't race.
 
-    Replies are generators (`ChatEngine.stream_steps`) that this thread advances cooperatively.
-    A reply asks for the logits of its newest token by yielding a `DecodeStep`; each round the
-    worker collects the pending steps of all active replies and gives them to the `BatchDecoder`,
-    which runs them as one forward pass when the architecture allows (each weight is then read once
-    for every user, which is where concurrent throughput comes from) and one by one otherwise. A
-    long prompt yields `CHECKPOINT` between prefill pieces so it cannot stall everyone else's
-    decoding. At most `max_active` replies run at once; the rest wait in the queue, in order. A
-    plain generator that yields only items - what the tests and `/api/generate` used before - runs
-    on the same loop, one item per round.
+    Replies are generators (`ChatEngine.stream_steps`) advanced cooperatively. A reply asks for its
+    newest token's logits by yielding a `DecodeStep`; each round the worker gives all active
+    replies' pending steps to the `BatchDecoder`, which runs one forward pass when the architecture
+    allows (each weight read once for all users: where concurrent throughput comes from), else one
+    by one. A long prompt yields `CHECKPOINT` between prefill pieces so it can't stall others'
+    decoding. At most `max_active` replies run at once; the rest queue in order. A plain generator
+    yielding items (tests, `/api/generate`) runs on the same loop, one item per round.
 
-    See `app.server.thread_stream.stream_in_thread` for the same thread-to-asyncio bridge without
-    the persistent-worker-thread part - a one-off job with no shared state to protect (e.g. a
-    `/api/pull` download) uses that directly instead of a whole `ModelWorker`.
+    `app.server.thread_stream.stream_in_thread` is the same thread-to-asyncio bridge without the
+    persistent thread, for one-off jobs (e.g. a `/api/pull` download).
     """
 
     def __init__(self, batch_decoder: BatchDecoder | None = None, max_active: int = 8) -> None:
@@ -65,7 +61,7 @@ class ModelWorker:
         self._jobs: queue.Queue[_Job] = queue.Queue()
         self._stop_event = threading.Event()
         # One stop event per submitted reply (keyed by the caller's request id): cancelling one
-        # reply never touches another user's reply running or queued on this same model.
+        # never touches another user's reply on this model.
         self._job_stops: dict[str, threading.Event] = {}
         self._busy_count = 0
         self._busy_lock = threading.Lock()
@@ -74,27 +70,25 @@ class ModelWorker:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    # ---- state other threads read ------------------------------------------------------------
+    # state other threads read
 
     def is_busy(self) -> bool:
-        """True while at least one stream() job is queued or actively running on this worker.
+        """True while a stream job is queued or running on this worker.
 
-        ModelManager checks this before evicting a handle (keep-alive expiry or LRU pressure) - an
-        evicted-but-still-generating handle used to become invisible to /api/ps and unreachable by
-        request_stop() (ModelManager.unload() only knew how to signal a handle still in its own
-        dict), while its worker thread kept right on computing every remaining token regardless.
-        Confirmed live: a single slow generation routinely outlives the 300s default keep-alive, so
-        the very next unrelated request's own get_or_load() call would silently orphan it
-        mid-stream. See ModelManager._evict_expired/_evict_least_recently_used's own comments.
+        ModelManager checks it before evicting a handle (keep-alive expiry or LRU pressure): an
+        evicted-but-generating handle used to become invisible to /api/ps and unreachable by
+        request_stop while its thread kept computing. A slow generation routinely outlives the 300s
+        default keep-alive, so the next unrelated get_or_load orphaned it mid-stream. See
+        ModelManager._evict_expired/_evict_least_recently_used.
         """
         with self._busy_lock:
             return self._busy_count > 0
 
     def should_stop(self) -> bool:
-        """The worker-wide stop flag (`request_stop`), for a caller building the `stop_check` of
-        a generator: lets a stop take effect *during* a single forward pass, not just between the
-        items the scheduler checks between (real gap, 2026-09-21: cancelling mid-forward-pass on
-        slow hardware could mean waiting out an entire layer loop)."""
+        """The worker-wide stop flag (`request_stop`), for a generator's `stop_check`: lets a stop
+        take effect *during* a forward pass, not just between the scheduler's checks (gap:
+        cancelling mid-forward-pass on slow hardware could wait out a whole layer
+        loop)."""
         return self._stop_event.is_set()
 
     def _job_stop_event(self, request_id: str) -> threading.Event:
@@ -103,8 +97,8 @@ class ModelWorker:
 
     def stop_check_for(self, request_id: str | None) -> Callable[[], bool]:
         """The `stop_check` for one reply: true once *that* reply was cancelled (`cancel_job`) or
-        the worker-wide `request_stop` was used (an explicit unload). Without an id: `should_stop`.
-        """
+        the worker-wide `request_stop` was used (an explicit unload). Without an id:
+        `should_stop`."""
         if request_id is None:
             return self.should_stop
         event = self._job_stop_event(request_id)
@@ -112,9 +106,8 @@ class ModelWorker:
 
     def cancel_job(self, request_id: str) -> bool:
         """Stops only the reply submitted under `request_id`: a running one halts at its next
-        layer/token check, a queued one is skipped when its turn comes. Other replies on this worker
-        are untouched and the model stays loaded. False if no such reply is running or queued here.
-        """
+        layer/token check, a queued one is skipped when its turn comes. Other replies and the loaded
+        model are untouched. False if no such reply is running or queued here."""
         with self._busy_lock:
             event = self._job_stops.get(request_id)
         if event is None:
@@ -123,51 +116,46 @@ class ModelWorker:
         return True
 
     def request_stop(self) -> None:
-        """Stops every reply running on this worker as soon as it next yields - the explicit
-        "unload this model" path (`ModelManager.unload`), not routine eviction, which never
-        interrupts a generation. Setting a flag is enough: a reply the scheduler stops is closed
-        and never resumed, so its further tokens' compute never even starts."""
+        """Stops every reply on this worker as soon as it next yields: the explicit "unload this
+        model" path (`ModelManager.unload`), not routine eviction, which never interrupts a
+        generation. A flag is enough: a reply the scheduler stops is closed and never resumed, so
+        its further tokens' compute never starts."""
         self._stop_event.set()
 
     def wait_until_idle(self) -> None:
-        """Blocks until no stream() job is queued or actively running on this worker - see
-        request_stop's own docstring for why setting the stop flag isn't enough by itself: it's
-        asynchronous, only noticed at the next per-layer/per-token check, not instant. Real bug this
-        closes (2026-09-22, confirmed live): `ModelManager.unload` called `request_stop()` then
-        `architecture.close()` right after, on a different thread, while this worker could still be
-        mid-`forward()` reading a `QuantizedLinear`'s live raw-mmap view - `mmap.close()` crashed
-        with `BufferError: cannot close exported pointers exist`."""
+        """Blocks until no stream job is queued or running here. request_stop's flag isn't enough
+        alone: it is asynchronous, noticed at the next per-layer/per-token check. Bug:
+        `ModelManager.unload` called `request_stop` then `architecture.close` on another
+        thread while this worker could be mid-`forward` reading a `QuantizedLinear`'s raw-mmap
+        view; `mmap.close` crashed with `BufferError: cannot close exported pointers exist`."""
         self._idle_event.wait()
 
-    # ---- submitting a reply ------------------------------------------------------------------
+    # submitting a reply
 
     def stream(
         self, generator_fn: Callable[[], Iterator[object]], request_id: str | None = None
     ) -> "asyncio.Queue[object]":
-        """Runs `generator_fn()` (a generator) on this worker's thread. Each yielded item, then a
-        final `None` sentinel (or any exception raised instead), is handed to the calling
-        coroutine's event loop via `call_soon_threadsafe` and can be read off the returned queue
-        with `await queue.get()`. `DecodeStep`/`Checkpoint` items are the scheduler's own protocol
-        and never reach the queue.
-        """
+        """Runs `generator_fn` (a generator) on this worker's thread. Each yielded item, then a
+        final `None` sentinel (or any exception raised instead), reaches the calling coroutine's
+        event loop via `call_soon_threadsafe`, readable with `await queue.get`.
+        `DecodeStep`/`Checkpoint` items are the scheduler's protocol and never reach the queue."""
         loop = asyncio.get_running_loop()
         results: asyncio.Queue[object] = asyncio.Queue()
         stop_event = self._job_stop_event(request_id) if request_id is not None else None
-        # Marked busy here, at submission time (not once the thread actually picks the job up) -
-        # is_busy() has to read "true" the instant a caller has committed to running this job,
-        # including the window while it's still sitting in the queue, or a manager-side eviction
-        # check racing that window could still wrongly treat this handle as idle and evict it.
+        # Marked busy at submission, not when the thread picks the job up: is_busy must be true
+        # once a caller committed to this job, including while it queues, or a manager eviction
+        # check racing that window could treat this handle as idle and evict it.
         with self._busy_lock:
             self._busy_count += 1
             self._idle_event.clear()
         self._jobs.put(_Job(generator_fn, loop, results, request_id, stop_event))
         return results
 
-    # ---- the scheduler (worker thread) ---------------------------------------------------------
+    # the scheduler (worker thread)
 
     def _run(self) -> None:
         # Gradients off for this thread for good: replies interleave here, so no grad-mode context
-        # manager may span a suspension (see ChatEngine.stream_steps).
+        # manager may span a suspension (ChatEngine.stream_steps).
         torch.set_grad_enabled(False)
         active: list[_Job] = []
         while True:
@@ -197,7 +185,7 @@ class ModelWorker:
         """Runs `job` until it needs logits, yields a checkpoint, or ends."""
         while not job.done and job.waiting is None:
             if self._stopped(job):
-                self._finish(job)  # cancelled (also while still queued): nothing more computed
+                self._finish(job)
                 return
             try:
                 reply, job.reply = job.reply, None
@@ -225,7 +213,7 @@ class ModelWorker:
                 job.emit(item)
 
     def _decode_round(self, waiting: list[_Job]) -> None:
-        """One batched decode step for every reply that is waiting on logits."""
+        """One batched decode step for every reply waiting on logits."""
         waiting = [job for job in waiting if not job.done]
         if not waiting:
             return
@@ -241,8 +229,8 @@ class ModelWorker:
             job.reply = result
 
     def _finish(self, job: _Job) -> None:
-        """Closes `job`'s generator (running its `finally` blocks - cache release), tells the
-        consumer, and frees its place."""
+        """Closes `job`'s generator (running its `finally` blocks: cache release), tells the
+        consumer and frees its place."""
         if job.done:
             return
         job.done = True

@@ -1,10 +1,7 @@
-"""M10: tool-calling support in /api/chat against a tiny but real mistral3
-
-GGUF (see tests/tiny_gguf.py, now with the AVAILABLE_TOOLS/TOOL_CALLS/ARGS/
-TOOL_RESULTS control tokens added) - proves the real GGUFTokenizer round-
-trips these new control tokens end to end, not just Mistral3PromptBuilder's
-own unit-level string assertions (test_prompt_builder.py).
-"""
+"""M10: tool calling in /api/chat against a tiny mistral3 GGUF (tests/tiny_gguf.py, with the
+AVAILABLE_TOOLS/TOOL_CALLS/ARGS/TOOL_RESULTS control tokens added): proves the real GGUFTokenizer
+round-trips them end to end, not just Mistral3PromptBuilder's string assertions
+(test_prompt_builder.py)."""
 
 import json
 

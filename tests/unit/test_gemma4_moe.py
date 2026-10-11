@@ -1,11 +1,9 @@
-"""Gemma4's real Mixture-of-Experts block (`app/architectures/gemma4_moe.py`) - a real, distinct
-mechanism from GraniteMoE/Mixtral's own MoE (see that module's own docstring for the confirmed
-differences: router pre-norm/pre-scale, per-expert scale, gelu-tanh experts, shared-dense-plus-
-sparse-expert combination by addition). No real gemma-4-*-A*B-it GGUF exists to validate this
-against yet (tracked in ROADMAP.md) - proven here the same way PLE/cross-layer-KV-reuse were:
-structural wiring, a real forward pass, and perturbing the one weight each mechanism reads to
-confirm the output actually depends on it (not silently skipped).
-"""
+"""Gemma4's Mixture-of-Experts block (`app/architectures/gemma4_moe.py`), distinct from
+GraniteMoE/Mixtral's (differences: that module's docstring: router pre-norm/pre-scale, per-expert
+scale, gelu-tanh experts, shared-dense-plus-sparse-expert addition). No real gemma-4-*-A*B-it GGUF
+exists to validate against; proven as PLE/cross-layer-KV-reuse were: structural wiring,
+a forward pass, and perturbing the one weight each mechanism reads to confirm the output depends on
+it (not silently skipped)."""
 
 import torch
 
@@ -59,8 +57,7 @@ def test_perturbing_an_experts_own_weight_changes_the_output(tmp_path):
 
 
 def test_perturbing_the_per_expert_scale_changes_the_output(tmp_path):
-    """The one real parameter GraniteMoE's own router doesn't have at all - proves it's actually
-    read, not a dead/no-op field."""
+    """The one parameter GraniteMoE's router lacks: proves it is read, not a dead field."""
     path = build_tiny_gemma4_moe_gguf(tmp_path / "tiny-gemma4-moe.gguf")
     model = _load(path)
     with torch.no_grad():

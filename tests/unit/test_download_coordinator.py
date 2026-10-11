@@ -28,7 +28,7 @@ class TestDownloadCoordinatorSerialization:
         t1 = threading.Thread(target=first)
         t2 = threading.Thread(target=second)
         t1.start()
-        time.sleep(0.05)  # give `second` a real chance to block on the lock before `first` releases
+        time.sleep(0.05)
         t2.start()
         release_first.set()
         t1.join(timeout=5)

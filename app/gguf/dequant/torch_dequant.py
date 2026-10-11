@@ -1,8 +1,7 @@
-"""Pure-torch dequantization of packed GGUF blocks, so it runs on whatever device holds the bytes
+"""Pure-torch dequantization of packed GGUF blocks, so it runs on whichever device holds the bytes
 (the GPU, for `Settings.gpu_weight_mode="packed"`). Each function mirrors the numpy `QuantStrategy`
-of the same type bit for bit - `tests/unit/test_torch_dequant.py` checks them against it - and takes
-`blocks`: a `(n_blocks, type_size)` uint8 tensor, returning `(n_blocks * block_size,)` float32.
-"""
+of the same type bit for bit (`tests/unit/test_torch_dequant.py` checks them) and takes `blocks`: a
+`(n_blocks, type_size)` uint8 tensor, returning `(n_blocks * block_size)` float32."""
 
 from collections.abc import Callable
 
@@ -72,7 +71,7 @@ def q4_k(blocks: torch.Tensor) -> torch.Tensor:
     d, dmin = _f16(blocks, 0).view(n, 1, 1, 1), _f16(blocks, 2).view(n, 1, 1, 1)
     sc, m = _scale_min_k4(blocks[:, 4:16])
     qs = blocks[:, 16:].reshape(n, 4, 32)
-    quants = torch.stack([qs & 0x0F, qs >> 4], dim=2).float()  # (n, 4, 2, 32)
+    quants = torch.stack([qs & 0x0F, qs >> 4], dim=2).float()
     return (d * sc.view(n, 4, 2, 1) * quants - dmin * m.view(n, 4, 2, 1)).reshape(-1)
 
 
@@ -80,12 +79,12 @@ def q5_k(blocks: torch.Tensor) -> torch.Tensor:
     n = blocks.shape[0]
     d, dmin = _f16(blocks, 0).view(n, 1, 1, 1), _f16(blocks, 2).view(n, 1, 1, 1)
     sc, m = _scale_min_k4(blocks[:, 4:16])
-    qh = blocks[:, 16:48].long().unsqueeze(1)  # (n, 1, 32)
+    qh = blocks[:, 16:48].long().unsqueeze(1)
     ql = blocks[:, 48:].reshape(n, 4, 32).long()
     shifts = (torch.arange(4, device=blocks.device) * 2).view(1, 4, 1)
     low = (ql & 0x0F) + (((qh >> shifts) & 1) << 4)
     high = (ql >> 4) + (((qh >> (shifts + 1)) & 1) << 4)
-    quants = torch.stack([low, high], dim=2).float()  # (n, 4, 2, 32)
+    quants = torch.stack([low, high], dim=2).float()
     return (d * sc.view(n, 4, 2, 1) * quants - dmin * m.view(n, 4, 2, 1)).reshape(-1)
 
 
@@ -107,8 +106,8 @@ def q6_k(blocks: torch.Tensor) -> torch.Tensor:
             dim=2,
         ).float()
         - 32.0
-    )  # (n, 2, 4, 32)
-    scale = scales.repeat_interleave(16, dim=-1)  # (n, 2, 4, 32): 16 elements per int8 scale
+    )
+    scale = scales.repeat_interleave(16, dim=-1)
     return (d * scale * quants).reshape(-1)
 
 
@@ -144,7 +143,7 @@ def _q3k_scales(raw: torch.Tensor) -> torch.Tensor:
     """ggml's 12-byte packed signed 6-bit scales -> `(n, 16)` float, already minus 32. Works on
     32-bit words (bits carry across bytes before the masks), as the numpy version does."""
     b = raw.long().reshape(-1, 3, 4)
-    w = b[..., 0] | (b[..., 1] << 8) | (b[..., 2] << 16) | (b[..., 3] << 24)  # (n, 3) u32
+    w = b[..., 0] | (b[..., 1] << 8) | (b[..., 2] << 16) | (b[..., 3] << 24)
     k1, k2 = 0x03030303, 0x0F0F0F0F
     w0, w1, tmp = w[:, 0], w[:, 1], w[:, 2]
     words = torch.stack(
@@ -198,7 +197,7 @@ def iq4_xs(blocks: torch.Tensor) -> torch.Tensor:
     high = ((scales_h.unsqueeze(1) >> (2 * ib)) & 3) << 4
     dl = (_f16(blocks, 0) * ((low | high) - 32).float()).view(n, 8, 1)
     table, qs = _iq4_table(blocks.device), blocks[:, 8:136].reshape(n, 8, 16).long()
-    values = torch.cat([table[qs & 0x0F], table[qs >> 4]], dim=2)  # (n, 8, 32)
+    values = torch.cat([table[qs & 0x0F], table[qs >> 4]], dim=2)
     return (values * dl).reshape(-1)
 
 

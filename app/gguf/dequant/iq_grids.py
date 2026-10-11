@@ -1,12 +1,11 @@
-"""Loads the grid/sign lookup tables the grid-based I-quant strategies (iq2_family.py,
-iq3_family.py, iq1_family.py) need. Data is extracted verbatim from ggml's real source
-(ggml/src/ggml-common.h) by scripts/extract_iq_grids.py - not hand-transcribed, since a
-transcription error in a multi-thousand-entry table would be effectively undetectable later -
-and checked in as .npy files under app/gguf/dequant/data/.
+"""Loads the grid/sign lookup tables for the grid-based I-quants (iq2_family.py, iq3_family.py,
+iq1_family.py). The data is extracted verbatim from ggml's source (ggml/src/ggml-common.h) by
+tools/extract_iq_grids.py (not hand-transcribed: an error in a multi-thousand-entry table would go
+unnoticed) and checked in as .npy files under app/gguf/dequant/data/.
 
-Each grid entry (a packed uint64 or uint32) is reinterpreted as N signed int8 values via
-`.view(np.int8)` - the exact NumPy equivalent of ggml's own `(const int8_t *)(grid + idx)`
-pointer cast (see each dequantize_row_iq*'s own C source, quoted in the strategies below).
+Each grid entry (packed uint64 or uint32) is reinterpreted as N signed int8 via `.view(np.int8)`,
+NumPy's equivalent of ggml's `(const int8_t *)(grid + idx)` cast (each dequantize_row_iq*'s C source
+is quoted in the strategies).
 """
 
 from functools import cache

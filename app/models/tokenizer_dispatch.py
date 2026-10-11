@@ -8,16 +8,12 @@ from app.server.errors import UnsupportedArchitectureError
 
 
 def build_tokenizer(metadata: GGUFMetadata) -> Tokenizer:
-    """Dispatches on `tokenizer.ggml.model`, the same metadata key llama.cpp
-    itself uses to pick a tokenizer implementation - `"gpt2"` for the
-    byte-level BPE decoder models use, `"bert"` for the WordPiece format
-    both real local encoder models use (confirmed against their real GGUF
-    metadata, not assumed - see ROADMAP.md's M5.5/M8 entries), `"llama"`
-    for the SentencePiece-BPE format plain `llama`-arch models use (M10,
-    confirmed against a real TinyLlama pull), `"gemma4"` for Gemma4's own
-    rank-based-BPE-without-byte-remapping format (M10, confirmed against a
-    real `google/gemma-4-12b-it` pull).
-    """
+    """Dispatches on `tokenizer.ggml.model`, the key llama.cpp uses to pick a tokenizer: `"gpt2"`
+    for the byte-level BPE decoder models use, `"bert"` for the WordPiece format of both local
+    encoder models (checked against their GGUF metadata), `"llama"` for the
+    SentencePiece-BPE of plain `llama`-arch models (M10, checked on a TinyLlama pull), `"gemma4"`
+    for Gemma4's rank-based BPE without byte-remapping (M10, checked on a `google/gemma-4-12b-it`
+    pull)."""
     tokenizer_model = metadata.require("tokenizer.ggml.model")
     if tokenizer_model == "gpt2":
         return GGUFTokenizer(metadata)

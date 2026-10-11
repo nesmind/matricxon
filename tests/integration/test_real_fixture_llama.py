@@ -1,26 +1,15 @@
-"""M10: /api/chat against the real TinyLlama-1.1B-Chat-v1.0 GGUF (668MB,
+"""M10: /api/chat against the real TinyLlama-1.1B-Chat-v1.0 GGUF (668MB, Q4_K_M), small enough (bf16
+estimate ~2.7GB) for a full real generation, unlike the larger mistral3/gemma4 fixtures. Skips if
+not pulled (REAL_LLAMA_TAG). Pulled via matricxon's `/api/pull` into the project's own
+`data/models`, a real catalog entry in the configured location (no separate `models_dir`, unlike
+REAL_MINISTRAL_BLOB).
 
-Q4_K_M) - small enough (bf16 estimate ~2.7GB) to run a full real generation
-safely, unlike the much larger real mistral3/gemma4 fixtures. Skips
-automatically if this machine hasn't pulled it (see REAL_LLAMA_TAG below) -
-pulled via matricxon's own real `/api/pull` into this project's own
-`data/models`, not an external blob store, so (unlike REAL_MINISTRAL_BLOB)
-there's no separate `models_dir` to point at: it's already a real catalog
-entry in the app's own configured location.
-
-Known, accepted gap this test still passes despite: `/api/chat` always
-builds its prompt via `Mistral3PromptBuilder` regardless of which
-architecture is actually loaded (see chat_router.py) - correct for
-`mistral3`, structurally wrong for `llama` (TinyLlama's real chat template
-uses `<|user|>`/`<|assistant|>`, not `[INST]`/`[/INST]`, which this vocab
-doesn't even have as control tokens - they just become ordinary BPE'd
-text). Tolerable for a short factual completion like the one below (the
-literal "[INST]"/"[/INST]" text doesn't stop the model from still finding
-and continuing "The capital of France is" correctly), but a real multi-turn
-chat conversation would get a genuinely wrong prompt structure. Flagged in
-ROADMAP.md as real follow-up work (per-architecture prompt-builder
-dispatch), not fixed here - out of scope for "add llama architecture
-support" itself.
+Accepted gap this passes despite: `/api/chat` builds its prompt via `Mistral3PromptBuilder` whatever
+the architecture (chat_router.py), correct for `mistral3`, wrong for `llama` (TinyLlama's template
+uses `<|user|>`/`<|assistant|>`, and `[INST]`/`[/INST]` aren't control tokens in this vocab, just
+BPE'd text). Tolerable for a short completion like "The capital of France is", but a multi-turn chat
+would get a wrong prompt. Follow-up in ROADMAP.md (per-architecture prompt-builder dispatch), out of
+scope for adding llama support.
 """
 
 import json
@@ -37,9 +26,8 @@ from app.models.manager import ModelManager
 from app.server.errors import UnknownModelError
 
 REAL_LLAMA_TAG = "hf.co/hieupt/TinyLlama-1.1B-Chat-v1.0-Q4_K_M-GGUF:Q4_K_M"
-# ~2.7GB bf16 estimate * 1.5x safety margin (ModelManager's own threshold) -
-# below this, the real InsufficientMemoryError guard would legitimately
-# refuse the load anyway, so skip cleanly instead of failing noisily.
+# ~2.7GB bf16 estimate * 1.5x safety margin (ModelManager's threshold): below this the
+# InsufficientMemoryError guard would refuse the load anyway, so skip cleanly.
 _MIN_AVAILABLE_BYTES = 4 * 1024**3
 
 
@@ -52,12 +40,9 @@ def _real_llama_installed() -> bool:
 
 
 def test_real_llama_generates_a_coherent_factual_continuation() -> None:
-    """Same real-weight validation bar M4 set for mistral3 ("The capital of
-
-    France is" -> a coherent, factually correct continuation) - greedy
-    decoding is fully deterministic, so asserting on the actual real-world
-    fact is safe, not flaky.
-    """
+    """The real-weight bar M4 set for mistral3 ("The capital of France is" -> a coherent, correct
+    continuation); greedy decoding is deterministic, so asserting the real-world fact isn't
+    flaky."""
     if not _real_llama_installed():
         pytest.skip(f"real fixture not pulled on this machine: {REAL_LLAMA_TAG}")
     available = available_memory_bytes()

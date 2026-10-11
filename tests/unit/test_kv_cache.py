@@ -51,11 +51,8 @@ class TestKVCache:
             cache.update(0, torch.zeros(1, 2, 2, 4), torch.zeros(1, 2, 2, 4))
 
     def test_supports_a_different_shape_per_layer(self) -> None:
-        """Real requirement, not a hypothetical: Gemma4's local/sliding
-
-        layers use 8 kv-heads of dim 256 while its global layers use 1 of
-        dim 512 - see KVCache's own docstring.
-        """
+        """A real requirement: Gemma4's local/sliding layers use 8 kv-heads of dim 256 while global
+        layers use 1 of dim 512 (KVCache)."""
         cache = KVCache(layer_shapes=[(8, 256), (1, 512)], max_seq_len=8)
         local_k = torch.ones(1, 8, 2, 256)
         global_k = torch.ones(1, 1, 2, 512)

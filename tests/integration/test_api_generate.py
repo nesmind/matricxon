@@ -1,9 +1,5 @@
-"""M10: /api/generate against a tiny but real mistral3 GGUF (see
-
-tests/tiny_gguf.py) - same real GGUFModelLoader/architecture/tokenizer/
-ChatEngine/NDJSON stack as test_api_chat_real_pipeline.py, just reached via
-the raw-prompt endpoint instead of the chat-message one.
-"""
+"""M10: /api/generate against a tiny mistral3 GGUF (tests/tiny_gguf.py): the same real stack as
+test_api_chat_real_pipeline.py, reached via the raw-prompt endpoint."""
 
 import json
 

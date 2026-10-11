@@ -6,8 +6,8 @@ from app.server.errors import DeviceUnavailableError
 class ComputeDevice:
     """Where a model's weights, caches and forward pass live: the CPU (default) or a CUDA GPU.
 
-    GPU mode is EXPERIMENTAL - written without a GPU on the dev machine, so it has only been
-    exercised through the CPU path and meta-device shape checks, never on real hardware.
+    GPU mode is EXPERIMENTAL: written without a GPU on the dev machine, exercised only through the
+    CPU path and meta-device shape checks, never on real hardware.
     """
 
     def __init__(self, torch_device: torch.device) -> None:
@@ -15,8 +15,8 @@ class ComputeDevice:
 
     @classmethod
     def resolve(cls, spec: str) -> "ComputeDevice":
-        """`"cpu"`, `"cuda"` or `"cuda:N"`. A GPU request that can't be met raises - it never
-        silently falls back to the CPU, which is what `MATRICXON_DEVICE=cuda` used to do."""
+        """`"cpu"`, `"cuda"` or `"cuda:N"`. A GPU request that can't be met raises; it never falls
+        back silently to the CPU, as `MATRICXON_DEVICE=cuda` used to."""
         try:
             device = torch.device(spec)
         except (RuntimeError, ValueError) as error:

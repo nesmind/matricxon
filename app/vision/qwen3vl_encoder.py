@@ -29,9 +29,9 @@ class Qwen3VLVisionLayer(nn.Module):
     def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
         n = x.shape[0]
         q, k, v = self.qkv(self.ln1(x)).view(n, 3, self.n_head, -1).unbind(dim=1)
-        q = q * cos + _rotate_half(q) * sin  # cos/sin: (n, 1, head_dim)
+        q = q * cos + _rotate_half(q) * sin
         k = k * cos + _rotate_half(k) * sin
-        q, k, v = (t.transpose(0, 1).unsqueeze(0) for t in (q, k, v))  # (1, heads, n, d)
+        q, k, v = (t.transpose(0, 1).unsqueeze(0) for t in (q, k, v))
         attn = F.scaled_dot_product_attention(q, k, v)[0].transpose(0, 1).reshape(n, -1)
         x = x + self.out(attn)
         return x + self.fc2(F.gelu(self.fc1(self.ln2(x)), approximate="tanh"))
@@ -39,24 +39,22 @@ class Qwen3VLVisionLayer(nn.Module):
 
 class Qwen3VLVisionEncoder(nn.Module):
     """The `qwen3vl_merger` vision tower + projector of a Qwen3-VL / Qwen3.5 mmproj GGUF
-    (`clip.projector_type`), confirmed against the real `unsloth/Qwen3.5-4B-GGUF` mmproj header
-    (2026-10-01) and HF's `Qwen3VLVisionModel`:
+    (`clip.projector_type`), checked against the `unsloth/Qwen3.5-4B-GGUF` mmproj header and HF's
+    `Qwen3VLVisionModel`:
 
     - patch embedding is a Conv3d with a 2-frame temporal kernel, stored as two Conv2d kernels
-      (`v.patch_embd.weight` / `.weight.1`); an image is two identical frames, so the two kernels
-      simply sum;
+      (`v.patch_embd.weight` / `.weight.1`); an image is two identical frames, so they sum;
     - a learned `grid x grid` position table, bilinearly resized (align_corners) to the image's
       patch grid;
     - 2D rotary attention (row/column frequencies, NEOX rotate-half over the head dim), full
-      attention over every patch of the image;
+      attention over every patch;
     - `v.post_ln` then a 2x2 spatial merge (4 neighbouring patches -> one 4*n_embd vector) and a
-      2-layer exact-GELU MLP (`mm.0`/`mm.2`) to the text model's width. No deepstack layers in
-      the real file (`is_deepstack_layers` is all False, no `v.deepstack.*` tensors).
+      2-layer exact-GELU MLP (`mm.0`/`mm.2`) to the text model's width. No deepstack layers in the
+      file.
 
-    Patches stay in plain raster order throughout (HF reorders them into merge windows first, but
-    attention is global per image and rotary/position are per-patch, so only the final merge
-    grouping depends on order). Output: one row per 2x2 merged token, raster order over the
-    merged grid.
+    Patches stay in raster order throughout (HF reorders them into merge windows, but attention is
+    global per image and rotary/position are per patch, so only the final merge grouping depends on
+    order). Output: one row per 2x2 merged token, raster order over the merged grid.
     """
 
     def __init__(self, metadata: GGUFMetadata, out_dim: int, mlp_hidden: int) -> None:
@@ -138,9 +136,9 @@ class Qwen3VLVisionEncoder(nn.Module):
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """pixel_values (1, 3, H, W), H/W multiples of patch_size * merge -> (tokens, out_dim)."""
-        x = self.patch_embd(pixel_values)  # (1, n_embd, gh, gw)
+        x = self.patch_embd(pixel_values)
         gh, gw = x.shape[-2:]
-        x = x[0].flatten(1).transpose(0, 1)  # (gh*gw, n_embd), raster order
+        x = x[0].flatten(1).transpose(0, 1)
         table = self.position_embd.view(1, self.grid, self.grid, -1).permute(0, 3, 1, 2)
         pos = F.interpolate(table, size=(gh, gw), mode="bilinear", align_corners=True)
         x = x + pos[0].flatten(1).transpose(0, 1)

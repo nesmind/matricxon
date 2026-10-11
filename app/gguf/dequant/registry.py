@@ -67,9 +67,6 @@ class QuantStrategyRegistry:
         return strategy
 
     def supported_names(self) -> list[str]:
-        """Every `GGMLQuantizationType` name this registry can currently
-
-        dequantize - real data for `GET /api/health`, so a caller can ask
-        "can you run this?" without hand-maintaining its own separate copy.
-        """
+        """Every `GGMLQuantizationType` name this registry can dequantize: data for `GET
+        /api/health`, so a caller needn't keep its own copy."""
         return [quant_type.name for quant_type in self._STRATEGIES]

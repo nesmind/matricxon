@@ -1,4 +1,4 @@
-"""The scanner passes plain text through, hides tool-call markup, and returns parsed calls."""
+"""The scanner passes plain text through, hides tool-call markup and returns parsed calls."""
 
 from app.runtime.tool_call_formats import LlamaJsonFormat, MistralFormat, TaggedBlockFormat
 from app.runtime.tool_call_scanner import ToolCallScanner

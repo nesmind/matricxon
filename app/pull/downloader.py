@@ -14,28 +14,19 @@ _CHUNK_SIZE = 1024 * 1024
 
 
 class HFDownloader:
-    """Streams a resolved file to `<dest>.partial`, yielding throttled
-    `(completed, total)` progress pairs, then atomically renames to `dest`
-    on success. Verifies the download against `ResolvedFile.sha256` (known
-    upfront from HF's API, no extra request) before the rename - a
-    corrupted/truncated download must never look like an installed model.
-    A dropped connection mid-stream (`httpx.HTTPError`, e.g. the peer
-    closing before the chunked body completes) is treated the same way:
-    the `.partial` file is deleted and a `PullConnectionError` is raised
-    instead of leaving a truncated file behind or letting the raw httpx
-    exception propagate.
+    """Streams a resolved file to `<dest>.partial`, yielding throttled `(completed, total)`
+    progress, then atomically renames to `dest`. Verifies against `ResolvedFile.sha256` (known
+    upfront from HF's API) before the rename, so a corrupted or truncated download never looks like
+    an installed model. A dropped connection mid-stream (`httpx.HTTPError`, e.g. the peer closing
+    before the chunked body completes) is treated the same way: `.partial` is deleted and
+    `PullConnectionError` raised.
 
-    `cancel_event`, when given, is checked once per chunk - set it (from the
-    caller's own event loop thread) to abort an in-progress download early,
-    same clean "delete `.partial`, raise instead of leaving a truncated file
-    or running to completion unseen" treatment as a dropped connection. See
-    app.pull.download_coordinator's own docstring for why this exists: a
-    real pAIring bug report (2026-09-21) traced a `.partial` rename crash
-    back to a browser refresh abandoning an in-flight pull - the download
-    itself, running on its own thread, had no way to know its caller was
-    gone and kept going regardless, until an unrelated retry raced it.
+    `cancel_event`, when given, is checked once per chunk; set it (from the caller's event loop
+    thread) to abort early with the same treatment. Without it a browser refresh abandoned an
+    in-flight pull whose download thread kept going until an unrelated retry raced it (see
+    app.pull.download_coordinator).
 
-    `http_client` is injectable for the same reason as `HFRepoResolver`.
+    `http_client` is injectable, like `HFRepoResolver`.
     """
 
     def __init__(self, http_client: httpx.Client | None = None) -> None:

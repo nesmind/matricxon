@@ -1,5 +1,5 @@
 """Context shifting: when a chat's oldest messages are trimmed, the cache drops those tokens and
-keeps the rest (keys re-rotated to their new positions) instead of re-reading the whole chat."""
+keeps the rest (keys re-rotated to their new positions) instead of re-reading the chat."""
 
 import logging
 from collections.abc import Iterator
@@ -21,7 +21,7 @@ from tests.tiny_gguf_gemma4 import build_tiny_gemma4_gguf
 from tests.tiny_gguf_llama import EOS_TOKEN_ID, build_tiny_llama_gguf
 
 SYSTEM = [3 + (i * 5) % 90 for i in range(12)]
-OLD = [100 + (i * 7) % 90 for i in range(20)]  # the oldest messages, trimmed away later
+OLD = [100 + (i * 7) % 90 for i in range(20)]
 MID = [20 + (i * 11) % 80 for i in range(24)]
 TAIL1 = [150, 151, 152, 153]
 TAIL2 = [160, 161, 162, 163, 164]
@@ -66,9 +66,9 @@ def test_the_gap_is_found_where_the_oldest_messages_were_trimmed():
 
 def test_no_gap_for_a_plain_continuation_or_an_unrelated_prompt():
     slot = CacheSlot(KVCache([(1, 4)], 200), (200, torch.float32), SYSTEM + OLD + MID)
-    assert slot.find_gap(SYSTEM + OLD + MID + [1, 2, 3]) is None  # nothing was cut
-    assert slot.find_gap(SYSTEM + [250] * 40) is None  # nothing lines up again
-    assert slot.find_gap([250] * 40) is None  # no shared start at all
+    assert slot.find_gap(SYSTEM + OLD + MID + [1, 2, 3]) is None
+    assert slot.find_gap(SYSTEM + [250] * 40) is None
+    assert slot.find_gap([250] * 40) is None
 
 
 def test_shifted_keys_equal_keys_rotated_fresh_for_their_new_positions(model):
@@ -103,7 +103,7 @@ def test_a_trimmed_chat_reuses_its_cache_and_the_first_layer_matches_a_cold_read
         warm = _run(model, cache, trimmed)
 
     assert "context shift: dropped" in caplog.text
-    assert cache.reused_tokens >= len(SYSTEM) + len(MID)  # everything after the cut was kept
+    assert cache.reused_tokens >= len(SYSTEM) + len(MID)
     assert len(warm) > 0
     cold = PromptCache(4)
     _run(model, cold, trimmed)
@@ -122,7 +122,7 @@ def test_switching_it_off_reads_the_whole_chat_again(model, caplog):
         _run(model, cache, SYSTEM + MID + TAIL1 + [9, 8, 7])
 
     assert "context shift" not in caplog.text
-    assert cache.reused_tokens <= len(SYSTEM)  # only the shared start survives
+    assert cache.reused_tokens <= len(SYSTEM)
 
 
 def test_another_chats_cache_is_never_cut(model, caplog):
@@ -154,7 +154,7 @@ def test_after_a_restart_the_stored_chat_is_cut_too(model, tmp_path, caplog, mon
     before.persist_all()
     store.flush()
 
-    after = PromptCache(4, tier=ModelCacheTier(store, "m|1"))  # a new process: RAM is empty
+    after = PromptCache(4, tier=ModelCacheTier(store, "m|1"))
     with caplog.at_level(logging.INFO):
         _run(model, after, SYSTEM + MID + TAIL1 + [9, 8, 7])
 

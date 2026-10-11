@@ -1,28 +1,22 @@
-"""Builds a tiny, complete, valid `clip` mmproj GGUF using the real
-
-Idefics3/SmolVLM projector shape (SigLIP tower, no CLS token, no pre_ln, a
-real post_ln, a pixel-shuffle + single bias-free linear projector) - see
-tests/tiny_gguf_clip.py's own docstring for why a synthetic fixture is used
-instead of the real 175MB SmolVLM download for fast unit tests. The real
-numeric/statistical validation against the real
-`ggml-org/SmolVLM-256M-Instruct-GGUF` mmproj pull is done manually (see
-ROADMAP.md's vision-fusion entry).
-"""
+"""Builds a tiny, complete, valid `clip` mmproj GGUF with the Idefics3/SmolVLM projector shape
+(SigLIP tower, no CLS token, no pre_ln, a post_ln, a pixel-shuffle + single bias-free linear
+projector); see tests/tiny_gguf_clip.py for why a synthetic fixture replaces the 175MB SmolVLM
+download. Numeric validation against the `ggml-org/SmolVLM-256M-Instruct-GGUF` mmproj is manual."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2
 N_LAYER = 2
 FFN_LEN = 16
 PATCH_SIZE = 4
-IMAGE_SIZE = 16  # -> (16/4)^2 = 16 raw patches (4x4 grid)
-SCALE_FACTOR = 2  # -> 16 / (2*2) = 4 output patches (2x2 grid)
+IMAGE_SIZE = 16
+SCALE_FACTOR = 2
 PROJECTION_DIM = 6
 IMAGE_MEAN = [0.5, 0.5, 0.5]
 IMAGE_STD = [0.5, 0.5, 0.5]
@@ -56,8 +50,8 @@ def build_tiny_idefics3_gguf(path: Path, seed: int = 0) -> Path:
     )
 
     def add(name: str, array: np.ndarray) -> None:
-        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed) - see
-        # the row-permute note in app/architectures/layers.py.
+        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed); see the row-permute note in
+        # app/architectures/layers.py.
         builder.add_tensor(
             name, list(reversed(array.shape)), GGMLQuantizationType.F32, array.tobytes()
         )
@@ -88,7 +82,7 @@ def build_tiny_idefics3_gguf(path: Path, seed: int = 0) -> Path:
         add(prefix + "attn_out.bias", np.zeros(N_EMBD, dtype="<f4"))
         add(prefix + "ln2.weight", np.ones(N_EMBD, dtype="<f4"))
         add(prefix + "ln2.bias", np.zeros(N_EMBD, dtype="<f4"))
-        # Same real, confirmed naming swap as tiny_gguf_clip.py's fixture.
+        # The same naming swap as tiny_gguf_clip.py's fixture.
         add(prefix + "ffn_down.weight", _random_weight(rng, FFN_LEN, N_EMBD))
         add(prefix + "ffn_down.bias", np.zeros(FFN_LEN, dtype="<f4"))
         add(prefix + "ffn_up.weight", _random_weight(rng, N_EMBD, FFN_LEN))
@@ -96,8 +90,7 @@ def build_tiny_idefics3_gguf(path: Path, seed: int = 0) -> Path:
 
     add("v.post_ln.weight", np.ones(N_EMBD, dtype="<f4"))
     add("v.post_ln.bias", np.zeros(N_EMBD, dtype="<f4"))
-    # Real, confirmed on the real SmolVLM mmproj: a single bias-free linear, no
-    # "mm.model.fc.bias" tensor at all.
+    # On the SmolVLM mmproj: a single bias-free linear, no "mm.model.fc.bias" tensor.
     mm_fc_in = N_EMBD * SCALE_FACTOR * SCALE_FACTOR
     add("mm.model.fc.weight", _random_weight(rng, PROJECTION_DIM, mm_fc_in))
 

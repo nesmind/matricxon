@@ -18,9 +18,9 @@ class ShowRequestHandler:
     def handle(self, request: ShowRequest) -> ShowResponse:
         installed = self._catalog.get(request.model)
         has_paired_mmproj = self._catalog.find_paired_mmproj(installed.tag) is not None
-        # See estimate_ram_gb's own docstring - only report the smaller quantized-native figure
-        # for an architecture that's actually wired to use it (QUANTIZED_NATIVE_WIRED_
-        # ARCHITECTURES), never just because the setting is on globally.
+        # See estimate_ram_gb: report the smaller quantized-native figure only for an architecture
+        # wired to use it (QUANTIZED_NATIVE_WIRED_ARCHITECTURES), never just because the setting is
+        # on globally.
         quantized_native_enabled = (
             settings.enable_quantized_native_compute
             and installed.architecture in QUANTIZED_NATIVE_WIRED_ARCHITECTURES

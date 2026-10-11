@@ -1,17 +1,14 @@
-"""Builds a tiny, complete, valid `starcoder2` GGUF file - mirrors `tiny_gguf_command_r.py`'s
-
-structure, but with real bias tensors on every projection (`attn_q`/`attn_k`/`attn_v`/
-`attn_output`/`ffn_up`/`ffn_down`, plus `attn_norm`/`ffn_norm`/`output_norm`) and no `ffn_gate`
-tensor at all - confirmed real: StarCoder2's MLP is plain (non-gated), unlike every other GQA/RoPE
-decoder GGUF this project has built a fixture for so far.
-"""
+"""Builds a tiny, complete, valid `starcoder2` GGUF, mirroring `tiny_gguf_command_r.py`, with biases
+on every projection (`attn_q`/`attn_k`/`attn_v`/`attn_output`/`ffn_up`/`ffn_down`, plus
+`attn_norm`/`ffn_norm`/`output_norm`) and no `ffn_gate`: StarCoder2's MLP is plain (non-gated),
+unlike every other GQA/RoPE decoder fixture here."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2

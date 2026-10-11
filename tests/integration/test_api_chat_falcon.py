@@ -1,7 +1,6 @@
-"""`/api/chat` against a tiny but real `falcon` GGUF (see tests/tiny_gguf_falcon.py). Real
-GGUFModelLoader/FalconArchitecture/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked - exercises
-the real fused bias-free MQA `attn_qkv` split and the real single biased parallel-residual norm.
-"""
+"""`/api/chat` against a tiny `falcon` GGUF (tests/tiny_gguf_falcon.py). Real
+GGUFModelLoader/FalconArchitecture/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked: the fused
+bias-free MQA `attn_qkv` split and the single biased parallel-residual norm."""
 
 import json
 

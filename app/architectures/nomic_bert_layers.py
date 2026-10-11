@@ -12,17 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 class NomicBertSelfAttention(nn.Module):
-    """Fused QKV projection - confirmed against the real
-    `nomic-embed-text-v1.5` GGUF: a single `attn_qkv.weight` tensor, not
-    separate `attn_q`/`attn_k`/`attn_v` ones. Split as `[q; k; v]`, each of
-    width `n_embd` (verified via the HF oracle cross-check, not assumed -
-    see scripts/oracle/validate_nomic_bert.py).
-
-    No bias anywhere (the real config confirms `qkv_proj_bias: false`), and
-    rotary position embeddings applied with the plain split-half
-    `rotate_half` (the config's `rotary_emb_interleaved: false` means no
-    row-permutation trick is needed here, unlike mistral3's GGUF weights).
-    """
+    """Fused QKV: the `nomic-embed-text-v1.5` GGUF has one `attn_qkv.weight`, split as `[q; k; v]`,
+    each `n_embd` wide (checked by tools/oracle/validate_nomic_bert.py). No bias (`qkv_proj_bias:
+    false`); rotary uses plain split-half `rotate_half` (`rotary_emb_interleaved: false`), so no row
+    permutation, unlike mistral3."""
 
     def __init__(
         self, n_embd: int, n_head: int, head_dim: int, dtype: torch.dtype = torch.float32
@@ -44,16 +37,15 @@ class NomicBertSelfAttention(nn.Module):
 
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
 
-        # Non-causal, no padding mask - see BertSelfAttention's note.
+        # Non-causal, no padding mask (see BertSelfAttention).
         out = F.scaled_dot_product_attention(q, k, v)
         out = out.transpose(1, 2).reshape(batch, seq_len, n_embd)
         return self.o_proj(out)
 
 
 class NomicBertEncoderLayer(nn.Module):
-    """Post-LN, same layer structure as classic BERT (`prenorm: false` in
-    the real config) but with the fused-QKV/RoPE attention and SwiGLU FFN
-    above instead of BERT's separate-QKV/GELU."""
+    """Post-LN, the layer structure of classic BERT (`prenorm: false`) but with the fused-QKV/RoPE
+    attention and SwiGLU FFN above instead of separate-QKV/GELU."""
 
     def __init__(
         self,

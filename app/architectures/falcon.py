@@ -17,36 +17,26 @@ logger = logging.getLogger(__name__)
 
 
 class FalconArchitecture(ModelArchitecture):
-    """TII Falcon (real `tiiuae/falcon-7b` shape, confirmed 2026-09-30 against a real downloaded
+    """TII Falcon (`tiiuae/falcon-7b` shape, checked against a real GGUF header): a
+    parallel-residual GQA/MQA decoder (formula: `FalconDecoderLayer`). Deltas from other
+    architectures here:
+    - Fused `attn_qkv` tensor (no separate q/k/v), MQA layout (`head_count_kv=1`), split at
+      materialize time into contiguous `[q rows | k rows | v rows]` (llama.cpp's converter
+      rearranges HF's per-head-interleaved layout into this; the file's `falcon.tensor_data_layout =
+      "jploski"` names it). No bias (`config.bias = False`); see `FalconMLP`.
+    - A biased `attn_norm` (the one shared parallel-residual norm), though `config.bias` is
+      unrelated: confirmed by an `attn_norm.bias` tensor.
+    - No `rope.freq_base`/`vocab_size` key on this file: falls back to HF's RoPE default (10000.0)
+      and `len(tokenizer.ggml.tokens)`, as `Phi2Architecture`/`LlamaArchitecture`.
 
-    GGUF header) - a parallel-residual GQA/MQA decoder (see `FalconDecoderLayer`'s own docstring
-    for the exact real formula/verification). Real, confirmed deltas from every other
-    architecture here:
-    - Real fused `attn_qkv` tensor (no separate `attn_q`/`attn_k`/`attn_v`) - real MQA layout
-      (`head_count_kv=1`), split at materialize time into contiguous
-      `[q rows | k rows | v rows]` blocks (llama.cpp's own real converter rearranges HF's native
-      per-head-interleaved layout into exactly this - confirmed via the real file's own
-      `falcon.tensor_data_layout = "jploski"` metadata key, which names that rearrangement). No
-      bias on it (`config.bias = False`) - see `FalconMLP`'s own docstring for the same real
-      finding on the MLP side.
-    - Real biased `attn_norm` (the ONE shared parallel-residual norm) despite `config.bias`
-      being unrelated to it - `nn.LayerNorm`'s own bias is gated by nothing but its own default,
-      confirmed via a real `attn_norm.bias` tensor.
-    - No `rope.freq_base`/`vocab_size` metadata key on this real file - falls back to HF's own
-      real RoPE default (10000.0) and to `len(tokenizer.ggml.tokens)` respectively, the same
-      fallback pattern `Phi2Architecture`/`LlamaArchitecture` already established.
-
-    Deliberately out of scope for this pass, not silently assumed to be the same shape: the
-    newer `new_decoder_architecture` variant (a real second `attn_norm_2` tensor, independent
-    norms per branch instead of one shared one) and the older `tiiuae/falcon-rw-*` variant
-    (`parallel_attn=False` - sequential, not parallel - and real ALiBi instead of RoPE, a
-    genuinely different positional-encoding mechanism not implemented anywhere in this repo) -
-    both real, confirmed-via-source variants, tracked as separate future work.
+    Out of scope (future work), not assumed the same shape: the newer `new_decoder_architecture`
+    variant (a second `attn_norm_2`, independent norms per branch) and the older
+    `tiiuae/falcon-rw-*` (`parallel_attn=False`, sequential, ALiBi instead of RoPE).
     """
 
     NAME = "falcon"
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
+    SUPPORTS_BATCHED_DECODE = True
 
     def __init__(
         self,
@@ -148,12 +138,13 @@ class FalconArchitecture(ModelArchitecture):
             layer.input_layernorm.weight.copy_(loader.load_tensor(prefix + "attn_norm.weight"))
             layer.input_layernorm.bias.copy_(loader.load_tensor(prefix + "attn_norm.bias"))
 
-            # attn_qkv is one real fused, bias-free (out_rows, n_embd) tensor - llama.cpp's own
-            # converter already rearranges it into contiguous [q rows | k rows | v rows] blocks
-            # (real `falcon.tensor_data_layout = "jploski"` metadata names this) rather than HF's
-            # native per-head-interleaved layout - a plain row-range split, no per-head reshuffle
-            # needed. Always today's exact path, same reasoning Phi2Architecture's own comment
-            # gives for not attempting to split a packed/quantized tensor's raw bytes this round.
+            # attn_qkv is one fused, bias-free (out_rows, n_embd) tensor; llama.cpp's converter
+            # already rearranges it into
+            # contiguous [q rows | k rows | v rows] (`falcon.tensor_data_layout = "jploski"`), not
+            # HF's per-head-interleaved
+            # layout: a row-range split with no per-head reshuffle. Always the plain path, as
+            # Phi2Architecture's comment
+            # gives for not splitting a packed/quantized tensor's raw bytes yet.
             qkv_weight = loader.load_tensor(prefix + "attn_qkv.weight")
             layer.self_attn.q_proj.weight.copy_(qkv_weight[:q_rows])
             layer.self_attn.k_proj.weight.copy_(qkv_weight[q_rows : q_rows + kv_rows])
@@ -186,7 +177,7 @@ class FalconArchitecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # no real vision-language Falcon checkpoint exists to fuse
+        del image_embeddings
         _, seq_len = input_ids.shape
         if position_ids is None:
             position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)

@@ -7,7 +7,7 @@ class ToolFunctionCall(BaseModel):
 
 
 class ToolCall(BaseModel):
-    # Set on calls matricxon parsed out of a reply; a client echoes it back as `tool_call_id`.
+    # Set on calls matricxon parsed from a reply; a client echoes it back as `tool_call_id`.
     id: str | None = None
     function: ToolFunctionCall
 
@@ -16,14 +16,13 @@ class ChatMessage(BaseModel):
     role: str
     content: str
     images: list[str] | None = None
-    # Only meaningful on an "assistant" message (a prior turn where the model
-    # itself called a tool) - Ollama/OpenAI's real wire shape, matched
-    # 1:1 so a real tool-calling client's conversation history round-trips.
+    # Only on an "assistant" message (a prior turn where the model called a tool): Ollama/OpenAI's
+    # wire shape, matched 1:1 so a tool-calling client's history round-trips.
     tool_calls: list[ToolCall] | None = None
     # Only on a "tool" message: which call it answers (some templates, e.g. Gemma 4, need these).
     tool_name: str | None = None
     tool_call_id: str | None = None
-    name: str | None = None  # OpenAI's spelling of tool_name; templates read either
+    name: str | None = None
 
     @model_validator(mode="after")
     def _mirror_tool_name(self) -> "ChatMessage":
@@ -45,19 +44,17 @@ class ChatOptions(BaseModel):
 class ChatRequest(BaseModel):
     model: str
     messages: list[ChatMessage]
-    # Opaque passthrough (OpenAI/Ollama's real JSON-schema tool-definition
-    # shape) - matricxon never validates a tool's schema itself, only
-    # renders it verbatim into `[AVAILABLE_TOOLS]<json>[/AVAILABLE_TOOLS]`
-    # (see Mistral3PromptBuilder), so there's no need to model it field by
-    # field.
+    # Opaque passthrough (Ollama/OpenAI's JSON-schema tool definition): matricxon never validates a
+    # schema, only renders it verbatim into `[AVAILABLE_TOOLS]<json>[/AVAILABLE_TOOLS]`
+    # (Mistral3PromptBuilder), so no field-by-field model.
     tools: list[dict] | None = None
     options: ChatOptions = ChatOptions()
     stream: bool = True
     keep_alive: int | None = None
-    # Caller-chosen id for this one reply (pAIring sends the message id). A later empty
-    # `keep_alive: 0` call carrying the same id cancels just that reply - the model stays loaded and
-    # other users' replies are untouched; the same call without an id is the explicit "unload this
-    # model now" (Ollama's convention).
+    # Caller-chosen id for this reply (pAIring sends the message id). A later empty `keep_alive: 0`
+    # call with the same id cancels just that reply: the model stays loaded and other users' replies
+    # are untouched; the same call without an id is the explicit "unload this model now" (Ollama's
+    # convention).
     request_id: str | None = None
     # Opaque label of the conversation this reply belongs to (pAIring sends its conversation id).
     # Cached prompts carry it so `DELETE /api/cache/persistence/chats/{tag}` can drop a deleted

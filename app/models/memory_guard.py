@@ -13,32 +13,24 @@ def ensure_enough_memory_to_load(
     memory_kind: str = "memory",
 ) -> None:
     """A hard circuit breaker in front of a model load, not just a dtype choice: `select_load_dtype`
-    already picks the smallest available footprint (bf16) when float32 wouldn't fit, but it never
-    refuses to load outright - so on a machine that's genuinely too tight (e.g. `max_loaded_models`
-    raised past the pAIring-matching default of 2 on a RAM-constrained box), it would previously
-    attempt the load anyway and risk the OS OOM-killing the whole process rather than this one
-    request failing cleanly. Called from `ModelManager._load` after eviction already happened in
-    `get_or_load`, so `available_memory_bytes()` here reflects whatever that eviction just freed.
-    Skipped (assume it fits) when `available_memory_bytes` can't answer - same policy
-    `select_load_dtype` already uses for the same reason.
+    picks the smallest footprint (bf16) when float32 wouldn't fit but never refuses, so on a tight
+    machine (e.g. `max_loaded_models` raised past pAIring's default 2) the load would risk an OS OOM
+    kill instead of one request failing cleanly. Called from `ModelManager._load` after eviction in
+    `get_or_load`, so `available_memory_bytes` reflects what eviction freed. Skipped (assume it
+    fits) when `available_memory_bytes` can't answer, as `select_load_dtype`.
 
-    `bf16_bytes` is `_load`'s own `exact_bf16_bytes(tensor_infos)` result, computed from the GGUF
-    file's real per-tensor shapes rather than approximated from its on-disk size (see
-    `exact_bf16_bytes`'s own docstring for why the old on-disk-based approximation ran higher than
-    reality for a real Q4_K_M file, refusing a load that had already been confirmed to work) - this
-    circuit breaker and `select_load_dtype` now always agree on the same number.
+    `bf16_bytes` is `_load`'s `exact_bf16_bytes(tensor_infos)` from the GGUF's real shapes (the old
+    on-disk-size approximation ran high for a Q4_K_M file and refused a load known to work), so this
+    breaker and `select_load_dtype` agree on one number.
 
-    `safety_margin` is the caller's own (possibly admin-configured, see
-    `Settings.memory_safety_margin`/`MATRICXON_MEMORY_SAFETY_MARGIN`) value, not a module constant,
-    so a machine that's consistently tighter or looser than the 1.5x default doesn't need a code
-    change to reflect that. `loaded_tags` names what's currently resident in the raised error only
-    - a known, accepted gap since on-the-fly dequant (see `ModelArchitecture._ensure_materialized`):
-    this checks memory at *load* time, but real memory isn't actually consumed until first
-    materialization, which can happen meaningfully later - a heuristic best-effort guard against the
-    common "this model is just too big for this machine" case, not a hard guarantee against every
-    possible interleaving of concurrent loads.
+    `safety_margin` is the caller's (possibly admin-configured,
+    `Settings.memory_safety_margin`/`MATRICXON_MEMORY_SAFETY_MARGIN`) value. `loaded_tags` only
+    names what's resident in the raised error. Known gap with on-the-fly dequant
+    (`ModelArchitecture._ensure_materialized`): this checks at load time but memory isn't used until
+    first materialization, so it is a best-effort guard against "too big for this machine", not a
+    guarantee against every interleaving of concurrent loads.
     """
-    # Resolved at call time (not a default argument) so tests can still patch the module's name.
+    # Resolved at call time (not a default argument) so tests can patch the module's name.
     # `available_fn`/`memory_kind` let a GPU load check free VRAM instead of system RAM.
     available = (available_fn or available_memory_bytes)()
     if available is None:

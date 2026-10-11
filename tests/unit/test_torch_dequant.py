@@ -1,6 +1,6 @@
 """The torch dequantizers (on-device, `gpu_weight_mode="packed"`) must equal the numpy
-`QuantStrategy` of the same type exactly, and a model loaded with packed weights must produce the
-same logits as the dequantized one. Packed mode also runs on the CPU device, so no GPU is needed."""
+`QuantStrategy` exactly, and a packed model must give the dequantized model's logits. Packed mode
+also runs on the CPU device, so no GPU is needed."""
 
 from pathlib import Path
 
@@ -76,7 +76,7 @@ class TestPackedModel:
         packed(torch.tensor([[1, 2]]))
         kinds = {type(m) for m in packed.modules()}
         assert DevicePackedLinear in kinds and DevicePackedEmbedding in kinds
-        assert packed._quantized_loader is None  # no mmap kept open: bytes live on the device
+        assert packed._quantized_loader is None
 
     def test_chunked_rows_match_a_single_pass(self, monkeypatch, gguf_path: Path) -> None:
         import app.architectures.device_packed as device_packed
@@ -84,5 +84,5 @@ class TestPackedModel:
         packed = _load(gguf_path, True)
         ids = torch.tensor([[1, 72, 105]])
         whole = packed(ids)
-        monkeypatch.setattr(device_packed, "_CHUNK_ELEMENTS", 64 * 8)  # forces many row slices
+        monkeypatch.setattr(device_packed, "_CHUNK_ELEMENTS", 64 * 8)
         assert torch.allclose(packed(ids), whole, atol=1e-5)

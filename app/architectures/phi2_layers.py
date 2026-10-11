@@ -15,27 +15,24 @@ logger = logging.getLogger(__name__)
 def _causal_mask(
     q_len: int, kv_len: int, cache_offset: int, device: torch.device | None = None
 ) -> torch.Tensor:
-    """Same causal rule as `Mistral3DecoderLayer`'s own `_causal_mask` (duplicated, not imported -
-    same precedent `Gemma4DecoderLayer`'s own `_causal_mask` already set: this project's per-
-    architecture layers modules keep their own copy of small helpers like this rather than
-    cross-importing another module's private name): query i (local index) may attend to key j iff
-    j <= i + cache_offset."""
+    """Same causal rule as `Mistral3DecoderLayer`'s `_causal_mask` (duplicated, not imported, as
+    `Gemma4DecoderLayer`'s: per-architecture
+    layers modules keep their own copy of small helpers instead of importing another module's
+    private name): query i (local index) attends to key j iff j <= i + cache_offset.
+    """
     q_idx = torch.arange(q_len, device=device).unsqueeze(1)
     kv_idx = torch.arange(kv_len, device=device).unsqueeze(0)
     return kv_idx <= (q_idx + cache_offset)
 
 
 class Phi2Attention(nn.Module):
-    """Plain (non-grouped) multi-head attention with real biases on every projection - a real,
-    confirmed-live Phi-2 GGUF (moondream2's text half) has `attention.head_count ==
-    attention.head_count_kv` always (no GQA) and a real bias tensor on `attn_qkv`/`attn_output`,
-    unlike every bias-free decoder matricxon has today.
+    """Plain multi-head attention with biases on every projection: a Phi-2 GGUF always has
+    `head_count == head_count_kv` (no GQA) and a bias on `attn_qkv`/`attn_output`, unlike
+    matricxon's other bias-free decoders.
 
-    `q_proj`/`k_proj`/`v_proj` are kept as three separate `nn.Linear`s even though the real GGUF
-    tensor they're loaded from (`attn_qkv`) is one fused matrix - see
-    `Phi2Architecture._materialize_weights`'s own comment for why, and for the one real,
-    unconfirmed-from-metadata-alone open question this shape is deliberately left able to absorb
-    (`unpermute_rope_rows` on just the q/k sub-blocks, if real-weight verification needs it).
+    `q_proj`/`k_proj`/`v_proj` stay three `nn.Linear`s though loaded from one fused `attn_qkv`; see
+    `Phi2Architecture._materialize_weights` for why, and for the open question this shape absorbs
+    (`unpermute_rope_rows` on just the q/k sub-blocks, if real weights need it).
     """
 
     def __init__(
@@ -74,8 +71,8 @@ class Phi2Attention(nn.Module):
         if kv_cache is not None:
             cache_offset = kv_cache.length
             k, v = kv_cache.update(layer_idx, k, v)
-            # See GroupedQueryAttention.forward's identical comment - a mixed per-layer dtype
-            # plan can leave this layer's own q/k/v dtype differing from the cache's fixed one.
+            # See GroupedQueryAttention.forward: a mixed per-layer dtype plan can leave this layer's
+            # q/k/v dtype different from the cache's fixed one.
             k = k.to(q.dtype)
             v = v.to(q.dtype)
         else:
@@ -93,10 +90,11 @@ class Phi2Attention(nn.Module):
 
 
 class Phi2MLP(nn.Module):
-    """`down_proj(gelu(up_proj(x)))` - a plain, non-gated GELU MLP with real biases on both
-    projections, confirmed via a real Phi-2 GGUF's `ffn_up`/`ffn_down` bias tensors. Its own class
-    rather than reusing `SwiGLUMLP` (different formula entirely: no gate, and always biased where
-    `SwiGLUMLP` defaults bias-free)."""
+    """`down_proj(gelu(up_proj(x)))`: a plain non-gated GELU MLP with biases on both projections (a
+    Phi-2 GGUF's `ffn_up`/`ffn_down`
+    bias tensors). Its own class, not `SwiGLUMLP` (different formula: no gate, always biased where
+    `SwiGLUMLP` defaults bias-free).
+    """
 
     def __init__(self, n_embd: int, ffn_len: int, dtype: torch.dtype = torch.float32) -> None:
         super().__init__()
@@ -108,11 +106,12 @@ class Phi2MLP(nn.Module):
 
 
 class Phi2DecoderLayer(nn.Module):
-    """Parallel residual: `x = x + attn(norm(x)) + mlp(norm(x))` - one shared `LayerNorm` call
-    feeds *both* branches from the same input, added back together. Real Phi-2 structure
-    (confirmed via a real moondream2 GGUF: only one `attn_norm` tensor per layer, no separate
-    post-attention norm) - structurally different from every other decoder layer here, which is
-    sequential (attention first, its own norm, then the MLP - see `Mistral3DecoderLayer`)."""
+    """Parallel residual: `x = x + attn(norm(x)) + mlp(norm(x))`: one shared `LayerNorm` call feeds
+    *both* branches from the same
+    input. Phi-2's structure (a moondream2 GGUF has one `attn_norm` per layer, no post-attention
+    norm), unlike every other decoder
+    layer here, which is sequential (attention, its norm, then MLP; `Mistral3DecoderLayer`).
+    """
 
     def __init__(
         self,

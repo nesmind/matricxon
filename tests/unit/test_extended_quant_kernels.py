@@ -1,11 +1,7 @@
-"""Cross-checks the M10-added K-quant kernels (Q2_K, Q3_K) and the plain
-
-Q8_K kernel against slow, scalar, line-by-line ports of ggml's reference
-dequantize_row_q{2,3,8}_K functions (from the public GGUF/ggml block-layout
-spec - not llama.cpp/ggml code reuse in the shipped kernels, just a test
-oracle written independently here), matching the pattern already established
-in test_kquant_kernels.py for Q4_K/Q5_K/Q6_K.
-"""
+"""Cross-checks the M10 K-quant kernels (Q2_K, Q3_K) and the plain Q8_K kernel against slow scalar
+line-by-line ports of ggml's dequantize_row_q{2,3,8}_K (from the public GGUF/ggml block-layout spec;
+a test oracle written independently, not reused shipped code), as test_kquant_kernels.py does for
+Q4_K/Q5_K/Q6_K."""
 
 import random
 import struct

@@ -1,12 +1,7 @@
-"""Dispatch table for real quantized-native GEMV compute (Phase 4 of the plan): maps a GGUF tensor's
-real `GGMLQuantizationType` to the fused kernel + real on-disk `type_size` that
-`quantized_gemv.py`/`quantized_gemv_legacy.py`/`quantized_gemv_extended.py`/
-`quantized_gemv_iq_ternary.py`/`quantized_gemv_iq2.py`/`quantized_gemv_iq3.py`/
-`quantized_gemv_iq1.py` implement for it - every real packed type `QuantStrategyRegistry`
-dequantizes except F32/F16/BF16 (never packed, nothing for a fused kernel to buy - see
-`QuantizedLinear`'s own docstring for why). One place to look up "does a real fused kernel exist
-for this type" rather than several separate imports per caller.
-"""
+"""Dispatch table for quantized-native GEMV: maps a tensor's `GGMLQuantizationType` to its fused
+kernel and on-disk `type_size` (from `quantized_gemv.py`, `_legacy`, `_extended`, `_iq_ternary`,
+`_iq2`, `_iq3`, `_iq1`): every packed type `QuantStrategyRegistry` dequantizes except F32/F16/BF16
+(never packed; see `QuantizedLinear`). One place to ask "is there a fused kernel for this type"."""
 
 from app.gguf.constants import GGMLQuantizationType
 from app.gguf.dequant.quantized_gemv import Q4_K_TYPE_SIZE, Q6_K_TYPE_SIZE, qgemv_q4_k, qgemv_q6_k
@@ -63,8 +58,8 @@ from app.gguf.dequant.quantized_gemv_legacy import (
     qgemv_q8_0,
 )
 
-# {ggml_type: (gemv_fn, real on-disk type_size)} - every real packed type a QuantStrategy exists
-# for except F32/F16/BF16 (never packed, nothing for a fused kernel to buy - see QuantizedLinear).
+# {ggml_type: (gemv_fn, on-disk type_size)} for every packed type with a QuantStrategy, except
+# F32/F16/BF16 (never packed; see QuantizedLinear).
 GEMV_KERNELS: dict[GGMLQuantizationType, tuple[callable, int]] = {
     GGMLQuantizationType.Q4_0: (qgemv_q4_0, Q4_0_TYPE_SIZE),
     GGMLQuantizationType.Q4_1: (qgemv_q4_1, Q4_1_TYPE_SIZE),

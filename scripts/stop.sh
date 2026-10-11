@@ -2,7 +2,7 @@
 # Stops a matricxon instance started via scripts/start.sh.
 set -euo pipefail
 
-# Colored like uvicorn's own "INFO:" lines (plain text when not a terminal).
+# Colored like uvicorn's "INFO:" lines (plain when not a terminal).
 if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; N=$'\033[0m'; else G=""; R=""; N=""; fi
 info() { printf '%sINFO:%s %s\n' "$G" "$N" "$*"; }
 err() { printf '%sERROR:%s %s\n' "$R" "$N" "$*"; }

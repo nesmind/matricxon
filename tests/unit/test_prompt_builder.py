@@ -1,9 +1,5 @@
-"""Mistral3PromptBuilder against the real `mistralai/Ministral-3-3B-Instruct-2512`
-
-chat_template.jinja's core structure (fetched from the real HF repo, not
-assumed - see ROADMAP.md's M10 tool-calling entry): system/user/assistant
-turns, plus [AVAILABLE_TOOLS]/[TOOL_CALLS]/[ARGS]/[TOOL_RESULTS].
-"""
+"""Mistral3PromptBuilder against the `mistralai/Ministral-3-3B-Instruct-2512` chat_template.jinja:
+system/user/assistant turns plus [AVAILABLE_TOOLS]/[TOOL_CALLS]/[ARGS]/[TOOL_RESULTS]."""
 
 import json
 
@@ -177,8 +173,7 @@ class TestToolCalling:
 
 
 class TestLegacyMistralPromptBuilder:
-    """No [SYSTEM_PROMPT] tag - see the class's own docstring for why
-    (Hebrew-Mistral-7B-Q5_K_M, 2026-09-27)."""
+    """No [SYSTEM_PROMPT] tag (see the class docstring)."""
 
     def test_system_is_folded_into_the_next_user_turn_not_tagged(self) -> None:
         messages = [
@@ -244,9 +239,7 @@ class TestLegacyMistralPromptBuilder:
 
 
 class TestVicunaPromptBuilder:
-    """FastChat's vicuna_v1 conv_template - see the class's own docstring for why this exists
-    (llava-v1.6-vicuna-7b, 2026-09-27: a real, empty, immediate-EOS reply under
-    LegacyMistralPromptBuilder's wrong Mistral-shaped guess)."""
+    """FastChat's vicuna_v1 template (see the class docstring)."""
 
     def test_uses_the_default_system_preamble_when_none_is_given(self) -> None:
         messages = [ChatMessage(role="user", content="hi")]
@@ -270,10 +263,8 @@ class TestVicunaPromptBuilder:
         assert prompt == "Be terse.\n\nUSER: hi\n\nASSISTANT:"
 
     def test_an_explicit_empty_system_message_is_honored(self) -> None:
-        """A caller that sends a system message with empty content (see pAIring's
-        app.services.chat_service, which always sends one) means "genuinely no preamble" -
-        distinct from sending no system message at all, which still falls back to
-        _DEFAULT_SYSTEM (see test_uses_the_default_system_preamble_when_none_is_given)."""
+        """An empty system message (as pAIring's chat_service always sends) means "no preamble"; no
+        system message at all still gets _DEFAULT_SYSTEM."""
         messages = [
             ChatMessage(role="system", content=""),
             ChatMessage(role="user", content="hi"),

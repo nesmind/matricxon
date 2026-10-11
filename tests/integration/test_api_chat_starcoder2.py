@@ -1,8 +1,7 @@
-"""`/api/chat` against a tiny but real `starcoder2` GGUF (see tests/tiny_gguf_starcoder2.py). Real
-GGUFModelLoader/Starcoder2Architecture/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked -
-exercises the real biased q/k/v/o projections, the real biased plain (non-gated) tanh-GELU MLP,
-biased LayerNorm, and the real "no unpermute_rope_rows needed" finding.
-"""
+"""`/api/chat` against a tiny `starcoder2` GGUF (tests/tiny_gguf_starcoder2.py). Real
+GGUFModelLoader/Starcoder2Architecture/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked: biased
+q/k/v/o, the biased plain (non-gated) tanh-GELU MLP, biased LayerNorm and the "no
+unpermute_rope_rows needed" finding."""
 
 import json
 

@@ -7,23 +7,25 @@ from torch import nn
 from app.gguf.dequant.torch_dequant import TorchDequantizer
 
 # Rows are dequantized in slices of at most this many elements, so a huge tensor (a 248k-row
-# lm_head) never needs its whole bf16 form in VRAM at once - the packed bytes plus one slice.
+# lm_head) never needs its whole bf16 form in VRAM: the packed bytes plus one slice.
 _CHUNK_ELEMENTS = 64 << 20
 
 
 def upload_packed(raw: memoryview, n_rows: int, device: torch.device) -> torch.Tensor:
     """`(n_rows, row_bytes)` uint8 copy of packed bytes on `device` (never aliases the mmap)."""
-    with warnings.catch_warnings():  # the mmap view is read-only; we copy it right away
+    with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         flat = torch.frombuffer(raw, dtype=torch.uint8)
     return flat.reshape(n_rows, -1).to(device, copy=True)
 
 
 class DevicePackedLinear(nn.Module):
-    """`nn.Linear` whose weight stays quantized in device memory (`gpu_weight_mode="packed"`) and
-    is dequantized with torch ops per call, in row slices. ~4x less VRAM than a bf16 weight for a
-    4-bit file, at the cost of dequantizing on every forward - slower than a fused kernel, which
-    this deliberately isn't. Row slices are independent (every row is whole blocks).
+    """`nn.Linear` whose weight stays quantized in device memory (`gpu_weight_mode="packed"`) and is
+    dequantized with
+    torch ops per call, in row slices: ~4x less VRAM than bf16 for a 4-bit file, at the cost of
+    dequantizing every
+    forward (slower than a fused kernel, which this isn't). Row slices are independent (every row is
+    whole blocks).
     """
 
     def __init__(
@@ -63,7 +65,7 @@ class DevicePackedLinear(nn.Module):
 
 class DevicePackedEmbedding(nn.Module):
     """Packed token-embedding table on the device: a lookup dequantizes only the rows it needs.
-    `as_linear()` is the tied lm_head over the same bytes (no second copy)."""
+    `as_linear` is the tied lm_head over the same bytes (no second copy)."""
 
     def __init__(
         self, packed: torch.Tensor, embedding_dim: int, ggml_type: int, dtype: torch.dtype

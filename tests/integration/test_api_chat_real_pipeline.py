@@ -1,8 +1,7 @@
-"""M6: /api/chat against a tiny but real mistral3 GGUF (see tiny_gguf.py) -
-the real GGUFModelLoader/architecture/tokenizer/ChatEngine/NDJSON stack, not
-mocked. Fast and memory-safe (a few KB of weights), unlike a real-model test
-would be - see scripts/manual_chat_check.py for the full ministral-3:3b proof.
-"""
+"""M6: /api/chat against a tiny mistral3 GGUF (tiny_gguf.py): the real
+GGUFModelLoader/architecture/tokenizer/ChatEngine/NDJSON stack, not mocked. Fast and memory-safe (a
+few KB of weights), unlike a real-model test; full ministral-3:3b proof:
+tools/manual_chat_check.py."""
 
 import json
 
@@ -144,7 +143,7 @@ class TestChatCancelDoesNotUnload:
         )
 
         assert response.status_code == 200
-        assert client.get("/api/ps").json()["models"]  # still resident
+        assert client.get("/api/ps").json()["models"]
 
     def test_a_cancel_that_arrives_first_makes_that_reply_a_no_op(
         self, client: TestClient, tiny_mistral3_model: InstalledModel
@@ -170,4 +169,4 @@ class TestChatCancelDoesNotUnload:
         )
 
         assert response.status_code == 200
-        assert response.text.strip() in ("", "{}")  # nothing was generated
+        assert response.text.strip() in ("", "{}")

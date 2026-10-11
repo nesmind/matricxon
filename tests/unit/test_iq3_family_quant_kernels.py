@@ -1,8 +1,6 @@
-"""Cross-checks IQ3_XXS/IQ3_S (app/gguf/dequant/iq3_family.py) against slow, scalar, line-by-line
-ports of ggml's real reference dequantize_row_iq3_xxs/iq3_s functions (ggml/src/ggml-quants.c,
-llama.cpp `master`) - not code reuse from the shipped strategies, just a test oracle written
-independently here, matching test_extended_quant_kernels.py's established methodology.
-"""
+"""Cross-checks IQ3_XXS/IQ3_S (app/gguf/dequant/iq3_family.py) against slow scalar line-by-line
+ports of ggml's dequantize_row_iq3_xxs/iq3_s (ggml/src/ggml-quants.c, llama.cpp `master`): an oracle
+written independently, as test_extended_quant_kernels.py."""
 
 import random
 import struct
@@ -112,8 +110,8 @@ class TestByteLength:
 class TestGridTables:
     def test_iq3xxs_grid_has_expected_shape(self) -> None:
         assert _GRID_XXS.shape == (256, 4)
-        assert list(_GRID_XXS[0]) == [4, 4, 4, 4]  # 0x04040404
+        assert list(_GRID_XXS[0]) == [4, 4, 4, 4]
 
     def test_iq3s_grid_has_expected_shape_and_known_entries(self) -> None:
         assert _GRID_S.shape == (512, 4)
-        assert list(_GRID_S[0]) == [1, 1, 1, 1]  # 0x01010101
+        assert list(_GRID_S[0]) == [1, 1, 1, 1]

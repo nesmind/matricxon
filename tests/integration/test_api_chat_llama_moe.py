@@ -1,15 +1,10 @@
-"""`/api/chat` against a tiny but real Mixtral-style `llama` GGUF (see
-
-tests/tiny_gguf_llama_moe.py) - the sparse-MoE equivalent of test_api_chat_llama.py. Real
-GGUFModelLoader/LlamaArchitecture/GraniteMoeFFN/SentencePieceTokenizer/ChatEngine/NDJSON stack,
-not mocked - confirms `LlamaArchitecture`'s real Mixtral detection (`llama.expert_count`
-present, still `general.architecture == "llama"`) actually dispatches to the MoE FFN path
-end-to-end. The router's own top-k-then-softmax/3D-expert-tensor math is already independently
-unit-tested in tests/unit/test_granitemoe_ffn.py (same real `GraniteMoeFFN` class, reused here -
-see app/architectures/llama_moe.py's own module docstring for the real-source proof that its
-router math is mathematically identical to Mixtral's own real formula, not just structurally
-similar).
-"""
+"""`/api/chat` against a tiny Mixtral-style `llama` GGUF (tests/tiny_gguf_llama_moe.py), the
+sparse-MoE equivalent of test_api_chat_llama.py. Real
+GGUFModelLoader/LlamaArchitecture/GraniteMoeFFN/SentencePieceTokenizer/ChatEngine/NDJSON stack, not
+mocked: confirms `LlamaArchitecture`'s Mixtral detection (`llama.expert_count` present,
+`general.architecture` still `"llama"`) dispatches to the MoE FFN end to end. The router math is
+unit-tested in tests/unit/test_granitemoe_ffn.py (same `GraniteMoeFFN`;
+app/architectures/llama_moe.py proves it equals Mixtral's formula)."""
 
 import json
 

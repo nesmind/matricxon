@@ -7,20 +7,16 @@ from app.models.manager import ModelManager
 from app.runtime.embedding_engine import EmbeddingEngine
 from app.schemas.embed import EmbedRequest, EmbedResponse
 from app.server.errors import PromptTooLongError
+from app.server.node_kind import require_compute
 
 router = APIRouter()
 
 
 class EmbedRequestHandler:
-    """Handles `POST /api/embed` (plural) - Ollama's newer batched embedding
-
-    endpoint. `EmbeddingEngine` is v1 single-prompt-only (no padding/
-    attention-mask support - see its own docstring), so each input string
-    gets its own forward pass rather than one real padded batch; correct
-    output, just not batched compute. Worth revisiting if this endpoint ever
-    sees real traffic - no caller needs it today (pAIring only uses the
-    singular `/api/embeddings`).
-    """
+    """Handles `POST /api/embed` (plural), Ollama's newer batched embedding endpoint.
+    `EmbeddingEngine` is v1 single-prompt-only (no padding/attention-mask support), so each input
+    gets its own forward pass: correct, not batched. Revisit if it sees traffic; pAIring uses only
+    the singular `/api/embeddings`."""
 
     def __init__(self, model_manager: ModelManager) -> None:
         self._model_manager = model_manager
@@ -41,7 +37,7 @@ class EmbedRequestHandler:
         return EmbedResponse(embeddings=embeddings)
 
 
-@router.post("/api/embed", response_model=EmbedResponse)
+@router.post("/api/embed", dependencies=[Depends(require_compute)], response_model=EmbedResponse)
 async def post_embed(
     request: EmbedRequest, model_manager: ModelManager = Depends(get_model_manager)
 ) -> EmbedResponse:

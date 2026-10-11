@@ -1,6 +1,6 @@
-"""Replies running at the same time on one loaded model (a real tiny model, the real scheduler and
-batch decoder) must come out exactly as if each had run alone - and their decode steps really are
-batched. Both a plain KV-cache model and the hybrid Qwen 3.5 (recurrent state per sequence)."""
+"""Replies running together on one loaded model (a tiny model, the real scheduler and batch decoder)
+must come out exactly as if each ran alone, and their decode steps really are batched. Both a plain
+KV-cache model and the hybrid Qwen 3.5 (recurrent state per sequence)."""
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -70,7 +70,7 @@ def _load(builder: Callable[[Path], Path], cls, tmp_path: Path) -> Iterator:
     [
         (build_tiny_llama_gguf, LlamaArchitecture, 512),
         (build_tiny_qwen35_gguf, Qwen35Architecture, 512),
-        (build_tiny_qwen35_gguf, Qwen35Architecture, 3),  # chunked prefill interleaves too
+        (build_tiny_qwen35_gguf, Qwen35Architecture, 3),
     ],
     ids=["llama", "qwen35", "qwen35-chunked"],
 )
@@ -83,7 +83,7 @@ async def test_concurrent_replies_equal_running_alone_and_decode_in_batches(
     together, batch_sizes = await _concurrently(model, PROMPTS, chunk)
 
     assert together == alone
-    assert max(batch_sizes) >= 2  # decode steps really were batched, not run one by one
+    assert max(batch_sizes) >= 2
     model.close()
 
 

@@ -1,10 +1,6 @@
-"""QuantizedEmbedding (app/architectures/quantized_embedding.py) - the shared "keep this table
-packed, dequantize only the rows a forward pass actually looks up" module every tied-embedding
-architecture (llama, mistral3, now gemma4) composes. Exercised directly (no GGUF file, no full
-architecture) with a small synthetic Q4_K table, both backends (see the module-scoped `numba`/
-`native` fixtures) cross-checked against each other and against `as_linear()`'s own tied output
-projection.
-"""
+"""QuantizedEmbedding (app/architectures/quantized_embedding.py): keeps the table packed and
+dequantizes only looked-up rows. Tested directly on a small synthetic Q4_K table, on both backends,
+against each other and `as_linear`."""
 
 import random
 import shutil
@@ -21,7 +17,7 @@ from app.native.gemm import NativeGemm
 from app.native.library import NativeKernelLibrary
 
 NUM_EMBEDDINGS = 6
-EMBEDDING_DIM = 256  # one Q4_K block per row
+EMBEDDING_DIM = 256
 
 
 def _q4_k_table(n_rows: int, seed: int) -> bytes:
@@ -85,9 +81,7 @@ def test_native_backend_matches_the_python_fallback(
     lib = NativeKernelLibrary(build_dir=tmp_path_factory.mktemp("native_build")).load()
     monkeypatch.setattr(NativeGemm, "_active", NativeGemm(lib, n_threads=2))
     packed = QuantizedEmbedding(NUM_EMBEDDINGS, EMBEDDING_DIM, T.Q4_K, memoryview(raw))
-    assert (
-        packed._native is not None
-    )  # actually exercising the native path, not silently falling back
+    assert packed._native is not None
 
     result = packed(input_ids)
 

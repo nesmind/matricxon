@@ -1,11 +1,9 @@
-"""GEMV kernels for IQ4_NL, IQ4_XS, TQ1_0, TQ2_0 - same real, honest performance profile as
-`quantized_gemv_extended.py` (register-only accumulators, no heap scratch buffer). Correctness
-cross-checked against each type's own already-oracle-validated `QuantStrategy.dequantize()` in
-`iq_ternary.py`.
+"""GEMV kernels for IQ4_NL, IQ4_XS, TQ1_0, TQ2_0, with the performance profile of
+`quantized_gemv_extended.py` (register-only accumulators, no heap scratch). Correctness
+cross-checked against each type's oracle-validated `QuantStrategy.dequantize` in `iq_ternary.py`.
 
-`_KVALUES_IQ4NL`/`_POW3` are passed into the njit kernels as explicit arguments rather than
-captured as module globals - keeps the kernel's inputs fully explicit, same reasoning
-`_get_scale_min_k4`-style small helpers already follow in this package.
+`_KVALUES_IQ4NL`/`_POW3` are passed into the njit kernels as arguments, not module globals, keeping
+inputs explicit (as the `_get_scale_min_k4`-style helpers here).
 """
 
 import numba
@@ -19,11 +17,11 @@ _KVALUES_IQ4NL = np.array(
 _POW3 = np.array([1, 3, 9, 27, 81, 243], dtype=np.uint8)
 
 IQ4_NL_BLOCK = 32
-IQ4_NL_TYPE_SIZE = 2 + 16  # 18
+IQ4_NL_TYPE_SIZE = 2 + 16
 _QK_K = 256
-IQ4_XS_TYPE_SIZE = 2 + 2 + 4 + 128  # 136
-TQ1_0_TYPE_SIZE = 48 + 4 + 2  # 54
-TQ2_0_TYPE_SIZE = 64 + 2  # 66
+IQ4_XS_TYPE_SIZE = 2 + 2 + 4 + 128
+TQ1_0_TYPE_SIZE = 48 + 4 + 2
+TQ2_0_TYPE_SIZE = 64 + 2
 
 
 def _require_divisible(in_features: int, block_size: int) -> int:
@@ -109,9 +107,9 @@ def qgemv_iq4_xs(
 
 @numba.njit(inline="always")
 def _tq_digit(byte, power):
-    """byte, power: uint8 scalars. Mirrors ggml's `((uint16_t)(byte*p) * 3) >> 8`
-    base-3-digit-extraction trick - the uint8 multiply wraps mod 256 exactly like a real C
-    `uint8_t`. Returns the digit in {0, 1, 2} as float32."""
+    """byte, power: uint8 scalars. Mirrors ggml's `((uint16_t)(byte*p) * 3) >> 8` base-3-digit
+    trick; the uint8 multiply wraps mod 256 like a C `uint8_t`. Returns the digit in {0, 1, 2} as
+    float32."""
     q = np.uint8(byte * power)
     return np.float32((np.uint16(q) * np.uint16(3)) >> 8)
 

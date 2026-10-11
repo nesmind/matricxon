@@ -25,16 +25,12 @@ from tests.tiny_gguf_qwen3 import build_tiny_qwen3_gguf
 from tests.tiny_gguf_qwen35 import build_tiny_qwen35_gguf
 from tests.tiny_gguf_starcoder2 import build_tiny_starcoder2_gguf
 
-# The real, already-downloaded ministral-3:3b GGUF from pAIring's Ollama blob
-# store - see tests/fixtures/README.md. Symlinked (never copied) into a test
-# models dir by `real_ministral_model` below, so real-fixture tests don't
-# need a ~2GB-per-run copy and can't ever touch this shared file's bytes.
-# Updated 2026-09-19: pAIring re-pulled this model under a new content hash
-# (same tag/architecture/quant scheme, confirmed via a real GGUF header read
-# before updating this path, not assumed) - the previous hash
-# (sha256-910e4bf4...) referenced in ROADMAP.md's M2/M3/etc. entries is a
-# historical record of what was true at the time, not stale documentation to
-# "fix"; only this current-state fixture path needed updating.
+# The already-downloaded ministral-3:3b GGUF from pAIring's Ollama blob store
+# (tests/fixtures/README.md), symlinked (never copied) into a test models dir by
+# `real_ministral_model`, so tests need no ~2GB-per-run copy and can't touch the file's bytes.
+# Updated: pAIring re-pulled it under a new content hash (same tag/architecture/quant
+# scheme, confirmed by a GGUF header read). The earlier hash (sha256-910e4bf4...) in ROADMAP.md's
+# M2/M3 entries is history, not stale documentation; only this fixture path needed updating.
 REAL_MINISTRAL_BLOB = Path(
     "/home/home/Code/Py/AI/pAIring/models/blobs/"
     "sha256-9ed150d4367e68df0ac8e1540f6ddc65b42d0ee26378329d1ecbca60f93fc5f8"
@@ -51,18 +47,16 @@ class FakeInstalledModelFactory:
         architecture: str = "mistral3",
         capabilities: list[str] | None = None,
     ) -> InstalledModel:
-        # Keyed off the tag (not a fixed "test-repo" constant) so multiple
-        # create() calls in one test - e.g. copy/create-router tests, or a
-        # future max_loaded_models>2 eviction test - get distinct files
-        # instead of silently overwriting each other's blob + sidecar.
+        # Keyed off the tag (not a fixed "test-repo" constant) so several create calls in one test
+        # (copy/create-router tests, a future max_loaded_models>2 eviction test) get distinct files
+        # instead of overwriting each other's blob + sidecar.
         repo_dir = self._models_dir / "hf.co" / "test-org" / tag.replace("/", "_").replace(":", "_")
         repo_dir.mkdir(parents=True, exist_ok=True)
         gguf_path = repo_dir / "test-model.gguf"
-        # A real (if tiny) GGUF, not an empty stub - /api/show reads real tensor shapes to compute
-        # `estimated_ram_gb` (see app/routers/show_router.py), which needs an actually-parseable
-        # file. Always mistral3-shaped regardless of the real `architecture` string passed in -
-        # every existing caller already only ever uses this factory's own mistral3 default, and
-        # nothing here cross-checks the file's real architecture against the sidecar's stated one.
+        # A real (if tiny) GGUF, not an empty stub: /api/show reads tensor shapes to compute
+        # `estimated_ram_gb` (app/routers/show_router.py), which needs a parseable file. Always
+        # mistral3-shaped whatever `architecture` is passed: callers only use this factory's
+        # mistral3 default, and nothing cross-checks the file's architecture against the sidecar's.
         build_tiny_mistral3_gguf(gguf_path)
 
         installed = InstalledModel(
@@ -99,22 +93,18 @@ def model_manager(models_dir: Path) -> ModelManager:
 def client(models_dir: Path, model_manager: ModelManager) -> TestClient:
     app = MatricxonApp().build()
     app.dependency_overrides[get_model_catalog] = lambda: ModelCatalog(models_dir)
-    # get_model_manager() is @lru_cache'd and would otherwise build its own
-    # ModelManager around the real (un-overridden) get_model_catalog() - it
-    # calls that directly, not through FastAPI's DI, so overriding the
-    # catalog above wouldn't propagate into it without this too.
+    # get_model_manager is @lru_cache'd and would build its own ModelManager around the real
+    # (un-overridden) get_model_catalog, which it calls directly, not through FastAPI's DI;
+    # overriding the catalog above wouldn't reach it without this too.
     app.dependency_overrides[get_model_manager] = lambda: model_manager
     return TestClient(app)
 
 
 @pytest.fixture
 def real_ministral_model(models_dir: Path) -> InstalledModel:
-    """A real (symlinked, not copied) GGUF fixture with a hand-written but
-    metadata-accurate sidecar - M5's "hand-placed real fixture files +
-    sidecars (no pull yet)" scope, as opposed to the synthetic 0-byte files
-    `FakeInstalledModelFactory` uses above. Skips on a machine without
-    pAIring's local blob store (e.g. CI) rather than failing outright.
-    """
+    """A real (symlinked, not copied) GGUF fixture with a hand-written but metadata-accurate
+    sidecar: M5's "hand-placed real fixture files + sidecars (no pull yet)", versus the synthetic
+    0-byte files `FakeInstalledModelFactory` uses. Skips without pAIring's blob store (e.g. CI)."""
     if not REAL_MINISTRAL_BLOB.exists():
         pytest.skip(f"real fixture not present on this machine: {REAL_MINISTRAL_BLOB}")
 
@@ -140,12 +130,10 @@ def real_ministral_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_mistral3_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `mistral3` GGUF (see tiny_gguf.py) -
-    unlike `FakeInstalledModelFactory`'s 0-byte files, this actually loads
-    through the real GGUFModelLoader/architecture/tokenizer pipeline, so
-    `/api/chat` tests can exercise the full stack fast and memory-safely
-    without needing gigabytes of real weights.
-    """
+    """A tiny, complete, valid `mistral3` GGUF (tiny_gguf.py) that, unlike
+    `FakeInstalledModelFactory`'s 0-byte files, loads through the real
+    GGUFModelLoader/architecture/tokenizer pipeline, so `/api/chat` tests run the full stack fast
+    and memory-safely."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-mistral3"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -168,11 +156,9 @@ def tiny_mistral3_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_bert_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `bert` GGUF (see tiny_gguf_bert.py) -
-    the embeddings-side equivalent of `tiny_mistral3_model`, for fast/safe
-    `/api/embeddings` tests against the real BertArchitecture/
-    WordPieceTokenizer/EmbeddingEngine pipeline.
-    """
+    """A tiny valid `bert` GGUF (tiny_gguf_bert.py): the embeddings-side equivalent of
+    `tiny_mistral3_model`, for fast `/api/embeddings` tests against
+    BertArchitecture/WordPieceTokenizer/EmbeddingEngine."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-bert"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -195,14 +181,10 @@ def tiny_bert_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_gemma4_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `gemma4` GGUF (see tiny_gguf_gemma4.py)
-
-    - exercises both local/sliding and global layer types, different
-    head_dim per type, the `rope_freqs.weight` correction, and final-logit
-    softcapping, all in one tiny model. Proves the wiring, not numerical
-    correctness against the real (impractically large for this hardware,
-    see ROADMAP.md) `google/gemma-4-12b-it` model.
-    """
+    """A tiny valid `gemma4` GGUF (tiny_gguf_gemma4.py) exercising local/sliding and global layer
+    types, different head_dim per type, the `rope_freqs.weight` correction and final-logit
+    softcapping together. Proves the wiring, not numerical correctness against the real
+    `google/gemma-4-12b-it` (too large for this hardware)."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-gemma4"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -225,10 +207,9 @@ def tiny_gemma4_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_phi2_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `phi2` GGUF (see tiny_gguf_phi2.py) - exercises the real
-    fused-qkv split and partial-rotary handling (both real Phi-2 novelties, see
-    app/architectures/phi2.py's own docstring), for fast/safe `/api/chat` tests against the real
-    Phi2Architecture/GGUFTokenizer pipeline."""
+    """A tiny valid `phi2` GGUF (tiny_gguf_phi2.py) exercising the fused-qkv split and
+    partial-rotary handling (Phi-2's novelties; app/architectures/phi2.py), for fast `/api/chat`
+    tests against Phi2Architecture/GGUFTokenizer."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-phi2"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -251,12 +232,9 @@ def tiny_phi2_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_llama_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `llama` GGUF (see tiny_gguf_llama.py)
-
-    - M10's plain-architecture equivalent of `tiny_mistral3_model`, for
-    fast/safe `/api/chat` tests against the real
-    LlamaArchitecture/SentencePieceTokenizer pipeline.
-    """
+    """A tiny valid `llama` GGUF (tiny_gguf_llama.py): M10's plain-architecture equivalent of
+    `tiny_mistral3_model`, for `/api/chat` tests against
+    LlamaArchitecture/SentencePieceTokenizer."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-llama"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -279,10 +257,9 @@ def tiny_llama_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_granite_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `granite` GGUF (see tests/tiny_gguf_granite.py) - the
-    dense-decoder equivalent of `tiny_llama_model`, for fast/safe `/api/chat` tests against the
-    real `GraniteArchitecture`/`GGUFTokenizer` pipeline, including its four real
-    "Power"-scaling multipliers."""
+    """A tiny valid `granite` GGUF (tests/tiny_gguf_granite.py): the dense-decoder equivalent of
+    `tiny_llama_model`, for `/api/chat` tests against GraniteArchitecture/GGUFTokenizer, including
+    its four "Power"-scaling multipliers."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-granite"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -305,10 +282,9 @@ def tiny_granite_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_granite_tied_embeddings_model(models_dir: Path) -> InstalledModel:
-    """Same as `tiny_granite_model`, but with no separate `output.weight` tensor - the real shape
-    of real Granite checkpoints (`granite-3.0-2b-instruct`/`granite-3.0-1b-a400m-instruct` both
-    ship `tie_word_embeddings: true`), so this is expected to be the *common* real case, not the
-    edge case - see `GraniteArchitecture`'s own docstring."""
+    """`tiny_granite_model` with no separate `output.weight`: the shape of real Granite checkpoints
+    (`granite-3.0-2b-instruct`/`granite-3.0-1b-a400m-instruct` ship `tie_word_embeddings: true`),
+    the *common* case (GraniteArchitecture)."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-granite-tied"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -331,9 +307,9 @@ def tiny_granite_tied_embeddings_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_granitemoe_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `granitemoe` GGUF (see tests/tiny_gguf_granitemoe.py) -
-    the sparse-MoE equivalent of `tiny_granite_model`, for fast/safe `/api/chat` tests against
-    the real `GraniteMoeArchitecture`/`GraniteMoeFFN`/`GGUFTokenizer` pipeline."""
+    """A tiny valid `granitemoe` GGUF (tests/tiny_gguf_granitemoe.py): the sparse-MoE equivalent of
+    `tiny_granite_model`, for `/api/chat` tests against
+    GraniteMoeArchitecture/GraniteMoeFFN/GGUFTokenizer."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-granitemoe"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -356,9 +332,9 @@ def tiny_granitemoe_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_granitemoe_tied_embeddings_model(models_dir: Path) -> InstalledModel:
-    """Same as `tiny_granitemoe_model`, but with no separate `output.weight` tensor - real
-    GraniteMoE checkpoints (`granite-3.0-1b-a400m-instruct`/`granite-3.0-3b-a800m-instruct`) both
-    ship `tie_word_embeddings: true`, same as dense Granite."""
+    """`tiny_granitemoe_model` with no separate `output.weight`: real GraniteMoE checkpoints
+    (`granite-3.0-1b-a400m-instruct`/`granite-3.0-3b-a800m-instruct`) ship `tie_word_embeddings:
+    true`, like dense Granite."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-granitemoe-tied"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -381,10 +357,9 @@ def tiny_granitemoe_tied_embeddings_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_nemotron_h_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `nemotron_h` GGUF (see tests/tiny_gguf_nemotron_h.py) -
-    exercises the real hybrid Mamba-2/attention/MLP per-layer dispatch and
-    `NemotronHHybridCache` end to end, for fast/safe `/api/chat` tests against the real
-    `NemotronHArchitecture`/`GGUFTokenizer` pipeline."""
+    """A tiny valid `nemotron_h` GGUF (tests/tiny_gguf_nemotron_h.py) exercising the hybrid
+    Mamba-2/attention/MLP per-layer dispatch and `NemotronHHybridCache` end to end, for `/api/chat`
+    tests against NemotronHArchitecture/GGUFTokenizer."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-nemotron-h"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -407,7 +382,7 @@ def tiny_nemotron_h_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_nemotron_h_tied_embeddings_model(models_dir: Path) -> InstalledModel:
-    """Same as `tiny_nemotron_h_model`, but with no separate `output.weight` tensor."""
+    """`tiny_nemotron_h_model` with no separate `output.weight`."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-nemotron-h-tied"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -430,9 +405,9 @@ def tiny_nemotron_h_tied_embeddings_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_qwen2_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `qwen2` GGUF (see tests/tiny_gguf_qwen2.py) - exercises
-    real q/k/v bias plus the `unpermute_rope_rows`-on-bias handling, for fast/safe `/api/chat`
-    tests against the real `Qwen2Architecture`/`GGUFTokenizer` pipeline."""
+    """A tiny valid `qwen2` GGUF (tests/tiny_gguf_qwen2.py) exercising q/k/v bias plus the
+    `unpermute_rope_rows`-on-bias handling, for `/api/chat` tests against
+    Qwen2Architecture/GGUFTokenizer."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-qwen2"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -455,8 +430,8 @@ def tiny_qwen2_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_qwen2_tied_embeddings_model(models_dir: Path) -> InstalledModel:
-    """Same as `tiny_qwen2_model`, but with no separate `output.weight` tensor - real
-    Qwen2.5 checkpoints up to 3B tie embeddings (stop tying at 7B+)."""
+    """`tiny_qwen2_model` with no separate `output.weight`: Qwen2.5 checkpoints up to 3B tie
+    embeddings (7B+ don't)."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-qwen2-tied"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -479,10 +454,9 @@ def tiny_qwen2_tied_embeddings_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_qwen3_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `qwen3` GGUF (see tests/tiny_gguf_qwen3.py) - exercises
-    real QK-norm plus the `unpermute_rope_rows(..., n_head=1)` handling for its weight tensors,
-    for fast/safe `/api/chat` tests against the real `Qwen3Architecture`/`GGUFTokenizer`
-    pipeline."""
+    """A tiny valid `qwen3` GGUF (tests/tiny_gguf_qwen3.py) exercising QK-norm plus the
+    `unpermute_rope_rows(..., n_head=1)` handling of its weight tensors, for `/api/chat` tests
+    against Qwen3Architecture/GGUFTokenizer."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-qwen3"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -505,8 +479,8 @@ def tiny_qwen3_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_qwen3_tied_embeddings_model(models_dir: Path) -> InstalledModel:
-    """Same as `tiny_qwen3_model`, but with no separate `output.weight` tensor - real
-    Qwen3-0.6B ships `tie_word_embeddings: true`."""
+    """`tiny_qwen3_model` with no separate `output.weight`: Qwen3-0.6B ships `tie_word_embeddings:
+    true`."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-qwen3-tied"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -529,17 +503,15 @@ def tiny_qwen3_tied_embeddings_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_command_r_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `command-r` GGUF (see tests/tiny_gguf_command_r.py) -
-    exercises the real parallel attention+FFN block, bias-free LayerNorm, and logit_scale
-    multiply, for fast/safe `/api/chat` tests against the real `CommandRArchitecture`/
-    `GGUFTokenizer` pipeline."""
+    """A tiny valid `command-r` GGUF (tests/tiny_gguf_command_r.py) exercising the parallel
+    attention+FFN block, bias-free LayerNorm and logit_scale multiply, for `/api/chat` tests against
+    CommandRArchitecture/GGUFTokenizer."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-command-r"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
-    # seed=1, not the default 0 - seed=0's random weights happen to make greedy decoding hit a
-    # real EOS token after 2 tokens for this architecture's real logit_scale/parallel-block
-    # combination, which is correct behavior (not a bug) but defeats this fixture's own purpose
-    # of exercising a real multi-token generation.
+    # seed=1, not 0: seed=0's random weights make greedy decoding hit EOS after 2 tokens for this
+    # architecture's logit_scale/parallel-block combination (correct behavior, not a bug) but defeat
+    # this fixture's purpose of a multi-token generation.
     build_tiny_command_r_gguf(gguf_path, seed=1)
 
     installed = InstalledModel(
@@ -559,11 +531,9 @@ def tiny_command_r_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_command_r_tied_embeddings_model(models_dir: Path) -> InstalledModel:
-    """Same as `tiny_command_r_model`, but with no separate `output.weight` tensor - real
-    Command-R checkpoints are always tied (llama.cpp never emits a separate output tensor for
-    this architecture), so this is actually the real-world-representative case, not the edge one
-    (same lesson `llama`'s tied-embeddings bug already taught - detect dynamically, don't
-    assume)."""
+    """`tiny_command_r_model` with no separate `output.weight`: Command-R checkpoints are always
+    tied (llama.cpp never emits a separate output tensor), so this is the real-world case, not the
+    edge (the lesson of `llama`'s tied-embeddings bug: detect dynamically)."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-command-r-tied"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -586,10 +556,9 @@ def tiny_command_r_tied_embeddings_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_starcoder2_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `starcoder2` GGUF (see tests/tiny_gguf_starcoder2.py) -
-    exercises the real biased q/k/v/o + biased plain (non-gated) tanh-GELU MLP, biased LayerNorm,
-    and the real "no unpermute_rope_rows" finding, for fast/safe `/api/chat` tests against the
-    real `Starcoder2Architecture`/`GGUFTokenizer` pipeline."""
+    """A tiny valid `starcoder2` GGUF (tests/tiny_gguf_starcoder2.py) exercising biased q/k/v/o, a
+    biased plain (non-gated) tanh-GELU MLP, biased LayerNorm and the "no unpermute_rope_rows"
+    finding, for `/api/chat` tests against Starcoder2Architecture/GGUFTokenizer."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-starcoder2"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -612,10 +581,9 @@ def tiny_starcoder2_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_starcoder2_tied_embeddings_model(models_dir: Path) -> InstalledModel:
-    """Same as `tiny_starcoder2_model`, but with no separate `output.weight` tensor - real
-    `bigcode/starcoder2-3b/-7b/-15b` checkpoints all tie embeddings (`tie_word_embeddings=True`),
-    detected dynamically (`loader.has_tensor("output.weight")`), same as every other architecture
-    here, not assumed."""
+    """`tiny_starcoder2_model` with no separate `output.weight`: `bigcode/starcoder2-3b/-7b/-15b`
+    tie embeddings (`tie_word_embeddings=True`), detected dynamically
+    (`loader.has_tensor("output.weight")`) like every architecture here."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-starcoder2-tied"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -638,11 +606,9 @@ def tiny_starcoder2_tied_embeddings_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_llama_moe_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real Mixtral-style `llama` GGUF (see tiny_gguf_llama_moe.py) -
-
-    exercises the real sparse MoE FFN dispatch through `LlamaArchitecture`'s own MoE detection,
-    for fast/safe `/api/chat` tests. Real `general.architecture` stays `"llama"` (no separate
-    `mixtral` GGUF architecture string exists - see app/architectures/llama_moe.py)."""
+    """A tiny valid Mixtral-style `llama` GGUF (tiny_gguf_llama_moe.py) exercising the sparse MoE
+    FFN dispatch through `LlamaArchitecture`'s MoE detection, for `/api/chat` tests.
+    `general.architecture` stays `"llama"` (no `mixtral` string; app/architectures/llama_moe.py)."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-llama-moe"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -665,11 +631,9 @@ def tiny_llama_moe_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_falcon_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid, real `falcon` GGUF (see tests/tiny_gguf_falcon.py) - exercises
-
-    the real fused, bias-free, MQA-shaped `attn_qkv` split and the real single biased
-    parallel-residual norm, for fast/safe `/api/chat` tests against the real
-    `FalconArchitecture`/`GGUFTokenizer` pipeline."""
+    """A tiny valid `falcon` GGUF (tests/tiny_gguf_falcon.py) exercising the fused bias-free MQA
+    `attn_qkv` split and the single biased parallel-residual norm, for `/api/chat` tests against
+    FalconArchitecture/GGUFTokenizer."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-falcon"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -692,10 +656,9 @@ def tiny_falcon_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_falcon_tied_embeddings_model(models_dir: Path) -> InstalledModel:
-    """Same as `tiny_falcon_model`, but with no separate `output.weight` tensor - real
-    `tiiuae/falcon-7b` always ships one (confirmed via a real downloaded GGUF header, untied),
-    so this is the edge case, not the common one - detected dynamically
-    (`loader.has_tensor("output.weight")`), same as every other architecture here."""
+    """`tiny_falcon_model` with no separate `output.weight`. `tiiuae/falcon-7b` always ships one
+    (untied, checked on a real GGUF header), so this is the edge case, detected dynamically
+    (`loader.has_tensor("output.weight")`) like every architecture."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-falcon-tied"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -718,10 +681,10 @@ def tiny_falcon_tied_embeddings_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_llama_tied_embeddings_model(models_dir: Path) -> InstalledModel:
-    """Same as `tiny_llama_model`, but with no separate `output.weight` tensor - the real shape of
-    a real `Llama-3.2-1B/3B-Instruct` GGUF pull (`tie_word_embeddings: true`), which crashed
-    `/api/chat` with `UnknownModelError: GGUF file has no tensor named 'output.weight'` before
-    `LlamaArchitecture` learned to detect and handle tied embeddings (2026-09-22)."""
+    """`tiny_llama_model` with no separate `output.weight`: the shape of a
+    `Llama-3.2-1B/3B-Instruct` GGUF (`tie_word_embeddings: true`), which crashed `/api/chat` with
+    `UnknownModelError: GGUF file has no tensor named 'output.weight'` before `LlamaArchitecture`
+    learned tied embeddings."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-llama-tied"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"
@@ -744,8 +707,8 @@ def tiny_llama_tied_embeddings_model(models_dir: Path) -> InstalledModel:
 
 @pytest.fixture
 def tiny_qwen35_model(models_dir: Path) -> InstalledModel:
-    """A tiny but complete, valid `qwen35` GGUF (see tests/tiny_gguf_qwen35.py) - exercises the
-    hybrid Gated DeltaNet/gated-attention stack and its recurrent cache through `/api/chat`."""
+    """A tiny valid `qwen35` GGUF (tests/tiny_gguf_qwen35.py) exercising the hybrid Gated
+    DeltaNet/gated-attention stack and its recurrent cache through `/api/chat`."""
     repo_dir = models_dir / "hf.co" / "test-org" / "tiny-qwen35"
     repo_dir.mkdir(parents=True, exist_ok=True)
     gguf_path = repo_dir / "tiny.gguf"

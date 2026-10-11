@@ -1,11 +1,9 @@
-"""GEMV kernels for IQ2_XXS, IQ2_XS, IQ2_S - same real, honest performance profile as
-`quantized_gemv_extended.py` (register-only accumulators, no heap scratch buffer). Correctness
-cross-checked against each type's own already-oracle-validated `QuantStrategy.dequantize()` in
-`iq2_family.py`. As much of each block's own per-sub-block bit-unpacking as possible is
-precomputed once outside the njit hot loop (in plain vectorized NumPy, mirroring
-`quantized_gemv_extended.py`'s own `_unpack_q3k_scales`-outside-the-kernel precedent) - only the
-final per-lane grid lookup + accumulate happens inside numba.
-"""
+"""GEMV kernels for IQ2_XXS, IQ2_XS, IQ2_S, with the performance profile of
+`quantized_gemv_extended.py` (register-only accumulators, no heap scratch). Correctness
+cross-checked against each type's oracle-validated `QuantStrategy.dequantize` in `iq2_family.py`.
+As much per-sub-block bit-unpacking as possible is precomputed outside the njit hot loop (vectorized
+NumPy, like `quantized_gemv_extended.py`'s `_unpack_q3k_scales`); only the per-lane grid lookup +
+accumulate runs in numba."""
 
 import numba
 import numpy as np
@@ -20,9 +18,9 @@ from app.gguf.dequant.iq_grids import (
 )
 
 _QK_K = 256
-IQ2_XXS_TYPE_SIZE = 2 + 64  # 66
-IQ2_XS_TYPE_SIZE = 2 + 64 + 8  # 74
-IQ2_S_TYPE_SIZE = 2 + 64 + 8 + 8  # 82
+IQ2_XXS_TYPE_SIZE = 2 + 64
+IQ2_XS_TYPE_SIZE = 2 + 64 + 8
+IQ2_S_TYPE_SIZE = 2 + 64 + 8 + 8
 
 
 def _require_divisible(in_features: int, block_size: int) -> int:
@@ -65,11 +63,11 @@ def qgemv_iq2_xxs(
         out_features, n_super, IQ2_XXS_TYPE_SIZE
     )
     d = blocks[:, :, 0:2].copy().view("<f2").astype(np.float32).reshape(out_features, n_super)
-    qs = blocks[:, :, 2:66].reshape(out_features, n_super, 8, 8)  # (of, ns, ib32, 8)
+    qs = blocks[:, :, 2:66].reshape(out_features, n_super, 8, 8)
 
-    word0 = np.ascontiguousarray(qs[:, :, :, 0:4])  # (of, ns, 8, 4) - grid indices
-    word1 = np.ascontiguousarray(qs[:, :, :, 4:8]).view("<u4")[..., 0]  # (of, ns, 8) uint32
-    db = d[:, :, None] * (0.5 + (word1 >> 28).astype(np.float32)) * 0.25  # (of, ns, 8)
+    word0 = np.ascontiguousarray(qs[:, :, :, 0:4])
+    word1 = np.ascontiguousarray(qs[:, :, :, 4:8]).view("<u4")[..., 0]
+    db = d[:, :, None] * (0.5 + (word1 >> 28).astype(np.float32)) * 0.25
 
     x_np = np.ascontiguousarray(x.detach().numpy(), dtype=np.float32)
     grid_table, signs_table, mask = iq2xxs_grid_i8(), ksigns_iq2xs(), kmask_iq2xs()
@@ -112,9 +110,9 @@ def qgemv_iq2_xs(
     )
     d = blocks[:, :, 0:2].copy().view("<f2").astype(np.float32).reshape(out_features, n_super)
     qs = np.ascontiguousarray(blocks[:, :, 2:66]).view("<u2").reshape(out_features, n_super, 32)
-    scales = blocks[:, :, 66:74]  # (of, ns, 8)
+    scales = blocks[:, :, 66:74]
 
-    db0 = d[:, :, None] * (0.5 + (scales & 0x0F).astype(np.float32)) * 0.25  # (of, ns, 8)
+    db0 = d[:, :, None] * (0.5 + (scales & 0x0F).astype(np.float32)) * 0.25
     db1 = d[:, :, None] * (0.5 + (scales >> 4).astype(np.float32)) * 0.25
 
     x_np = np.ascontiguousarray(x.detach().numpy(), dtype=np.float32)

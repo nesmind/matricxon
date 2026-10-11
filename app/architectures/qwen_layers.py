@@ -17,26 +17,18 @@ def _causal_mask(
 
 
 class QwenAttention(nn.Module):
-    """`GroupedQueryAttention` (`mistral3_layers.py`) plus the two real deltas Qwen2/Qwen3 need,
-    shared here rather than duplicated per architecture (same "one flexible class" precedent
-    `GraniteAttention` already established for a comparably small real delta):
+    """`GroupedQueryAttention` (`mistral3_layers.py`) plus the deltas Qwen2/Qwen3 need, shared here
+    like `GraniteAttention`:
 
-    `qkv_bias` - real Qwen2 checkpoints have a real bias on `q_proj`/`k_proj`/`v_proj` (hardcoded
-    `bias=True` in HF's own `modeling_qwen2.py`, not config-gated) but never on `o_proj`; real
-    Qwen3 checkpoints have no bias anywhere (`config.attention_bias = False` on every real small
-    checkpoint, confirmed no `attn_*.bias` tensors exist in a real downloaded GGUF file at all).
+    `qkv_bias`: Qwen2 biases `q_proj`/`k_proj`/`v_proj` (HF `modeling_qwen2.py`) but never `o_proj`;
+    Qwen3 has none (`config.attention_bias = False`).
 
-    `qk_norm_eps` - Qwen3's real structural delta from Qwen2: a per-head-dim `RMSNorm` applied to
-    both q and k, right after the reshape-to-heads split, **before** RoPE (confirmed exact
-    placement from `modeling_qwen3.py`: `q_norm(q_proj(x).view(...))` then `transpose` then
-    `apply_rotary_pos_emb` - RMSNorm's last-dim reduction makes applying it before or after the
-    transpose used here mathematically identical, so this applies it after, matching every other
-    call in this class). `None` for Qwen2 (no QK-norm at all).
+    `qk_norm_eps`: Qwen3's per-head-dim `RMSNorm` on q and k after the reshape to heads, before RoPE
+    (`modeling_qwen3.py`). RMSNorm's last-dim reduction makes before/after the transpose identical,
+    so it is applied after. `None` for Qwen2.
 
-    `o_proj_bias` - Qwen2/Qwen3/Command-R all confirm `o_proj` never has a bias regardless of
-    `qkv_bias` (the default, `False`); StarCoder2 is the first real reuse case where it does
-    (`config.use_bias` gates all four projections identically, confirmed via HF's own
-    `modeling_starcoder2.py` - see `Starcoder2Attention`).
+    `o_proj_bias`: Qwen2/Qwen3/Command-R never bias `o_proj` (default `False`); StarCoder2 is the
+    first reuse that does (`config.use_bias` gates all four projections; `Starcoder2Attention`).
     """
 
     def __init__(
@@ -93,10 +85,10 @@ class QwenAttention(nn.Module):
         else:
             cache_offset = 0
 
-        # enable_gqa: SDPA shares each k/v head across its query-head group itself - no
-        # repeat_interleave copy of the whole cached k/v per step (measured on this project's
-        # laptop: at a 200-token context that copy cost ~90 ms per generated token over 28
-        # layers, vs ~7 ms without it; the gap grows with the conversation).
+        # enable_gqa: SDPA shares each k/v head across its query-head group itself, with no
+        # repeat_interleave copy of the cached k/v per step
+        # (measured on the dev machine: at 200 tokens that copy cost ~90 ms per generated token
+        # over 28 layers vs ~7 ms without; the gap grows with the conversation).
         if kv_cache is not None:
             out = fused_cached_attention(q, k, v, cache_offset)
             if out is None:
@@ -109,9 +101,11 @@ class QwenAttention(nn.Module):
 
 
 class QwenDecoderLayer(nn.Module):
-    """Same pre-norm two-block layout as `Mistral3DecoderLayer` - no Granite-style residual
-    scaling, no MoE injection (MLP is always plain `SwiGLUMLP` for both Qwen2 and Qwen3), so this
-    builds its own attention/MLP internally rather than taking them as constructor arguments."""
+    """Same pre-norm two-block layout as `Mistral3DecoderLayer`, with no Granite-style residual
+    scaling and no MoE injection (MLP is always
+    a plain `SwiGLUMLP` for Qwen2 and Qwen3), so it builds its attention/MLP internally instead of
+    taking them as arguments.
+    """
 
     def __init__(
         self,

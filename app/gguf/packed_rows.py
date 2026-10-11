@@ -1,9 +1,8 @@
 """Row-level access to a packed (still quantized) GGUF weight. Every GGUF quantization type packs
-each row of a 2-D weight into its own whole number of blocks, so row `i` is simply the byte range
-`[i * row_bytes, (i + 1) * row_bytes)` - rows can be read or reordered without dequantizing
-anything. That's what lets a token-embedding lookup dequantize only the rows it needs, and lets
-`unpermute_rope_rows`'s pure row permutation run on the packed bytes of attn_q/attn_k.
-"""
+each row of a 2-D weight into a whole number of blocks, so row `i` is the byte range `[i *
+row_bytes, (i + 1) * row_bytes)`: rows can be read or reordered without dequantizing. That lets a
+token-embedding lookup dequantize only the rows it needs and lets `unpermute_rope_rows`'s row
+permutation run on attn_q/attn_k packed bytes."""
 
 import numpy as np
 import torch
@@ -23,7 +22,7 @@ class PackedRows:
         return self._raw[start : start + self.row_bytes]
 
     def reordered(self, order: torch.Tensor) -> memoryview:
-        """A new packed buffer whose row `i` is this buffer's row `order[i]` - a copy, so it
-        doesn't pin the source mmap."""
+        """A new packed buffer whose row `i` is this buffer's row `order[i]`: a copy, so it doesn't
+        pin the source mmap."""
         rows = np.frombuffer(self._raw, dtype=np.uint8).reshape(self.n_rows, self.row_bytes)
         return memoryview(np.ascontiguousarray(rows[order.numpy()]))

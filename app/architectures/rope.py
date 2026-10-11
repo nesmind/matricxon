@@ -7,11 +7,10 @@ from app.native.fused_ops import FusedOps
 
 
 class RotaryEmbedding(nn.Module):
-    """Plain (unscaled) rotary position embedding: `inv_freq = 1/theta^(2i/dim)`,
-    no long-context correction. Used by `nomic-bert` - its GGUF metadata
-    carries only `rope.freq_base`, none of YaRN's `rope.scaling.*` keys
-    (confirmed against the real `nomic-embed-text-v1.5` GGUF) - `YarnRotaryEmbedding`
-    below extends this with that correction for architectures that need it.
+    """Plain (unscaled) rotary position embedding: `inv_freq = 1/theta^(2i/dim)`, no long-context
+    correction. Used by `nomic-bert` (its GGUF
+    has only `rope.freq_base`, no YaRN `rope.scaling.*`; checked on the real
+    `nomic-embed-text-v1.5`); `YarnRotaryEmbedding` extends it with that correction.
     """
 
     def __init__(self, head_dim: int, rope_theta: float) -> None:
@@ -23,31 +22,28 @@ class RotaryEmbedding(nn.Module):
         self.attention_factor = 1.0
 
     def forward(self, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """`position_ids` `(T,)` -> cos/sin `(T, dim)`. A batched decode step passes `(B, 1)` - one
-        position per sequence - and gets `(B, 1, dim)` (see `apply_rotary_pos_emb`)."""
+        """`position_ids` `(T)` -> cos/sin `(T, dim)`. A batched decode step passes `(B, 1)` (one
+        position per sequence) and gets `(B, 1, dim)` (see `apply_rotary_pos_emb`)."""
         freqs = position_ids.float().unsqueeze(-1) * self.inv_freq
         emb = torch.cat([freqs, freqs], dim=-1)
         return emb.cos() * self.attention_factor, emb.sin() * self.attention_factor
 
     def shift_table(self, count: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """cos/sin `(dim,)` of a rotation by -`count` positions (never scaled by
-        `attention_factor`).
-        Applied like `apply_rotary_pos_emb` to keys already rotated for their position, it moves
-        them
-        `count` positions earlier: rotations by angles add, so this equals rotating them afresh."""
+        """cos/sin `(dim)` of a rotation by -`count` positions (never scaled by
+        `attention_factor`). Applied like `apply_rotary_pos_emb` to keys already rotated for their
+        position, it moves them `count` positions earlier: rotations add, so this equals rotating
+        afresh."""
         freqs = -float(count) * self.inv_freq
         emb = torch.cat([freqs, freqs], dim=-1)
         return emb.cos(), emb.sin()
 
 
 class InterleavedMRopeEmbedding(RotaryEmbedding):
-    """Qwen3-VL/Qwen3.5 interleaved multi-axis RoPE. `position_ids` is either `(T,)` (text: every
-    axis is the same index, identical to plain `RotaryEmbedding`) or `(3, T)` - temporal / height /
-    width indices per token (image tokens differ per axis). The rotary frequencies are shared;
-    which axis's index drives frequency `i` is interleaved: `i % 3` while `i < 3 * sections[axis]`
-    (axes 1 and 2), everything else uses the temporal axis - HF `apply_interleaved_mrope`, so for
-    sections `[11, 11, 10]`: h = 1,4,...,31; w = 2,5,...,29; t = the rest.
-    """
+    """Qwen3-VL/Qwen3.5 interleaved multi-axis RoPE. `position_ids` is `(T)` (text: every axis the
+    same index, equal to plain `RotaryEmbedding`) or `(3, T)`: temporal / height / width per token.
+    Frequencies are shared; the axis driving frequency `i` is interleaved: `i % 3` while `i < 3 *
+    sections[axis]` (axes 1 and 2), the rest temporal (HF `apply_interleaved_mrope`; sections `[11,
+    11, 10]`: h = 1,4,...,31; w = 2,5,...,29; t = the rest)."""
 
     def __init__(self, head_dim: int, rope_theta: float, sections: list[int]) -> None:
         super().__init__(head_dim, rope_theta)
@@ -59,20 +55,18 @@ class InterleavedMRopeEmbedding(RotaryEmbedding):
     def forward(self, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if position_ids.dim() == 1:
             return super().forward(position_ids)
-        freqs = position_ids.float().unsqueeze(-1) * self.inv_freq  # (3, T, dim/2)
+        freqs = position_ids.float().unsqueeze(-1) * self.inv_freq
         index = self.axis_of_freq.view(1, 1, -1).expand(1, freqs.shape[1], -1)
-        freqs = freqs.gather(0, index)[0]  # (T, dim/2)
+        freqs = freqs.gather(0, index)[0]
         emb = torch.cat([freqs, freqs], dim=-1)
         return emb.cos(), emb.sin()
 
 
 class YarnRotaryEmbedding(RotaryEmbedding):
-    """YaRN-scaled rotary position embedding.
-
-    Ports HuggingFace transformers' `_compute_yarn_parameters`
-    (modeling_rope_utils.py), verified against that source rather than
-    re-derived from memory - a wrong correction-range or ramp here would
-    silently produce garbage generations instead of an obvious error.
+    """YaRN-scaled rotary position embedding. Ports HuggingFace transformers'
+    `_compute_yarn_parameters` (modeling_rope_utils.py), verified
+    against that source rather than re-derived: a wrong correction range or ramp silently produces
+    garbage generations.
     """
 
     def __init__(
@@ -86,7 +80,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         mscale: float | None,
         mscale_all_dim: float | None,
     ) -> None:
-        nn.Module.__init__(self)  # skip RotaryEmbedding.__init__ - we compute our own inv_freq
+        nn.Module.__init__(self)
         inv_freq, attention_factor = self._compute(
             head_dim,
             rope_theta,
@@ -167,7 +161,7 @@ def apply_rotary_pos_emb(
     fused = ops.rope(q, k, cos, sin) if ops is not None else None
     if fused is not None:
         return fused
-    if cos.dim() == 3:  # batched decode: one position per sequence, (B, 1, dim) -> (B, 1, 1, dim)
+    if cos.dim() == 3:
         cos, sin = cos.unsqueeze(1), sin.unsqueeze(1)
     else:
         cos, sin = cos.unsqueeze(0).unsqueeze(0), sin.unsqueeze(0).unsqueeze(0)
@@ -178,14 +172,12 @@ def apply_rotary_pos_emb(
 def apply_rotary_pos_emb_partial(
     q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """NEOX-style *partial* rotary: only the first `cos.shape[-1]` dims of each head are rotated,
-    the rest pass through unchanged - real Phi-2 (`rope.dimension_count=32` of a real 64-dim head,
-    confirmed against a real moondream2 GGUF pull, not assumed) - every other architecture here
-    rotates the whole head (`cos`/`sin` already sized to the full `head_dim`), so this is additive:
-    `apply_rotary_pos_emb`/`rotate_half` above are unchanged and every existing caller is
-    unaffected. `cos`/`sin` come from a `RotaryEmbedding` constructed with `head_dim=rot_dim` (not
-    the real full head_dim) - `inv_freq` only ever depends on the width being rotated, so no
-    changes to `RotaryEmbedding` itself are needed to produce them.
+    """NEOX-style *partial* rotary: only the first `cos.shape[-1]` dims of each head rotate, the
+    rest pass through (Phi-2: `rope.dimension_count=32`
+    of a 64-dim head, from a moondream2 GGUF). Every other architecture rotates the whole head
+    (`cos`/`sin` already sized `head_dim`), so this is
+    additive: `apply_rotary_pos_emb`/`rotate_half` are unchanged. `cos`/`sin` come from a
+    `RotaryEmbedding` with `head_dim=rot_dim`: `inv_freq` depends only on the rotated width.
     """
     rot_dim = cos.shape[-1]
     q_rot, q_pass = q[..., :rot_dim], q[..., rot_dim:]

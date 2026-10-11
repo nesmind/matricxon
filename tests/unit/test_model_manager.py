@@ -81,7 +81,7 @@ class TestModelManagerKeepAlive:
     def test_touch_refreshes_last_used_at(self, manager: ModelManager, clock: FakeClock) -> None:
         handle = manager.get_or_load("model-a:latest")
         clock.advance(299)
-        manager.get_or_load("model-a:latest")  # refreshes before the 300s default expires
+        manager.get_or_load("model-a:latest")
 
         assert not handle.is_expired(clock())
 
@@ -110,7 +110,7 @@ class TestModelManagerEviction:
         clock.advance(1)
         manager.get_or_load("model-b:latest")
 
-        manager.get_or_load("model-c:latest")  # over max_loaded=2 - evicts model-a (LRU)
+        manager.get_or_load("model-c:latest")
 
         tags = {handle.tag for handle in manager.list_loaded()}
         assert tags == {"model-b:latest", "model-c:latest"}
@@ -122,7 +122,7 @@ class TestModelManagerEviction:
         clock.advance(1)
         manager.get_or_load("model-b:latest")
         clock.advance(1)
-        manager.get_or_load("model-a:latest")  # now most-recently-used, not model-b
+        manager.get_or_load("model-a:latest")
 
         manager.get_or_load("model-c:latest")
 
@@ -131,13 +131,11 @@ class TestModelManagerEviction:
 
 
 class TestModelManagerBusyEviction:
-    """Regression guard for the real bug this was written to fix: a keep-alive-expired or
-    LRU-evicted handle whose worker was still actively generating used to be silently dropped from
-    the manager's own dict anyway, orphaning that worker thread (still burning CPU, invisible to
-    /api/ps, unreachable by unload()'s own stop signal) exactly as if nothing were running there at
-    all. Marks a handle busy the same way a real in-flight generation would - blocking its worker's
-    generator mid-run via a threading.Event handshake - so this is a deterministic proof, not a
-    timing-dependent guess."""
+    """Guards the fixed bug: a keep-alive-expired or LRU-evicted handle whose worker was still
+    generating was dropped from the manager's dict anyway, orphaning the worker thread (burning CPU,
+    invisible to /api/ps, unreachable by unload's stop). A handle is marked busy as a real
+    generation would be, blocking its worker's generator via a threading.Event handshake: a
+    deterministic proof, not a timing guess."""
 
     @staticmethod
     def _mark_busy(handle) -> tuple[threading.Event, threading.Event]:
@@ -160,9 +158,9 @@ class TestModelManagerBusyEviction:
         started, release = self._mark_busy(handle)
         try:
             await asyncio.to_thread(started.wait)
-            clock.advance(11)  # well past keep_alive_seconds=10
+            clock.advance(11)
 
-            tags = {h.tag for h in manager.list_loaded()}  # calls _evict_expired internally
+            tags = {h.tag for h in manager.list_loaded()}
             assert "model-a:latest" in tags
         finally:
             release.set()
@@ -171,17 +169,17 @@ class TestModelManagerBusyEviction:
     async def test_evict_least_recently_used_skips_a_busy_handle(
         self, manager: ModelManager, clock: FakeClock
     ) -> None:
-        handle_a = manager.get_or_load("model-a:latest")  # the LRU candidate once b/c load
+        handle_a = manager.get_or_load("model-a:latest")
         started, release = self._mark_busy(handle_a)
         try:
             await asyncio.to_thread(started.wait)
             clock.advance(1)
             manager.get_or_load("model-b:latest")
             clock.advance(1)
-            manager.get_or_load("model-c:latest")  # over max_loaded=2 - model-a is LRU but busy
+            manager.get_or_load("model-c:latest")
 
             tags = {h.tag for h in manager.list_loaded()}
-            assert "model-a:latest" in tags  # protected despite being the LRU candidate
+            assert "model-a:latest" in tags
         finally:
             release.set()
 
@@ -198,7 +196,7 @@ class TestModelManagerBusyEviction:
             await asyncio.to_thread(started_a.wait)
             await asyncio.to_thread(started_b.wait)
 
-            manager.get_or_load("model-c:latest")  # nothing safe to evict - over max_loaded now
+            manager.get_or_load("model-c:latest")
 
             tags = {h.tag for h in manager.list_loaded()}
             assert tags == {"model-a:latest", "model-b:latest", "model-c:latest"}
@@ -208,20 +206,19 @@ class TestModelManagerBusyEviction:
 
 
 class TestModelManagerCancelledLoad:
-    """Regression guard for the deeper version of the same bug TestModelManagerUnload covers: a
-    stop request that arrives *before* a handle even exists yet (i.e. while get_or_load() is still
-    stuck inside the - on this project's target hardware, routinely tens-of-seconds - loading step)
-    used to be silently lost entirely, since unload() had nothing in `_handles` to signal. See
-    ModelManager.pop_cancelled_load/unload's own docstrings."""
+    """Guards the deeper version of the bug TestModelManagerUnload covers: a stop arriving *before*
+    a handle exists (get_or_load still in the, on the target hardware tens-of-seconds, loading
+    step) was lost, as unload had nothing in `_handles` to signal. See
+    ModelManager.pop_cancelled_load/unload."""
 
     def test_unload_with_no_handle_marks_the_tag_cancelled(self, manager: ModelManager) -> None:
-        manager.unload("model-a:latest")  # no handle exists yet
+        manager.unload("model-a:latest")
         assert manager.pop_cancelled_load("model-a:latest") is True
 
     def test_pop_cancelled_load_consumes_the_flag(self, manager: ModelManager) -> None:
         manager.unload("model-a:latest")
         assert manager.pop_cancelled_load("model-a:latest") is True
-        assert manager.pop_cancelled_load("model-a:latest") is False  # already consumed
+        assert manager.pop_cancelled_load("model-a:latest") is False
 
     def test_pop_cancelled_load_is_false_when_nothing_was_cancelled(
         self, manager: ModelManager
@@ -231,8 +228,8 @@ class TestModelManagerCancelledLoad:
     def test_get_or_load_clears_a_stale_cancellation_from_an_earlier_attempt(
         self, manager: ModelManager
     ) -> None:
-        manager.unload("model-a:latest")  # marks cancelled (no handle yet)
-        manager.get_or_load("model-a:latest")  # a fresh, unrelated later attempt for the same tag
+        manager.unload("model-a:latest")
+        manager.get_or_load("model-a:latest")
 
         assert manager.pop_cancelled_load("model-a:latest") is False
 
@@ -240,9 +237,9 @@ class TestModelManagerCancelledLoad:
     async def test_unload_during_an_in_progress_load_is_noticed_once_loading_finishes(
         self, manager: ModelManager, monkeypatch
     ) -> None:
-        """The actual real-world race: unload() is called on a different thread/request while
-        get_or_load() is synchronously blocked inside _load() for the same tag - proven here by
-        blocking the real _load() with a threading.Event handshake instead of guessing at timing."""
+        """The real race: unload runs on another thread/request while get_or_load is blocked
+        inside _load for the same tag; the real _load is blocked with a threading.Event
+        handshake instead of guessing timing."""
         load_started = threading.Event()
         proceed = threading.Event()
         real_load = ModelManager._load
@@ -263,15 +260,15 @@ class TestModelManagerCancelledLoad:
         thread.start()
         try:
             await asyncio.to_thread(load_started.wait)
-            # get_or_load() is stuck inside _load() right now - no handle exists in the manager yet.
+            # get_or_load is stuck inside _load now: no handle exists in the manager yet.
             assert manager.list_loaded() == []
 
-            manager.unload("model-a:latest")  # the real bug scenario
+            manager.unload("model-a:latest")
         finally:
             proceed.set()
             await asyncio.to_thread(thread.join)
 
-        assert result["handle"].tag == "model-a:latest"  # loading still completed and is cached
+        assert result["handle"].tag == "model-a:latest"
         assert manager.list_loaded()[0].tag == "model-a:latest"
         assert manager.pop_cancelled_load("model-a:latest") is True
 
@@ -284,13 +281,12 @@ class TestModelManagerUnload:
         assert manager.list_loaded() == []
 
     def test_unload_of_a_never_loaded_tag_is_a_no_op(self, manager: ModelManager) -> None:
-        manager.unload("never-loaded:latest")  # must not raise
+        manager.unload("never-loaded:latest")
 
     def test_unload_requests_stop_on_the_handles_worker(self, manager: ModelManager) -> None:
-        """Regression guard: unload() used to only pop the dict entry, leaving a mid-generation
-        worker thread completely unaware anything happened - it kept computing every remaining
-        token, orphaned from the manager but still pegging the CPU. See
-        app.models.worker.ModelWorker.request_stop's own docstring for the full story."""
+        """Guard: unload only popped the dict entry, leaving a mid-generation worker thread
+        unaware; it kept computing every remaining token, orphaned but still pegging the CPU
+        (app.models.worker.ModelWorker.request_stop)."""
         handle = manager.get_or_load("model-a:latest")
         calls = []
         handle.worker.request_stop = lambda: calls.append(True)

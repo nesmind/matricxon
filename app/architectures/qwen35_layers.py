@@ -15,10 +15,11 @@ LoadProjection = Callable[..., nn.Module]
 
 
 class Qwen35Attention(nn.Module):
-    """Qwen3.5's full-attention layer (every 4th): Qwen3-style GQA with QK-norm, plus two deltas -
-    `attn_q` is twice as wide (per head, `[query | gate]` interleaved) and the attention output
-    is multiplied by `sigmoid(gate)` before `o_proj`; and RoPE only rotates the first `rope_dim`
-    of each head's dims (text-only M-RoPE collapses to plain NEOX RoPE: all three position
+    """Qwen3.5's full-attention layer (every 4th): Qwen3-style GQA with QK-norm plus two deltas:
+    `attn_q` is twice as wide (per head,
+    `[query | gate]` interleaved) and the output is multiplied by `sigmoid(gate)` before `o_proj`;
+    and RoPE rotates only the first
+    `rope_dim` dims of each head (text-only M-RoPE collapses to plain NEOX RoPE: all three position
     streams carry the same index).
     """
 
@@ -74,8 +75,8 @@ class Qwen35Attention(nn.Module):
 
 
 class Qwen35DecoderLayer(nn.Module):
-    """Pre-norm two-block layer; the token mixer is either `Qwen35Attention` (`self_attn`) or
-    `Qwen35GatedDeltaNet` (`linear_attn`) - the FFN is the same dense SwiGLU in both."""
+    """Pre-norm two-block layer; the token mixer is `Qwen35Attention` (`self_attn`) or
+    `Qwen35GatedDeltaNet` (`linear_attn`); the FFN is the same dense SwiGLU in both."""
 
     def __init__(
         self,
@@ -117,8 +118,8 @@ def materialize_decoder_layer(
     dtype: torch.dtype,
     enabled: bool,
 ) -> None:
-    """Copies one layer's tensors in. No `unpermute_rope_rows` anywhere (same reasoning as
-    `Qwen3Architecture`: Qwen's GGUF q/k rows are already in the order its RoPE expects)."""
+    """Copies one layer's tensors in. No `unpermute_rope_rows` (as `Qwen3Architecture`: Qwen's GGUF
+    q/k rows are already in the order its RoPE expects)."""
 
     def proj(suffix: str, target: nn.Linear) -> nn.Module:
         return load_projection(loader, prefix + suffix, target, dtype, enabled)

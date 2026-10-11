@@ -4,34 +4,23 @@ from app.gguf.metadata import GGUFMetadata
 
 _CONTROL_TOKEN_TYPE = 3
 _BYTE_TOKEN_TYPE = 6
-_SPACE_MARKER = "▁"  # "▁" - SentencePiece's word-boundary/space marker
+_SPACE_MARKER = "▁"
 
 
 class SentencePieceTokenizer:
-    """SentencePiece BPE tokenizer built directly from a GGUF file's
+    """SentencePiece BPE tokenizer built from a GGUF's `tokenizer.ggml.*` metadata for
+    `tokenizer.ggml.model = "llama"` (checked on `TinyLlama-1.1B-Chat-v1.0`), llama.cpp's
+    `LLAMA_VOCAB_TYPE_SPM`. A different algorithm from `GGUFTokenizer`'s byte-level BPE: there is no
+    `tokenizer.ggml.merges`; merge priority comes from the per-entry `tokenizer.ggml.scores` (higher
+    merges first), and the input is normalized as one span (spaces become "▁", plus one leading "▁"
+    unless the text already starts with one: SentencePiece's `add_dummy_prefix`), not split into
+    words by a GPT-2 regex. Cross-checked against HF `LlamaTokenizer`
+    (tools/oracle/validate_sentencepiece_tokenizer.py), since a subtly wrong merge rule would
+    mistokenize silently.
 
-    `tokenizer.ggml.*` metadata - matches `tokenizer.ggml.model = "llama"`
-    (confirmed against a real `TinyLlama-1.1B-Chat-v1.0` GGUF pull, not
-    assumed), llama.cpp's `LLAMA_VOCAB_TYPE_SPM`. A genuinely different core
-    algorithm from `GGUFTokenizer`'s byte-level BPE (M5.5): no
-    `tokenizer.ggml.merges` key exists for this vocab type at all - merge
-    priority instead comes from a per-vocab-entry `tokenizer.ggml.scores`
-    float (higher score merges first), and the input text is normalized as
-    one whole span (spaces become "▁", plus one leading "▁" unless the text
-    already starts with one after that substitution - real SentencePiece's
-    `add_dummy_prefix`) rather than GPT-2-regex-split into words first.
-    Confirmed via a real HF `LlamaTokenizer` cross-check
-    (scripts/oracle/validate_sentencepiece_tokenizer.py), not re-derived
-    from memory alone - a subtly wrong merge-selection rule here would
-    silently mistokenize instead of crashing.
-
-    Falls back to per-UTF-8-byte tokens (`<0x0A>` etc., type 6 in
-    `tokenizer.ggml.token_type` - 256 of them, always present for this
-    vocab type) for any character with no direct vocab piece - by
-    construction the only symbols that can ever need this are the
-    *original*, never-merged single characters: anything produced by a
-    successful merge step was, by definition, already confirmed to be a
-    real vocab entry at merge time.
+    Characters with no direct vocab piece fall back to per-UTF-8-byte tokens (`<0x0A>` etc., type 6
+    in `tokenizer.ggml.token_type`, 256 always present); only never-merged single characters can
+    need this, since a successful merge was already a vocab entry.
     """
 
     def __init__(self, metadata: GGUFMetadata) -> None:
@@ -60,10 +49,7 @@ class SentencePieceTokenizer:
         self.eos_token_id: int | None = metadata.get("tokenizer.ggml.eos_token_id")
 
     def encode(self, text: str, add_bos: bool = False) -> list[int]:
-        """`add_bos` is the caller's explicit call, same contract as
-
-        `GGUFTokenizer.encode` - see that method's own docstring for why.
-        """
+        """`add_bos` is the caller's explicit call, as `GGUFTokenizer.encode` (see why there)."""
         token_ids: list[int] = []
         if add_bos and self.bos_token_id is not None:
             token_ids.append(self.bos_token_id)
@@ -73,10 +59,9 @@ class SentencePieceTokenizer:
             if span in self._token_to_id and self._control_tokens.fullmatch(span):
                 token_ids.append(self._token_to_id[span])
                 continue
-            # Real SentencePiece's add_dummy_prefix applies once, to the very first
-            # fragment of the whole call - never to a fragment that follows a literal
-            # control token elsewhere in the text (confirmed against the real HF
-            # tokenizer: "hello<s>world" -> ["▁hello", "<s>", "world"], not "▁world").
+            # add_dummy_prefix applies once, to the first fragment of the whole call, never to a
+            # fragment after a literal control token (HF tokenizer: "hello<s>world" -> ["▁hello",
+            # "<s>", "world"], not "▁world").
             normalized = self._normalize(span, add_dummy_prefix=(index == 0))
             for symbol in self._merge_piece(normalized):
                 token_ids.extend(self._symbol_to_token_ids(symbol))
@@ -100,14 +85,10 @@ class SentencePieceTokenizer:
         return replaced
 
     def _merge_piece(self, normalized: str) -> list[str]:
-        """Repeatedly merges the adjacent symbol pair whose concatenation is
-
-        a real vocab entry with the highest score, until no valid merge
-        remains - real SentencePiece BPE's actual selection rule (score,
-        not an explicit ordered merge-list like GPT-2's). O(n^2) rescan per
-        merge, same complexity class as `GGUFTokenizer._bpe`'s equivalent
-        loop - fine at real chat-message lengths, not a hot path.
-        """
+        """Repeatedly merges the adjacent symbol pair whose concatenation is a vocab entry with the
+        highest score until none remains: SentencePiece BPE's selection rule (score, not an ordered
+        merge list like GPT-2's). O(n^2) rescan per merge, as `GGUFTokenizer._bpe`: fine at
+        chat-message lengths, not a hot path."""
         symbols = list(normalized)
         while len(symbols) > 1:
             best_index = -1

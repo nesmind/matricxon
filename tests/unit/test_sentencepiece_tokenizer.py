@@ -1,24 +1,18 @@
-"""Fast, offline unit tests for SentencePieceTokenizer against a small
-
-hand-built vocab (no network, no real GGUF) - the real cross-check against
-`TinyLlama-1.1B-Chat-v1.0`'s actual HF tokenizer lives in
-scripts/oracle/validate_sentencepiece_tokenizer.py (dev-only, needs
-`transformers` + network), matching M5.5's `GGUFTokenizer` test split.
-"""
+"""Offline tests for SentencePieceTokenizer on a small hand-built vocab. The cross-check against
+TinyLlama-1.1B-Chat-v1.0's HF tokenizer is tools/oracle/validate_sentencepiece_tokenizer.py
+(dev-only)."""
 
 from app.gguf.metadata import GGUFMetadata
 from app.runtime.sentencepiece_tokenizer import SentencePieceTokenizer
 
-# A small but real-shaped SPM vocab: control tokens, a handful of "normal"
-# pieces (including one that's only reachable via a real score-based merge,
-# not present as an initial single-character symbol), and all 256
-# byte-fallback tokens so any character can round-trip.
+# A small SPM vocab: control tokens, a few normal pieces (one reachable only via a score-based
+# merge) and all 256 byte-fallback tokens.
 _NORMAL_PIECES = [
-    ("▁", 0.0),  # ▁ (lone space marker)
+    ("▁", 0.0),
     ("h", -1.0),
     ("i", -1.0),
-    ("▁h", -0.5),  # ▁h - a real merge candidate
-    ("▁hi", 2.0),  # ▁hi - the best-scoring merge, should win
+    ("▁h", -0.5),
+    ("▁hi", 2.0),
     ("▁w", -0.5),
 ]
 
@@ -58,10 +52,8 @@ class TestEncode:
         ids = tokenizer.encode("hi<s>hi")
 
         pieces = [tokenizer._id_to_token[i] for i in ids]
-        # First "hi" merges into the high-scoring "▁hi" piece (dummy-prefixed);
-        # the second "hi" gets no dummy prefix, so it can't reach that same
-        # merge (only "▁hi" is a real vocab entry here, not bare "hi") and
-        # falls back to its two individual-character pieces instead.
+        # The first "hi" merges into the dummy-prefixed "▁hi"; the second has no prefix, so it falls
+        # back to single-character pieces.
         assert pieces == ["▁hi", "<s>", "h", "i"]
 
     def test_leading_space_normalizes_the_same_as_no_leading_space(self) -> None:
@@ -79,16 +71,15 @@ class TestEncode:
     def test_unmergeable_character_falls_back_to_utf8_bytes(self) -> None:
         tokenizer = SentencePieceTokenizer(_build_metadata())
 
-        # Encoded after a control token so the dummy-prefix rule (applies
-        # only to the very first span) doesn't add an extra "▁" piece here.
-        ids = tokenizer.encode("<s>z")  # "z" has no vocab entry at all
+        # Encoded after a control token, so the dummy prefix (first span only) adds no extra "▁".
+        ids = tokenizer.encode("<s>z")
 
         assert [tokenizer._id_to_token[i] for i in ids][1:] == [f"<0x{ord('z'):02X}>"]
 
     def test_multibyte_character_falls_back_to_multiple_byte_tokens(self) -> None:
         tokenizer = SentencePieceTokenizer(_build_metadata())
 
-        ids = tokenizer.encode("<s>é")  # "é", not in this tiny vocab at all
+        ids = tokenizer.encode("<s>é")
         expected_bytes = "é".encode()
 
         assert len(ids) - 1 == len(expected_bytes)
@@ -112,8 +103,8 @@ class TestDecode:
     def test_byte_fallback_round_trips_exactly(self) -> None:
         tokenizer = SentencePieceTokenizer(_build_metadata())
         text = "zé"
-        # Same dummy-prefix-avoidance as the encode-side byte-fallback tests
-        # above - isolates the byte-fallback round trip itself.
+        # Avoids the dummy prefix, as the encode-side byte-fallback tests, to isolate the round
+        # trip.
         ids = tokenizer.encode("<s>" + text)
 
         assert tokenizer.decode(ids) == "<s>" + text

@@ -41,9 +41,13 @@ def _slot(token_ids: list[int]) -> CacheSlot:
     return CacheSlot(cache, (CTX, DTYPE), list(token_ids), prompt_len=len(token_ids))
 
 
-def _store(tmp_path: Path, **policy: int | bool) -> PersistentCacheStore:
+def _store(
+    tmp_path: Path, node_id: str = "local", rescan_seconds: float = 5.0, **policy: int | bool
+) -> PersistentCacheStore:
     settings = {"enabled": True, "budget_mb": 100, "ttl_hours": 24} | policy
-    return PersistentCacheStore(tmp_path / "c", CacheCipher(KEY), PersistencePolicy(**settings))
+    return PersistentCacheStore(
+        tmp_path / "c", CacheCipher(KEY), PersistencePolicy(**settings), node_id, rescan_seconds
+    )
 
 
 def _spill(store: PersistentCacheStore, token_ids: list[int], model: str = MODEL) -> None:
@@ -59,7 +63,7 @@ def test_spilled_slot_is_encrypted_private_and_restorable(tmp_path: Path) -> Non
     (file,) = (tmp_path / "c").glob("*.mxc")
     assert stat.S_IMODE(file.stat().st_mode) == 0o600
     raw = file.read_bytes()
-    assert b"1000" not in raw and b"m|1" not in raw  # neither tokens nor model id in the clear
+    assert b"1000" not in raw and b"m|1" not in raw
     assert store.usage()[0] == 1
 
     taken = store.take(MODEL, ids + [5, 6], DTYPE, min_tokens=0)
@@ -73,9 +77,9 @@ def test_spilled_slot_is_encrypted_private_and_restorable(tmp_path: Path) -> Non
 def test_take_needs_a_real_prefix_match_and_leaves_the_file_otherwise(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _spill(store, list(range(24)))
-    assert store.take(MODEL, [9] + list(range(1, 30)), DTYPE, 0) is None  # first block differs
-    assert store.take("other|1", list(range(30)), DTYPE, 0) is None  # other model
-    assert store.take(MODEL, list(range(30)), DTYPE, min_tokens=24) is None  # RAM has more
+    assert store.take(MODEL, [9] + list(range(1, 30)), DTYPE, 0) is None
+    assert store.take("other|1", list(range(30)), DTYPE, 0) is None
+    assert store.take(MODEL, list(range(30)), DTYPE, min_tokens=24) is None
     assert store.usage()[0] == 1
     assert store.take(MODEL, list(range(30)), DTYPE, 0) is not None
 
@@ -101,7 +105,7 @@ def test_disabled_policy_neither_writes_nor_serves(tmp_path: Path) -> None:
 
 def test_short_slots_and_oversized_files_are_not_stored(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    _spill(store, list(range(4)))  # under MIN_PERSIST_TOKENS
+    _spill(store, list(range(4)))
     store.policy.budget_mb = 0
     _spill(store, list(range(24)))
     assert store.usage()[0] == 0
@@ -124,10 +128,10 @@ def test_budget_drops_the_oldest_files_first(tmp_path: Path) -> None:
         _spill(store, list(range(start, start + 24)))
     ages = {}
     for age, name in enumerate(sorted(store._index, key=lambda n: store._index[n].saved_at)):
-        store._index[name].saved_at = time.time() - 100 + age  # strictly increasing
+        store._index[name].saved_at = time.time() - 100 + age
         ages[age] = name
     newest_two = sum(store._index[ages[i]].size for i in (1, 2))
-    policy.byte_budget = newest_two  # room for exactly the two newest files
+    policy.byte_budget = newest_two
     store.enforce_limits()
     assert store.usage()[0] == 2
     assert ages[0] not in store._index and ages[1] in store._index and ages[2] in store._index
@@ -165,7 +169,7 @@ def test_a_tampered_body_is_rejected_and_deleted(tmp_path: Path) -> None:
 def test_clear_and_stray_tmp_cleanup(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _spill(store, list(range(24)))
-    (tmp_path / "c" / "x.tmp").write_bytes(b"junk")
+    (tmp_path / "c" / "local-x.tmp").write_bytes(b"junk")
     store.clear()
     assert store.usage()[0] == 0
     assert _store(tmp_path) and not os.listdir(tmp_path / "c")
@@ -186,7 +190,7 @@ def test_forget_drops_only_that_chats_files_and_refuses_its_later_spills(tmp_pat
 
     store.spill_async(MODEL, _slot_with_tag(list(range(100, 124)), "chat-a"))
     store.flush()
-    assert store.usage()[0] == 1  # the deleted chat's late spill is dropped
+    assert store.usage()[0] == 1
     assert store.forget("") == 0
 
 
@@ -203,3 +207,75 @@ def test_tag_survives_a_restart_scan(tmp_path: Path) -> None:
 
     reopened = _store(tmp_path)
     assert reopened.forget("chat-a") == 1
+
+
+def test_startup_cleanup_removes_only_this_nodes_leftovers(tmp_path: Path) -> None:
+    _store(tmp_path)
+    (tmp_path / "c" / "nodeA-1.tmp").write_bytes(b"a")
+    (tmp_path / "c" / "nodeB-1.tmp").write_bytes(b"b")
+    (tmp_path / "c" / "x.mxc.nodeA.claim").write_bytes(b"c")
+    _store(tmp_path, node_id="nodeA")
+    assert sorted(os.listdir(tmp_path / "c")) == ["nodeB-1.tmp"]
+
+
+def test_tmp_files_are_named_after_the_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path, node_id="nodeA")
+    seen: list[str] = []
+    real_replace = os.replace
+    monkeypatch.setattr(os, "replace", lambda a, b: (seen.append(Path(a).name), real_replace(a, b)))
+    _spill(store, list(range(24)))
+    assert seen and seen[0].startswith("nodeA-") and seen[0].endswith(".tmp")
+
+
+def test_two_nodes_cannot_both_take_the_same_file(tmp_path: Path) -> None:
+    ids = list(range(24))
+    writer = _store(tmp_path, node_id="a")
+    _spill(writer, ids)
+    other = _store(tmp_path, node_id="b")
+    assert writer.take(MODEL, ids + [1], DTYPE, 0) is not None
+    assert other.take(MODEL, ids + [1], DTYPE, 0) is None
+    assert other.usage()[0] == 0 and not os.listdir(tmp_path / "c")
+
+
+def test_a_claimed_file_is_invisible_to_the_other_node(tmp_path: Path) -> None:
+    ids = list(range(24))
+    _spill(_store(tmp_path, node_id="a"), ids)
+    (file,) = (tmp_path / "c").glob("*.mxc")
+    os.replace(file, file.with_name(file.name + ".a.claim"))
+    assert _store(tmp_path, node_id="b").usage()[0] == 0
+
+
+def test_rescan_sees_files_other_nodes_wrote_and_removed(tmp_path: Path) -> None:
+    ids = list(range(24))
+    reader = _store(tmp_path, node_id="b", rescan_seconds=0.0)
+    assert reader.usage()[0] == 0
+    _spill(_store(tmp_path, node_id="a"), ids)
+    assert reader.take(MODEL, ids + [1], DTYPE, 0) is not None
+    _spill(_store(tmp_path, node_id="a"), ids)
+    for file in (tmp_path / "c").glob("*.mxc"):
+        file.unlink()
+    assert reader.take(MODEL, ids + [1], DTYPE, 0) is None and reader.usage()[0] == 0
+
+
+def test_rescan_leaves_files_it_cannot_read_for_their_owner(tmp_path: Path) -> None:
+    store = _store(tmp_path, rescan_seconds=0.0)
+    foreign = tmp_path / "c" / "foreign.mxc"
+    foreign.write_bytes(b"MXC1-not-ours")
+    store.take(MODEL, list(range(30)), DTYPE, 0)
+    assert foreign.exists() and store.usage()[0] == 0
+
+
+def test_clear_and_forget_reach_files_other_nodes_wrote(tmp_path: Path) -> None:
+    admin = _store(tmp_path, node_id="a", rescan_seconds=3600.0)
+    other = _store(tmp_path, node_id="b")
+    for chat in ("c1", "c2"):
+        slot = _slot(list(range(24)))
+        slot.tag = chat
+        other.spill_async(MODEL, slot)
+    other.flush()
+    assert admin.usage()[0] == 0
+    assert admin.forget("c1") == 1 and len(list((tmp_path / "c").glob("*.mxc"))) == 1
+    admin.clear()
+    assert not list((tmp_path / "c").glob("*.mxc"))

@@ -7,12 +7,10 @@ from app.runtime.wordpiece_tokenizer import WordPieceTokenizer
 class EmbeddingEngine:
     """Single forward pass + mean-pooling into one embedding vector.
 
-    v1 encodes exactly one prompt per call (no batching, no padding), so
-    mean-pooling is a plain average over every position - there's no
-    attention_mask needed to exclude padding, since there isn't any.
-    Followed by L2 normalization: confirmed against both real local
-    embedding models' actual `sentence-transformers` config (a
-    `2_Normalize` step after mean-pooling), not assumed.
+    v1 encodes one prompt per call (no batching, no padding), so mean-pooling is a plain average
+    over every position: no attention_mask needed. Followed by L2 normalization, confirmed against
+    both local embedding models' `sentence-transformers` config (a `2_Normalize` step after
+    mean-pooling).
     """
 
     def __init__(self, architecture: ModelArchitecture, tokenizer: WordPieceTokenizer) -> None:

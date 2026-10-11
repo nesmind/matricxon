@@ -17,17 +17,10 @@ def _causal_mask(
 
 
 class GraniteAttention(nn.Module):
-    """`GroupedQueryAttention` (`mistral3_layers.py`) plus one real difference: `attention_scale`
-    REPLACES `scaled_dot_product_attention`'s own default `1/sqrt(head_dim)` scale entirely -
-    IBM Granite's real `attention_multiplier` (confirmed against `modeling_granite.py`: the
-    attention-weight matmul is scaled by this value directly, nothing else). `attention_scale` is
-    `None` when the real GGUF carries no `{arch}.attention.scale` key -
-    `F.scaled_dot_product_attention(..., scale=None)` is PyTorch's own documented way of saying
-    "use the default," so that fallback needs no extra branching here at all. Precedent for
-    threading a non-default `scale=` through this call: `Gemma4Attention.forward`
-    (`gemma4_layers.py`) already overrides it with a fixed `1.0`; this generalizes that to an
-    arbitrary real per-model value.
-    """
+    """`GroupedQueryAttention` (`mistral3_layers.py`) where `attention_scale` replaces the default
+    `1/sqrt(head_dim)` entirely (IBM Granite's `attention_multiplier`). `None` when the GGUF has no
+    `{arch}.attention.scale`, which `F.scaled_dot_product_attention(scale=None)` treats as the
+    default."""
 
     def __init__(
         self,
@@ -72,10 +65,10 @@ class GraniteAttention(nn.Module):
         else:
             cache_offset = 0
 
-        # enable_gqa: SDPA shares each k/v head across its query-head group itself - no
-        # repeat_interleave copy of the whole cached k/v per step (measured on this project's
-        # laptop: at a 200-token context that copy cost ~90 ms per generated token over 28
-        # layers, vs ~7 ms without it; the gap grows with the conversation).
+        # enable_gqa: SDPA shares each k/v head across its query-head group itself, with no
+        # repeat_interleave copy of the
+        # cached k/v per step (measured on the dev machine: at 200 tokens that copy cost ~90 ms
+        # per generated token over 28 layers vs ~7 ms without; the gap grows with the conversation).
         if kv_cache is not None:
             out = fused_cached_attention(q, k, v, cache_offset, self.attention_scale)
             if out is None:
@@ -92,18 +85,12 @@ class GraniteAttention(nn.Module):
 
 
 class GraniteDecoderLayer(nn.Module):
-    """Same pre-norm two-block layout as `Mistral3DecoderLayer`, but the branch *output* (not the
-    residual stream) is scaled by `residual_multiplier` before both adds - IBM Granite's real
-    `residual_multiplier`, applied identically after attention and after the MLP (confirmed
-    against `modeling_granite.py`: `hidden_states = residual + hidden_states * residual_multiplier`,
-    same formula both places - not `(residual + hidden_states) * residual_multiplier`, a real,
-    easy-to-get-backwards mistake this docstring exists to warn against).
+    """Same pre-norm two-block layout as `Mistral3DecoderLayer`, but the branch output (not the
+    residual stream) is scaled by `residual_multiplier` before both adds: `residual + hidden_states
+    * residual_multiplier`, not `(residual + hidden_states) * residual_multiplier`.
 
-    `mlp` is built by the caller, not this class (dependency injection) - dense
-    `GraniteArchitecture` injects a plain `SwiGLUMLP` (`app/architectures/layers.py`),
-    `GraniteMoeArchitecture` injects a `GraniteMoeFFN` (`granitemoe_layers.py`) - this class has
-    zero MoE-awareness, so the attention block and both `residual_multiplier` sites are written
-    and tested exactly once for both.
+    `mlp` is injected by the caller (`SwiGLUMLP` for dense Granite, `GraniteMoeFFN` for GraniteMoE),
+    so the attention block and both multiplier sites are written and tested once for both.
     """
 
     def __init__(

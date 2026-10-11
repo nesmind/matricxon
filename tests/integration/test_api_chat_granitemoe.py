@@ -1,10 +1,8 @@
-"""`/api/chat` against a tiny but real `granitemoe` GGUF (see tests/tiny_gguf_granitemoe.py) -
-the sparse-MoE equivalent of test_api_chat_granite.py. Real GGUFModelLoader/
-GraniteMoeArchitecture/GraniteMoeFFN/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked - the
-router's real top-k-then-softmax/3D-expert-tensor logic is independently unit-tested in
-tests/unit/test_granitemoe_ffn.py. See scripts/oracle/validate_granitemoe.py for the full
-real-weight numeric proof.
-"""
+"""`/api/chat` against a tiny `granitemoe` GGUF (tests/tiny_gguf_granitemoe.py), the sparse-MoE
+equivalent of test_api_chat_granite.py. Real
+GGUFModelLoader/GraniteMoeArchitecture/GraniteMoeFFN/GGUFTokenizer/ChatEngine/NDJSON stack, not
+mocked; the router's top-k-then-softmax/3D-expert logic is unit-tested in
+tests/unit/test_granitemoe_ffn.py. Real-weight proof: tools/oracle/validate_granitemoe.py."""
 
 import json
 
@@ -74,8 +72,8 @@ class TestGraniteMoeChatHappyPath:
 
 
 class TestGraniteMoeChatTiedEmbeddings:
-    """Real GraniteMoE checkpoints ship `tie_word_embeddings: true` - same expected-common-case
-    guard as TestGraniteChatTiedEmbeddings in test_api_chat_granite.py."""
+    """Real GraniteMoE checkpoints ship `tie_word_embeddings: true`: the same guard as
+    TestGraniteChatTiedEmbeddings in test_api_chat_granite.py."""
 
     def test_streams_ndjson_chunks_ending_in_a_done_line(
         self, client: TestClient, tiny_granitemoe_tied_embeddings_model: InstalledModel

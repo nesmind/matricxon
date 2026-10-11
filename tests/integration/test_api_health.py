@@ -45,11 +45,8 @@ def test_supported_quantizations_matches_the_real_registry(client: TestClient) -
 
 
 def test_response_never_touches_the_model_catalog(client: TestClient) -> None:
-    """A real, deliberate property: this is static capability data derived
-
-    from the code itself, not the local model catalog - `/api/health`
-    must answer identically whether or not any model is installed.
-    """
+    """Deliberate: static capability data derived from the code, not the model catalog;
+    `/api/health` must answer identically whether or not any model is installed."""
     response = client.get("/api/health")
 
     assert response.status_code == 200

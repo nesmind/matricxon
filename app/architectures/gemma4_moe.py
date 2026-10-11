@@ -1,32 +1,26 @@
-"""Gemma4's real Mixture-of-Experts block - genuinely different from GraniteMoE/Mixtral's own
-MoE (both already implemented, see `granitemoe_layers.py`/`llama_moe.py`), not reusable
-unchanged. Ported from real HF `transformers` source (`transformers/models/gemma4/
-modular_gemma4.py`'s `Gemma4TextRouter`/`Gemma4TextDecoderLayer`,
-`Gemma4TextExperts(MixtralExperts)` -> `transformers/models/mixtral/modeling_mixtral.py`'s real
-`MixtralExperts`) and cross-checked against real llama.cpp GGUF-inference source
-(`src/models/gemma4.cpp`) - both agree.
+"""Gemma4's Mixture-of-Experts block, different from GraniteMoE/Mixtral's
+(`granitemoe_layers.py`/`llama_moe.py`), so not reusable unchanged. Ported from HF `transformers`
+(`models/gemma4/modular_gemma4.py`'s `Gemma4TextRouter`/`Gemma4TextDecoderLayer`,
+`Gemma4TextExperts(MixtralExperts)` -> `models/mixtral/modeling_mixtral.py`) and cross-checked
+against llama.cpp (`src/models/gemma4.cpp`); both agree.
 
-Real, confirmed differences from GraniteMoeFFN's own MoE:
+Differences from GraniteMoeFFN:
 - The router runs an unscaled RMSNorm, then a learned elementwise `scale` + a fixed
-  `1/sqrt(hidden_size)` multiply, *before* its projection - GraniteMoE's router is a bare
-  `nn.Linear` on the raw hidden state, no pre-norm/pre-scale at all.
-- A learned `per_expert_scale` multiplies the final top-k weights *after* renormalization -
-  GraniteMoE has no such per-expert term.
-- The expert FFN uses Gemma4's own real `gelu_pytorch_tanh` activation (real HF
-  `config.hidden_activation`, same as its dense `Gemma4MLP`), not GraniteMoE's hardcoded SiLU.
-- The result is *added* to a real, always-computed shared dense MLP branch (each wrapped in its
-  own extra norm) rather than replacing the FFN outright - GraniteMoE has no shared expert at
-  all (see that class's own docstring).
-Router order (softmax-over-all-experts-then-topk-then-renormalize) is still algebraically
-identical to GraniteMoE's topk-then-softmax, for the same reason already proven when that class
-was reused for Mixtral (see `llama_moe.py`'s own docstring) - softmax is monotonic, so both pick
-the same top-k set, and renormalizing a softmax subset reproduces softmax computed over just it.
+  `1/sqrt(hidden_size)` multiply before its projection (GraniteMoE's router is a bare `nn.Linear` on
+  the raw hidden state).
+- A learned `per_expert_scale` multiplies the final top-k weights after renormalization (GraniteMoE
+  has none).
+- The expert FFN uses Gemma4's `gelu_pytorch_tanh` (HF `config.hidden_activation`, as its dense
+  `Gemma4MLP`), not SiLU.
+- The result is added to an always-computed shared dense MLP branch (each with its own extra norm),
+  not replacing the FFN; GraniteMoE has no shared expert.
+Router order (softmax over all experts, topk, renormalize) equals GraniteMoE's topk-then-softmax
+(proved when that class was reused for Mixtral; `llama_moe.py`): softmax is monotonic, so both pick
+the same top-k, and renormalizing a softmax subset equals softmax over just it.
 
-No real gemma-4-*-A*B-it (MoE) GGUF exists to validate this against yet - the only real Gemma4
-checkpoint installed anywhere in this project (`gemma-4-E2B-it`) is dense (`expert_count=0`, see
-`Gemma4Architecture.unsupported_features`'s own `"moe"` flag) - tracked as a real-weight
-validation gap in ROADMAP.md, same category as command-r/falcon's own unvalidated real-weight
-generation.
+No real gemma-4-*-A*B-it (MoE) GGUF exists to validate against: the only installed Gemma4 checkpoint
+(`gemma-4-E2B-it`) is dense (`expert_count=0`, `Gemma4Architecture.unsupported_features`'s `"moe"`
+flag). A real-weight validation gap in ROADMAP.md, like command-r/falcon.
 """
 
 from collections.abc import Callable
@@ -46,12 +40,13 @@ _GELU_TANH = partial(F.gelu, approximate="tanh")
 
 
 def detect_moe(metadata: GGUFMetadata, arch: str) -> tuple[int | None, int | None, int | None]:
-    """(num_experts, num_experts_per_tok, expert_ffn_len), all None for a dense (non-MoE) real
-    gemma4 file - same real `expert_count`/`expert_used_count` keys `llama_moe.detect_moe`/
-    `GraniteMoeArchitecture` already read, plus gemma4's own separate `expert_feed_forward_length`
-    (its expert FFN width is real and independent of the shared dense MLP's own `ffn_len`,
-    confirmed: real llama.cpp reads it via a distinct `LLM_KV_EXPERT_FEED_FORWARD_LENGTH` key,
-    not reusing `feed_forward_length`)."""
+    """(num_experts, num_experts_per_tok, expert_ffn_len), all None for a dense gemma4 file. Same
+    `expert_count`/
+    `expert_used_count` keys as `llama_moe.detect_moe`/`GraniteMoeArchitecture`, plus gemma4's own
+    `expert_feed_forward_length` (independent of the shared dense MLP's `ffn_len`; llama.cpp reads
+    it via
+    `LLM_KV_EXPERT_FEED_FORWARD_LENGTH`, not `feed_forward_length`).
+    """
     num_experts = metadata.get_u32(f"{arch}.expert_count")
     if not num_experts:
         return None, None, None
@@ -89,11 +84,13 @@ class Gemma4Router(nn.Module):
 
 
 class Gemma4MoEBlock(nn.Module):
-    """Combines a real, always-computed dense MLP output with a sparse expert branch by
-    addition - real op order (confirmed from both HF `modular_gemma4.py` and llama.cpp's
-    `src/models/gemma4.cpp`, they agree): `post_norm_1(dense_out) + post_norm_2(experts(
-    router(pre_norm_2(residual))))`. The router/experts see `residual` (the pre-dense-MLP
-    hidden state), not the dense MLP's own output."""
+    """Combines an always-computed dense MLP output with a sparse expert branch by addition (op
+    order from HF
+    `modular_gemma4.py` and llama.cpp's `src/models/gemma4.cpp`, which agree):
+    `post_norm_1(dense_out) + post_norm_2(experts(router(pre_norm_2(residual))))`. Router/experts
+    see `residual`
+    (the pre-dense-MLP hidden state), not the dense MLP's output.
+    """
 
     def __init__(
         self,
@@ -130,10 +127,11 @@ def materialize_moe(
     enabled: bool,
     mark_used: Callable[[GGUFModelLoader], None],
 ) -> None:
-    """Router/norms: always a plain `.copy_()` (small, real per-model/per-expert scalars and
-    vectors - packing them wouldn't meaningfully help). Experts: `QuantizedMoEExperts`
-    (`app/architectures/moe_experts.py`) - real per-expert `QuantizedLinear`s when `enabled` and
-    a real GEMV kernel exists for this checkpoint's own expert-tensor type."""
+    """Router/norms: a plain `.copy_` (small per-model/per-expert scalars and vectors; packing
+    wouldn't help).
+    Experts: `QuantizedMoEExperts` (`moe_experts.py`), per-expert `QuantizedLinear`s when `enabled`
+    and a GEMV kernel exists for this checkpoint's expert-tensor type.
+    """
     moe.router.proj.weight.copy_(loader.load_tensor(prefix + "ffn_gate_inp.weight"))
     moe.router.scale.data.copy_(loader.load_tensor(prefix + "ffn_gate_inp.scale"))
     moe.router.per_expert_scale.data.copy_(loader.load_tensor(prefix + "ffn_down_exps.scale"))

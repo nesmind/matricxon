@@ -7,25 +7,18 @@ from app.server.errors import PromptTooLongError
 class KVCache:
     """Pre-allocated per-layer key/value cache for autoregressive generation.
 
-    pAIring resends the full history every call; `PromptCache`
-    (app/runtime/prompt_cache.py) keeps one of these alive between calls and
-    `truncate()`s it back to the prefix the next prompt shares, so only the
-    new tokens get computed.
+    pAIring resends the full history each call; `PromptCache` (app/runtime/prompt_cache.py) keeps
+    one of these alive between calls and `truncate`s it to the prefix the next prompt shares, so
+    only new tokens are computed.
 
-    Writes are keyed by absolute position via `update()`, but the cache's
-    committed length only moves forward on `advance()` - every layer in one
-    forward pass must see the same starting offset, and only the caller
-    (after every layer has run) knows the step is actually done.
+    Writes are keyed by absolute position via `update`, but the committed length moves only on
+    `advance`: every layer in a forward pass must see the same starting offset, and only the caller
+    (after every layer ran) knows the step is done.
 
-    `layer_shapes` is a `(n_head_kv, head_dim)` pair *per layer*, not one
-    shared pair for the whole model - most architectures (mistral3, llama)
-    just repeat the same pair `n_layer` times, but Gemma4's real per-layer-
-    type head dims (8 kv-heads of dim 256 on local/sliding layers, 1 of dim
-    512 - effectively MQA - on global layers, confirmed via its real GGUF
-    tensor shapes) genuinely need a separate tensor per layer rather than
-    one shared `(n_layer, ...)` tensor, which is why this stores a list of
-    per-layer tensors instead of the single stacked tensor M4 originally
-    built.
+    `layer_shapes` is a `(n_head_kv, head_dim)` pair per layer: most architectures (mistral3, llama)
+    repeat one pair `n_layer` times, but Gemma4's per-layer-type head dims (8 kv-heads of dim 256 on
+    local/sliding layers, 1 of dim 512, effectively MQA, on global ones) need a tensor per layer,
+    hence a list of per-layer tensors rather than one stacked tensor.
     """
 
     def __init__(
@@ -60,10 +53,9 @@ class KVCache:
     def update(
         self, layer_idx: int, k: torch.Tensor, v: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Writes `k`/`v` (batch, n_head_kv, n_new, head_dim) at the cache's
-        current length and returns the full (cached + new) key/value tensors
-        for that layer, up to but not including `advance()`'s new length.
-        """
+        """Writes `k`/`v` (batch, n_head_kv, n_new, head_dim) at the cache's current length and
+        returns the full (cached + new) key/value tensors for that layer, up to but not including
+        `advance`'s new length."""
         new_length = self._length + k.shape[-2]
         if new_length > self._max_seq_len:
             raise PromptTooLongError(
@@ -80,8 +72,8 @@ class KVCache:
         self._length += n_new_tokens
 
     def truncate(self, length: int) -> None:
-        """Rolls the committed length back to `length` (<= the current length) - positions past it
-        are simply overwritten by the next `update()`, nothing needs clearing."""
+        """Rolls the committed length back to `length` (<= current); later positions are overwritten
+        by the next `update`, nothing needs clearing."""
         if not 0 <= length <= self._length:
             raise ValueError(f"can't truncate a cache of length {self._length} to {length}")
         self._length = length
@@ -90,11 +82,9 @@ class KVCache:
         self, start: int, count: int, rotations: list[tuple[torch.Tensor, torch.Tensor]]
     ) -> None:
         """Removes positions `[start, start + count)`: everything after slides down by `count` and
-        its
-        keys are rotated (one `(cos, sin)` per layer, see `RotaryEmbedding.shift_table`) to carry
-        the
-        new position, so the kept tokens need no recomputing. Values hold no position - just
-        moved."""
+        its keys are rotated (one `(cos, sin)` per layer, `RotaryEmbedding.shift_table`) to carry
+        the new position, so kept tokens need no recomputing. Values hold no position and just
+        move."""
         end = self._length
         if start < 0 or count <= 0 or start + count > end or len(rotations) != len(self._k):
             raise ValueError(f"can't drop {count} positions at {start} of a cache of length {end}")
@@ -109,10 +99,10 @@ class KVCache:
         self._length = end - count
 
     def fork(self, length: int, max_seq_len: int | None = None) -> "KVCache":
-        """A new cache holding a copy of the first `length` positions; this one is left untouched.
-        Cheap next to recomputing those positions - how `PromptCache` lets a second conversation
-        build on a shared prefix without destroying the first one's cache. `max_seq_len` gives the
-        copy a different capacity (a larger `num_ctx` than this cache was built for)."""
+        """A new cache holding a copy of the first `length` positions; this one is untouched. Cheap
+        next to recomputing: how `PromptCache` lets a second conversation build on a shared prefix
+        without destroying the first's cache. `max_seq_len` gives the copy another capacity (a
+        larger `num_ctx` than this cache was built for)."""
         if not 0 <= length <= self._length:
             raise ValueError(f"can't fork a cache of length {self._length} at {length}")
         capacity = max_seq_len or self._max_seq_len
@@ -130,7 +120,7 @@ class KVCache:
         return sum(t.numel() * t.element_size() for t in (*self._k, *self._v))
 
     def export(self, length: int) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-        """Copies of the first `length` positions' keys and values, one tensor per layer - owning
+        """Copies of the first `length` positions' keys and values, one tensor per layer, owning
         only those positions (a bare slice would drag the whole preallocated buffer into a save)."""
         if not 0 <= length <= self._length:
             raise ValueError(f"can't export {length} positions of a cache of length {self._length}")
@@ -140,8 +130,8 @@ class KVCache:
         )
 
     def load(self, keys: list[torch.Tensor], values: list[torch.Tensor]) -> None:
-        """Fills an empty cache from `export()` output and sets its length to match. A mismatch
-        with this cache's layers/shapes/dtype (a stale or foreign save) raises `ValueError`."""
+        """Fills an empty cache from `export` output and sets its length. A mismatch with this
+        cache's layers/shapes/dtype (a stale or foreign save) raises `ValueError`."""
         if len(keys) != len(self._k) or len(values) != len(self._v):
             raise ValueError("saved cache has a different number of layers")
         length = keys[0].shape[2] if keys else 0

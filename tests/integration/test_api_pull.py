@@ -1,9 +1,7 @@
-"""HTTP-level /api/pull tests. The bad-tag-format case needs no network
-(HFModelTag.parse fails before any resolver call), which is what's tested
-here - the full resolve+download happy path is covered directly against
-PullJob in tests/unit/test_pull_job.py (mocked resolver/downloader), and
-against a real Hugging Face repo in scripts/manual_pull_check.py.
-"""
+"""HTTP-level /api/pull tests. The bad-tag-format case needs no network (HFModelTag.parse fails
+before any resolver call), so it is what's tested here; the resolve+download path is covered against
+PullJob in tests/unit/test_pull_job.py (mocked resolver/downloader) and against a real Hugging Face
+repo in tools/manual_pull_check.py."""
 
 import json
 

@@ -19,48 +19,43 @@ logger = logging.getLogger(__name__)
 
 
 class GenerationCancelledError(Exception):
-    """Raised by a `_forward_impl`'s layer loop when `stop_check()` reports a stop mid-forward-pass
-    (see `forward`'s own docstring). A plain `Exception`, not a `MatricxonError` - this must never
-    reach a client as an HTTP error response; `ChatEngine.stream` catches it internally and ends
-    generation cleanly, the same way an EOS token or a between-token stop already does.
+    """Raised by a `_forward_impl` layer loop when `stop_check` reports a stop mid-forward-pass
+    (see `forward`). A
+    plain `Exception`, not a `MatricxonError`: it never reaches a client as an HTTP error;
+    `ChatEngine.stream`
+    catches it and ends generation cleanly, like an EOS token or a between-token stop.
     """
 
 
 class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
     """Base class for a model built directly from a GGUF file's weights.
 
-    Hyperparameters are read generically off GGUF's `<arch>.*` metadata
-    namespace (see GGUFMetadata.arch_key) rather than hardcoded, so a new
-    architecture only needs a new subclass, not changes here.
+    Hyperparameters are read generically from GGUF's `<arch>.*` metadata (GGUFMetadata.arch_key), so
+    a new architecture needs only a subclass.
 
-    M10's on-the-fly dequant: `from_gguf` no longer copies real weight data
-    in eagerly - it defers that (see `_defer_materialization`/
-    `_ensure_materialized`) until this model's first real forward pass,
-    caching the result for every call after that. See this class's
-    `forward`/`_ensure_materialized`/`close` and each subclass's own
-    `_materialize_weights` for the mechanics.
+    On-the-fly dequant: `from_gguf` defers copying weight data
+    (`_defer_materialization`/`_ensure_materialized`) until the first forward pass, then caches it.
+    See `forward`, `_ensure_materialized`, `close` and each subclass's `_materialize_weights`.
     """
 
-    #: The real `general.architecture` string this class resolves (e.g.
-    #: `"mistral3"`) - each subclass's own `supports()` already compares
-    #: against this same string, so it lives here once as real *data*
-    #: (`GET /api/health` reads it directly, see app/routers/health_router.py)
-    #: rather than being re-parsed back out of each `supports()` method's
-    #: comparison logic.
+    # The `general.architecture` string this class resolves (e.g. `"mistral3"`). Each `supports`
+    # compares against
+    # it; kept here as data so `GET /api/health` (app/routers/health_router.py) reads it directly.
     NAME: ClassVar[str]
-    #: True for an architecture with real, working Mixture-of-Experts support - not every
-    #: `NAME`-matching checkpoint is MoE (a real `llama` GGUF is dense unless its own metadata
-    #: activates Mixtral's expert branch, see `llama_moe.detect_moe`), but the *class* can
-    #: handle one if given it. `GET /api/health` reads this directly (see
-    #: `ArchitectureRegistry.moe_supported_names`), same reasoning as `NAME` itself.
+    # True for an architecture with working Mixture-of-Experts support. Not every `NAME`-matching
+    # checkpoint is MoE
+    # (a `llama` GGUF is dense unless its metadata activates Mixtral's experts,
+    # `llama_moe.detect_moe`), but the
+    # class can handle one. Read by `GET /api/health` (`ArchitectureRegistry.moe_supported_names`).
     SUPPORTS_MOE: ClassVar[bool] = False
-    #: True for an architecture whose `_forward_impl` really splices paired-mmproj image embeddings
-    #: (see `ArchitectureRegistry.vision_supported_names`; `capabilities.py` derives its
-    #: "vision" flag from the same set, so the two can't drift).
+    # True for an architecture whose `_forward_impl` splices paired-mmproj image embeddings
+    # (`ArchitectureRegistry.vision_supported_names`; `capabilities.py` derives "vision" from the
+    # same set).
     SUPPORTS_VISION: ClassVar[bool] = False
-    #: True for an architecture whose forward pass gives the same logits for a decode step run as
-    #: part of a batch of sequences (`app.runtime.batch_decode`, `batch_cache`) as run alone -
-    #: checked per architecture in tests/unit/test_batched_decode.py before it is set.
+    # True for an architecture whose forward pass gives the same logits for a decode step run in a
+    # batch of
+    # sequences (`app.runtime.batch_decode`, `batch_cache`) as alone; checked per architecture in
+    # tests/unit/test_batched_decode.py before it is set.
     SUPPORTS_BATCHED_DECODE: ClassVar[bool] = False
     _last_logits_only: bool = False
 
@@ -69,17 +64,17 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
         self._pending_loader: GGUFModelLoader | None = None
         self._materialized = False
         self._materialize_lock = threading.Lock()
-        # Set by `_materialize_weights` (via `_mark_quantized_native_used`) only when quantized-
-        # native compute (see app.architectures.quantized_linear.QuantizedLinear) actually built
-        # at least one real `QuantizedLinear` for this load - unlike every other tensor, those
-        # hold a live reference to this loader's own raw (still-quantized) mmap bytes for the
-        # model's *entire* lifetime, not just through materialization - see
-        # `_ensure_materialized`'s own docstring for why this changes when the mmap gets closed.
+        # Set by `_materialize_weights` (via `_mark_quantized_native_used`) when quantized-native
+        # compute
+        # (quantized_linear.QuantizedLinear) built at least one real `QuantizedLinear`. Those hold a
+        # live reference to the
+        # loader's raw mmap bytes for the model's *whole* lifetime, which changes when the mmap
+        # closes (see `_ensure_materialized`).
         self._quantized_loader: GGUFModelLoader | None = None
 
-    # : True when every layer caches keys already rotated by a plain `RotaryEmbedding` (whole head),
+    # True when every layer caches keys already rotated by a plain `RotaryEmbedding` (whole head),
     # so
-    #: `context_shift_rotations` is exact. Off for hybrid caches and partial/multi-axis rotary.
+    # `context_shift_rotations` is exact. Off for hybrid caches and partial/multi-axis rotary.
     supports_context_shift: ClassVar[bool] = False
 
     def _rope_for_layer(self, layer_idx: int) -> RotaryEmbedding:
@@ -87,7 +82,7 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
 
     def context_shift_rotations(self, count: int) -> list[tuple[torch.Tensor, torch.Tensor]] | None:
         """One `(cos, sin)` per KV-cache layer that moves its cached keys `count` positions earlier
-        (see `KVCache.drop_range`), or None when this architecture can't shift its cache."""
+        (`KVCache.drop_range`), or None if this architecture can't shift its cache."""
         if not self.supports_context_shift:
             return None
         return [
@@ -96,19 +91,12 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
         ]
 
     def build_cache(self, max_seq_len: int, dtype: torch.dtype) -> object:
-        """Builds the cache object `ChatEngine.stream()` passes into every real `forward()` call
-        for this model. Default: today's plain per-attention-layer `KVCache`, built from
-        `kv_cache_layer_shapes` - reproduces exactly what `ChatEngine` used to construct directly
-        itself before this hook existed, so every architecture except `NemotronHArchitecture`
-        needs no change at all to keep working. Override only when a model's real cache shape
-        isn't "one K/V tensor pair per layer, uniformly" - `nemotron_h`'s hybrid Mamba-2/
-        attention/MLP layers (see `NemotronHHybridCache`, `app/runtime/mamba_cache.py`) are the
-        one real exception so far: a Mamba-2 layer's real state (a fixed-size recurrent SSM state
-        plus a short conv1d history, never growing with sequence length) has nothing in common
-        with a K/V pair's shape, so `kv_cache_layer_shapes` - not ABC-enforced, a pure per-
-        subclass convention (confirmed: zero references to it anywhere in this base class) - is
-        simply never defined by that architecture; it overrides this method instead.
-        """
+        """Builds the cache `ChatEngine.stream` passes to every `forward`. Default: a plain
+        per-attention-layer `KVCache` from `kv_cache_layer_shapes`. Override only when the cache
+        isn't one K/V pair per layer: `nemotron_h`'s hybrid Mamba-2/attention/MLP layers
+        (`NemotronHHybridCache`, `app/runtime/mamba_cache.py`) keep a fixed-size SSM state plus a
+        short conv1d history, so it defines no `kv_cache_layer_shapes` (a per-subclass convention)
+        and overrides this."""
         return KVCache(
             layer_shapes=self.kv_cache_layer_shapes,
             max_seq_len=max_seq_len,
@@ -123,56 +111,43 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
 
     @classmethod
     def unsupported_features(cls, metadata: GGUFMetadata) -> list[str]:
-        """Real per-checkpoint feature flags `metadata` activates that this class does NOT
-        actually implement, despite `supports()` returning True for it - a real gap this closes
-        (2026-09-29): Gemma4Architecture claimed "completion" support for a real gemma-4-E2B-it
-        GGUF whose Per-Layer Embeddings and cross-layer KV reuse it silently never read at all,
-        with nothing distinguishing it from a fully-supported checkpoint until that was found and
-        fixed by hand. `supports()` only ever checks the architecture *name* string - some real
-        architectures gate an entire different code path behind metadata instead of a separate
-        name (the same real pattern `llama`'s own Mixtral MoE detection already handles
-        correctly - see `llama_moe.detect_moe` - but doesn't self-report if it didn't).
+        """Per-checkpoint feature flags `metadata` activates that this class does NOT implement,
+        though `supports` is True. Closes a gap: Gemma4Architecture claimed
+        "completion" for a gemma-4-E2B-it GGUF whose Per-Layer Embeddings and cross-layer KV reuse
+        it silently ignored. `supports` checks only the architecture name, but some architectures
+        gate another code path behind metadata (as `llama`'s Mixtral MoE detection,
+        `llama_moe.detect_moe`).
 
-        Empty (the default here) means "no *known* gated-variant gap", not "fully verified" -
-        same honesty level `has_confirmed_chat_format` already documents for chat templates.
-        Overridden only by architectures with a real, documented such gap (see
-        `Gemma4Architecture`'s own override) - every other architecture inherits this default
-        unchanged. Surfaced via `app.architectures.registry.unsupported_features` ->
-        `effective_capabilities`'s own `"architecture_features_unsupported"` flag, so a caller
-        (pAIring's model list) can warn before a real request silently produces wrong output
-        instead of a clean error."""
+        Empty (default) means no known gated-variant gap, not "fully verified". Overridden only for
+        a documented gap (`Gemma4Architecture`). Surfaced via
+        `app.architectures.registry.unsupported_features` -> `effective_capabilities`'s
+        `"architecture_features_unsupported"` flag, so pAIring's model list can warn before a
+        request silently produces wrong output.
+        """
         return []
 
     @classmethod
     @abstractmethod
     def from_gguf(cls, loader: GGUFModelLoader) -> "ModelArchitecture":
-        """Builds the module graph (cheap: shapes/dtypes only, no tensor
-
-        bytes read yet) and defers loading its real weights via `loader`
-        until first use - see `_defer_materialization`.
+        """Builds the module graph (cheap: shapes/dtypes only, no tensor bytes read) and defers
+        loading its weights via
+        `loader` until first use (`_defer_materialization`).
         """
 
     @classmethod
     def _construct_without_init(cls, *args: object, **kwargs: object) -> "ModelArchitecture":
-        """Builds `cls(*args, **kwargs)` without running any of nn.Linear/nn.Embedding's default
-        random weight initialization - every real weight gets `.copy_()`'d in from the GGUF file
-        immediately after construction (see each subclass's own from_gguf), so that default init
-        is pure wasted work. Not a rounding error either: measured live building a real 3.4B-param
-        model, plain construction (random-initializing every parameter) took over 90 seconds and
-        never finished on a CPU without hardware bf16 support (nn.init's fill kernels hit the same
-        slow emulated path as matmul does - see app.models.load_dtype.cpu_accelerates_bf16's own
-        docstring); this construction-on-the-"meta"-device pattern (meta tensors carry shape/dtype
-        only, no actual data, so submodules' own reset_parameters() calls become instant no-ops)
-        completed the identical model in well under 4 seconds.
+        """Builds `cls(*args, **kwargs)` without nn.Linear/nn.Embedding's random init: every weight
+        is `.copy_`'d from the GGUF right after (each subclass's from_gguf), so it is wasted work.
+        Measured on a 3.4B-param model: random init took over 90 s and never finished on a CPU
+        without hardware bf16 (nn.init's fill kernels hit the same slow emulated path as matmul; see
+        app.models.load_dtype.cpu_accelerates_bf16); construction on the "meta" device (shape/dtype
+        only, so `reset_parameters` is a no-op) took under 4 s.
 
-        `to_empty()` only allocates fresh (uninitialized) real storage for every parameter/buffer -
-        it does not preserve values, which is exactly right for a weight that's about to be
-        `.copy_()`'d in from the GGUF file, but silently wrong for anything __init__ computes a
-        real value for on its own (e.g. a rotary embedding's derived inv_freq - see
-        _rebuild_derived_buffers's own docstring). Callers with any such buffer MUST override that
-        hook and call it after this returns; from_gguf is where that call belongs, not here, since
-        this classmethod has no way to know which of `*args`/`**kwargs` a subclass would need to
-        recompute them.
+        `to_empty` allocates uninitialized storage and keeps no values: right for weights about to
+        be copied in, wrong for anything __init__ computes (e.g. a rotary embedding's inv_freq; see
+        _rebuild_derived_buffers). Callers with such a buffer MUST override that hook and call it
+        after this returns, in from_gguf, since this classmethod can't know which args a subclass
+        needs.
         """
         with torch.device("meta"):
             model = cls(*args, **kwargs)
@@ -180,58 +155,43 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
         return model
 
     def _rebuild_derived_buffers(self) -> None:
-        """No-op by default - override only if __init__ computes a real buffer value that from_gguf
-        never separately `.copy_()`'s in from the GGUF file itself (e.g. YarnRotaryEmbedding's
-        inv_freq, derived from rope hyperparameters, not a GGUF tensor). A model built via
-        _construct_without_init has that buffer as uninitialized garbage, not the real computed
-        value, until this runs - from_gguf must call it explicitly right after construction."""
+        """No-op by default; override if __init__ computes a buffer that from_gguf never
+        `.copy_`'s from the GGUF
+        (e.g. YarnRotaryEmbedding's inv_freq, derived from rope hyperparameters). After
+        _construct_without_init that buffer
+        is uninitialized garbage until this runs; from_gguf must call it right after construction.
+        """
 
     @property
     def is_materialized(self) -> bool:
-        """Whether real weight data has actually been copied in yet - False
-
-        between `from_gguf` returning and this model's first real forward
-        pass (see `_ensure_materialized`). Exposed mainly for testing the
-        on-the-fly dequant mechanism itself; not used anywhere in the
-        request-handling path.
+        """Whether weight data has been copied in yet: False between `from_gguf` and the first
+        forward pass
+        (`_ensure_materialized`). For testing the on-the-fly dequant; unused on the request path.
         """
         return self._materialized
 
     def _defer_materialization(self, loader: GGUFModelLoader) -> None:
-        """Called once by `from_gguf`, as its last step: hands this model the still-open `loader`
-
-        it'll need to actually copy real weight data in later, without doing that copy now. The
-        mmap behind `loader` has to stay open until either `_ensure_materialized` or `close` runs -
-        `ModelManager` is responsible for keeping it alive that long (no `with` block around
-        construction anymore) and for calling `close()` if this handle gets evicted/unloaded before
-        ever running a real forward pass.
+        """Called once by `from_gguf` as its last step: hands this model the open `loader` it will
+        later copy weights
+        from. Its mmap must stay open until `_ensure_materialized` or `close` runs; `ModelManager`
+        keeps it alive and
+        calls `close` if this handle is evicted before any forward pass.
         """
         self._pending_loader = loader
 
     def _ensure_materialized(self, stop_check: Callable[[], bool] | None = None) -> None:
-        """Copies every real weight in from the pending loader on the first call, a no-op on every
+        """Copies every weight in from the pending loader on the first call, a no-op after
+        (on-the-fly dequant; see the class docstring). Double-checked locking: the fast path skips
+        the lock, as this runs at the front of every forward pass. Needed because
+        `EmbeddingEngine`'s forward runs on a raw `asyncio.to_thread` thread, not a per-model
+        `ModelWorker`, so two concurrent requests on a freshly loaded embedding model can both reach
+        `forward` first.
 
-        call after that - the actual on-the-fly dequant mechanism (see this class's own docstring).
-        Double-checked locking: the fast path (already materialized) never touches the lock, which
-        matters since this runs on the front of every single forward pass, not just the first -
-        only the first caller (and anyone racing it) pays the lock's cost. Real, not theoretical:
-        `EmbeddingEngine`'s forward calls run on a raw `asyncio.to_thread` pool thread, not a
-        dedicated per-model `ModelWorker` (see that class's own docstring on why `/api/chat` is
-        different), so two concurrent requests against the same freshly-loaded embedding model
-        genuinely can call `forward()` for the first time at once.
-
-        `stop_check`, when given, reaches `_materialize_weights`'s own per-layer loop the same way
-        `_forward_impl`'s does (see that method's own docstring) - real gap this closes
-        (2026-09-21, confirmed live): a stop request arriving *during* the one-time
-        materialization step (often 45s+ on this project's target hardware) previously had no way
-        to take effect at all until materialization finished completely, since `_forward_impl` -
-        the only place a stop was ever checked - hadn't even started running yet. If
-        `_materialize_weights` raises `GenerationCancelledError` partway through, everything below
-        that call deliberately does not run: `_pending_loader` stays open and `_materialized` stays
-        False, so this model is left in a clean, retryable state - the next real call just
-        re-materializes from scratch (wasting whatever partial progress was made, but never
-        crashing on a half-loaded model - `.copy_()` is idempotent, redoing an already-copied
-        layer produces the same correct result).
+        `stop_check` reaches `_materialize_weights`'s per-layer loop. Closes a gap: a stop
+        during the one-time materialization (often 45s+ on target hardware) had no
+        effect until it finished. If `_materialize_weights` raises `GenerationCancelledError`,
+        `_pending_loader` stays open and `_materialized` False, so the next call re-materializes
+        from scratch (wasting progress, never crashing: `.copy_` is idempotent).
         """
         if self._materialized:
             return
@@ -243,10 +203,10 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
                     f"{type(self).__name__} was evicted/closed before its weights were ever "
                     "materialized - this handle can no longer be used."
                 )
-            # INFO, not DEBUG: this is the real one-time dequantization cost (often 45s+ on this
-            # project's target hardware - see ROADMAP.md's "Known issues") that previously had no
-            # named stage in the logs at all - it silently ran inside whatever the caller's own
-            # "prefill forward"/"model ready" timing already covered, invisible as its own step.
+            # INFO, not DEBUG: the one-time dequantization cost (often 45s+ on target hardware;
+            # ROADMAP.md "Known issues")
+            # had no named log stage and hid inside the caller's "prefill forward"/"model ready"
+            # timing.
             logger.info("materializing weights (%s) - first use of this model", type(self).__name__)
             materialize_started = time.monotonic()
             with torch.no_grad():
@@ -254,10 +214,10 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
             if self._device_packed:
                 self.settle_on_device()
             logger.info("materialization done in %.2fs", time.monotonic() - materialize_started)
-            # Real quantized-native compute (see `_mark_quantized_native_used`'s own docstring)
-            # needs this loader's mmap to stay open for the model's entire lifetime, not just
-            # through this one materialization step - `close()` (called from every real eviction
-            # path in ModelManager) is what closes it in that case instead, below.
+            # Quantized-native compute (`_mark_quantized_native_used`) needs the loader's mmap open
+            # for the model's whole
+            # lifetime, not just this step; `close` (from every ModelManager eviction path) closes
+            # it then, below.
             if self._quantized_loader is None:
                 self._pending_loader.close()
             self._pending_loader = None
@@ -267,40 +227,31 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
     def _materialize_weights(
         self, loader: GGUFModelLoader, stop_check: Callable[[], bool] | None = None
     ) -> None:
-        """Copies every real weight this model needs in from `loader`, via `.copy_()` (this model's
+        """Copies every weight this model needs in from `loader` via `.copy_` (parameters/buffers
+        were allocated uninitialized by `_construct_without_init`); called lazily by
+        `_ensure_materialized`.
 
-        own parameters/buffers were allocated - uninitialized - by `_construct_without_init`).
-        Exactly what `from_gguf` used to do eagerly before M10's on-the-fly dequant; now called
-        once, lazily, by `_ensure_materialized`.
-
-        `stop_check`, when given, is checked once between each real decoder layer's *complete*
-        group of tensor copies (never mid-layer, so a layer's own weights are always either fully
-        loaded or not started - no torn state) - see `_ensure_materialized`'s own docstring for
-        what happens when it fires.
+        `stop_check`, if given, is checked between each decoder layer's complete tensor copies
+        (never mid-layer, so no torn state).
         """
 
     def close(self) -> None:
-        """Releases the GGUF file's mmap if this model was evicted/unloaded before its weights
+        """Releases the GGUF mmap if this model was evicted before materializing
+        (`_ensure_materialized`); a no-op once materialized (that closed it) or if `from_gguf` never
+        ran (a test building a model directly). `ModelManager` calls it from every path that drops a
+        handle.
 
-        were ever actually materialized (see `_ensure_materialized`) - a no-op once materialized
-        (that already closed it) or if `from_gguf` was never called at all (e.g. a test building a
-        model directly). `ModelManager` calls this from every path that drops a handle.
+        Also closes `_quantized_loader`: quantized-native compute (`_mark_quantized_native_used`)
+        keeps it open past materialization for every `QuantizedLinear`'s forward; eviction releases
+        it.
 
-        Also closes `_quantized_loader` - real quantized-native compute (see
-        `_mark_quantized_native_used`) keeps that one open *past* materialization, for every real
-        `QuantizedLinear`'s own forward pass to keep reading from for the model's whole lifetime -
-        this is the real eviction path that finally releases it, not `_ensure_materialized`.
-
-        `_pending_loader` and `_quantized_loader` are always the *same* real loader object when
-        both are set - confirmed live (2026-09-21): a stop mid-materialization (see
-        `_materialize_weights`'s own per-layer `stop_check`) can raise `GenerationCancelledError`
-        *after* some earlier layer already built a real `QuantizedLinear` (setting
-        `_quantized_loader`) but *before* `_ensure_materialized` ever reaches its own
-        `_pending_loader = None` line - leaving both non-None at once. Closing via `_pending_loader`
-        first, unconditionally, crashed with the exact real `BufferError` `QuantizedLinear.release`
-        exists to prevent - every already-built one's live memoryview was still blocking it. Fixed
-        by always releasing first, regardless of which attribute the caller happens to be closing
-        through - the release walk is a real no-op when no `QuantizedLinear` was ever built.
+        `_pending_loader` and `_quantized_loader` are the same object when both are set: a stop
+        mid-materialization can raise `GenerationCancelledError` after an
+        earlier layer built a `QuantizedLinear` (setting `_quantized_loader`) but before
+        `_pending_loader = None`. Closing via `_pending_loader` first crashed with the `BufferError`
+        `QuantizedLinear.release` prevents (built ones' live memoryviews block it). So always
+        release first, whichever attribute closes; the walk is a no-op if no `QuantizedLinear` was
+        built.
         """
         with self._materialize_lock:
             loader = self._pending_loader or self._quantized_loader
@@ -319,18 +270,20 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
         last_logits_only: bool = False,
     ) -> torch.Tensor:
-        """`last_logits_only`: the caller only reads the last position's logits (`ChatEngine`),
-        so an architecture that honors `_last_logits_only` (every decoder architecture) runs its
-        lm_head on that one position - a prefill otherwise computes, then throws away, a
-        full-vocabulary row for every prompt token. Embedding models ignore it."""
+        """`last_logits_only`: the caller reads only the last position's logits (`ChatEngine`), so a
+        decoder
+        architecture honoring `_last_logits_only` runs lm_head on that one position (a prefill
+        otherwise computes, then discards, a full-vocabulary row per prompt token). Embedding models
+        ignore it.
+        """
         self._ensure_materialized(stop_check)
         self._last_logits_only = last_logits_only
         if self.device.type == "cpu":
             return self._forward_impl(
                 input_ids, kv_cache, position_ids, stop_check, image_embeddings
             )
-        # On a GPU: inputs follow the model, and the result returns to the CPU (the sampler,
-        # embedding pooling and every caller read it there). Vision encoders stay on the CPU.
+        # On a GPU: inputs follow the model and the result returns to the CPU (the sampler,
+        # embedding pooling and callers read it there). Vision encoders stay on the CPU.
         images = [(start, e.to(self.device)) for start, e in image_embeddings or []] or None
         out = self._forward_impl(
             input_ids.to(self.device),
@@ -352,32 +305,23 @@ class ModelArchitecture(DevicePlacement, PackedWeightLoading, nn.Module, ABC):
     ) -> torch.Tensor:
         """input_ids: (batch, seq_len) -> logits: (batch, seq_len, vocab_size).
 
-        `kv_cache`/`position_ids` are optional: omitting both runs a plain
-        full-sequence forward pass (unit tests, the M3 oracle check); passing
-        both enables incremental one-token-at-a-time decoding against a
-        cache built by the caller (see ChatEngine).
+        `kv_cache`/`position_ids` are optional: omitting both runs a plain full-sequence pass (unit
+        tests, the M3 oracle check); passing both enables incremental decoding against the caller's
+        cache (ChatEngine).
 
-        `image_embeddings` (2026-09-21, real LLaVA vision support): each `(start, embeds)` pair
-        overwrites `embeds.shape[0]` consecutive positions of the token-embedding lookup at
-        `input_ids[:, start:start+embeds.shape[0]]` with real projected image-patch embeddings
-        (see `ClipVisionEncoder`/`app.runtime.vision_fusion`), before those positions ever enter
-        the decoder layers - those input ids are placeholder values only (see
-        `vision_fusion.build_prompt_with_images`), never meant to be looked up for real. Real
-        support is `LlamaArchitecture`-only (LLaVA's own text half is llama-arch) - every other
-        architecture accepts and ignores this param (`None` is always what they receive in
-        practice today), matching this file's own `stop_check` precedent.
+        `image_embeddings` (LLaVA): each `(start, embeds)` pair overwrites `embeds.shape[0]`
+        positions of the token-embedding lookup at `input_ids[, start:start+embeds.shape[0]]` with
+        projected image-patch embeddings (`ClipVisionEncoder`/`app.runtime.vision_fusion`) before
+        the decoder layers; those ids are placeholders (`vision_fusion.build_prompt_with_images`).
+        Only `LlamaArchitecture` supports it (LLaVA's text half is llama-arch); others accept and
+        ignore it, like `stop_check`.
 
-        `stop_check`, when given, is called once between each real decoder-layer iteration (not
-        mid-layer - a layer's own matmuls always run to completion, so no torn/partial layer state
-        is ever possible) - a real user-visible gap this closes (2026-09-21, confirmed live): a
-        stop request (e.g. pAIring's "stop_model" unload call after a mid-stream message delete)
-        previously only took effect *between tokens* (see `ModelWorker.request_stop`'s own
-        docstring), so cancelling mid-layer-loop on this project's slow hardware could still mean
-        waiting out an entire in-progress forward pass - many seconds to minutes on a large prompt
-        - before the stop had any visible effect. `None` (the default - every non-`ChatEngine`
-        caller: unit tests, the M3 oracle script, `EmbeddingEngine`) means "never stop early,"
-        identical to today's behavior. Implementations raise `GenerationCancelledError` the moment
-        `stop_check()` returns True, rather than returning a sentinel - a mid-stack `raise` can't be
-        silently ignored by a caller that forgets to check a return value, and `ChatEngine.stream`
-        already needs a `try`/`except` around its own forward calls to end the generator cleanly.
+        `stop_check`, if given, is called once between decoder layers (not mid-layer, so no partial
+        layer state). Closes a gap: a stop (e.g. pAIring's "stop_model" after a
+        mid-stream message delete) took effect only between tokens (`ModelWorker.request_stop`), so
+        cancelling on slow hardware could wait out a whole forward pass (many seconds to minutes on
+        a large prompt). `None` (unit tests, the M3 oracle script, `EmbeddingEngine`) never stops
+        early. Implementations raise `GenerationCancelledError` as soon as `stop_check` is True; a
+        raise can't be ignored like a return value, and `ChatEngine.stream` already wraps its
+        forward calls in `try`/`except`.
         """

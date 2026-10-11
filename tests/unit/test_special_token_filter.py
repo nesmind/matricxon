@@ -1,9 +1,6 @@
-"""SpecialTokenTextFilter (app/runtime/special_token_filter.py) - the general, model-agnostic
-safety net for a leaked `<|...|>`-shaped special token in a live chat stream, added 2026-09-29
-after a real DictaLM-3.0-1.7B-Thinking chat produced a visible `<|im_start|>assistant` in its
-reply. Complementary to app.runtime.chat_stop_tokens's own targeted ChatML-EOS fix - this catches
-a leak regardless of *why* generation didn't stop before it.
-"""
+"""SpecialTokenTextFilter (app/runtime/special_token_filter.py): a model-agnostic safety net for a
+leaked `<|...|>` special token in a chat stream (seen as `<|im_start|>assistant` from
+a DictaLM model). Complements chat_stop_tokens' ChatML-EOS fix."""
 
 from app.runtime.special_token_filter import SpecialTokenTextFilter
 
@@ -32,8 +29,8 @@ def test_a_tag_split_across_two_chunks_is_still_stripped() -> None:
 
 
 def test_a_lone_pipe_bracket_with_no_closing_tag_is_kept_verbatim_at_flush() -> None:
-    """Text before an unresolved `<|` is emitted right away (no reason to hold it back); only
-    the ambiguous `<|` tail itself is buffered until flush()."""
+    """Text before an unresolved `<|` is emitted at once; only the ambiguous tail is buffered until
+    flush."""
     f = SpecialTokenTextFilter()
     assert f.feed("cost <|") == "cost "
     assert f.flush() == "<|"
@@ -41,9 +38,8 @@ def test_a_lone_pipe_bracket_with_no_closing_tag_is_kept_verbatim_at_flush() -> 
 
 def test_text_that_looks_like_a_tag_opener_but_isnt_is_not_dropped() -> None:
     f = SpecialTokenTextFilter()
-    # A space breaks the real tag shape - "<|" here is never going to close, so it's ordinary
-    # text (matricxon's own docs use "a<|b" nowhere for real, but a user typing raw pipes must
-    # not silently lose characters).
+    # A space breaks the tag shape, so "<|" is ordinary text; raw pipes typed by a user must not
+    # lose characters.
     assert f.feed("a<|b calc") == "a<|b calc"
 
 

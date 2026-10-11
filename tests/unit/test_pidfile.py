@@ -37,6 +37,24 @@ class TestPidFileRemove:
     def test_is_a_noop_when_the_file_does_not_exist(self, tmp_path) -> None:
         path = tmp_path / "matricxon.pid"
 
-        PidFile(path).remove()  # must not raise
+        PidFile(path).remove()
 
         assert not path.exists()
+
+
+def test_a_pid_file_left_by_a_process_that_is_gone_means_the_last_run_died(tmp_path):
+    import subprocess
+    import sys
+
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    path = tmp_path / "pid"
+    path.write_text(str(gone.pid))
+    assert PidFile(path).previous_run_died() is True
+
+    path.write_text(str(os.getpid()))
+    assert PidFile(path).previous_run_died() is False
+    path.unlink()
+    assert PidFile(path).previous_run_died() is False
+    path.write_text("not a pid")
+    assert PidFile(path).previous_run_died() is False

@@ -43,9 +43,8 @@ def test_thinking_marker_is_detected(client: TestClient) -> None:
 
 
 def test_never_touches_the_model_catalog(client: TestClient) -> None:
-    """A real, deliberate property, same as /api/health's own: this is a pure computation from
-    caller-supplied strings, not the local model catalog - answers identically regardless of
-    what's actually installed, and needs no `catalog` fixture dependency to work."""
+    """Deliberate, as /api/health: a pure computation from caller-supplied strings, not the model
+    catalog; answers identically whatever is installed, and needs no `catalog` fixture."""
     response = client.post(
         "/api/infer-capabilities",
         json={"repo_id": "org/repo", "filename": "model.gguf", "architecture": "mistral3"},

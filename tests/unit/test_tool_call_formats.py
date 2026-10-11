@@ -1,4 +1,4 @@
-"""Each family's real tool-call text (from the real chat templates) parses into tool calls."""
+"""Each family's tool-call text (from its chat template) parses into tool calls."""
 
 import pytest
 

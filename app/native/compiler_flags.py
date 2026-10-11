@@ -1,15 +1,13 @@
-"""Which compiler and flags to build the native kernels with, per platform - split out of
-app/native/library.py so the build itself stays a plain "try each variant in order" loop.
+"""Which compiler and flags build the native kernels, per platform; split from app/native/library.py
+so the build stays a "try each variant in order" loop.
 
-- Linux (gcc): `-march=native -fopenmp` - the only setup actually built on so far (this project's
-  own machine).
-- macOS: `gcc` is Apple's clang there, which rejects a bare `-fopenmp`; OpenMP needs Homebrew's
-  `libomp` passed through `-Xpreprocessor`. Apple Silicon also wants `-mcpu=native` (some Apple
-  clang versions reject `-march=native` on arm64). Written against Apple's and Homebrew's
-  documented flags, NOT yet built on a real Mac.
+- Linux (gcc): `-march=native -fopenmp`, the only setup built on so far.
+- macOS: `gcc` is Apple's clang, which rejects a bare `-fopenmp`; OpenMP needs Homebrew's `libomp`
+  via `-Xpreprocessor`. Apple Silicon also wants `-mcpu=native` (some Apple clang versions reject
+  `-march=native` on arm64). Written against the documented flags, not yet built on a real Mac.
 - Every platform gets a single-threaded fallback last: without OpenMP the `#pragma omp` lines are
-  ignored, so the kernels still build - one thread instead of several, but still native (far
-  faster than the Numba kernels on the same core) instead of dropping back to Numba altogether.
+  ignored, so the kernels still build (one thread, still far faster than Numba) instead of dropping
+  to Numba.
 """
 
 import platform

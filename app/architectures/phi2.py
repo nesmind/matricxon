@@ -16,24 +16,20 @@ logger = logging.getLogger(__name__)
 
 
 class Phi2Architecture(ModelArchitecture):
-    """Phi-2 (moondream2's text half) - real, confirmed differences from every other architecture
-    here (via a real moondream2 GGUF pull's own header, not assumed): a **parallel residual**
-    decoder block (one shared LayerNorm feeds both the attention and MLP branches - see
-    `Phi2DecoderLayer`), **partial rotary embeddings** (RoPE applies to only the first
-    `rope.dimension_count` dims of each head, not the whole head - see
-    `apply_rotary_pos_emb_partial`), plain (non-grouped) multi-head attention with real biases on
-    every projection, and a real `LayerNorm` (not RMSNorm) output norm with an untied, biased
-    `lm_head`.
+    """Phi-2 (moondream2's text half). Differences from other architectures here, from a moondream2
+    GGUF header: a parallel-residual block (one shared LayerNorm feeds attention and MLP;
+    `Phi2DecoderLayer`), partial rotary (RoPE on the first `rope.dimension_count` dims of each head;
+    `apply_rotary_pos_emb_partial`), plain multi-head attention with biases on every projection, and
+    a `LayerNorm` output norm with an untied, biased `lm_head`.
 
-    `rope.freq_base`/`vocab_size` have no real metadata key on this GGUF (confirmed) - falls back
-    to Phi-2's own real HF default (10000.0) and to `len(tokenizer.ggml.tokens)` respectively, the
-    same fallback `BertArchitecture`/`NomicBertArchitecture`/`Gemma4Architecture` already use for
-    the latter.
+    `rope.freq_base`/`vocab_size` have no metadata key: falls back to Phi-2's HF default (10000.0)
+    and `len(tokenizer.ggml.tokens)`, as
+    `BertArchitecture`/`NomicBertArchitecture`/`Gemma4Architecture`.
     """
 
     NAME = "phi2"
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
+    SUPPORTS_BATCHED_DECODE = True
     SUPPORTS_VISION = True
 
     def __init__(
@@ -43,12 +39,12 @@ class Phi2Architecture(ModelArchitecture):
         enable_quantized_native: bool = False,
     ) -> None:
         super().__init__()
-        # Unlike mistral3/llama/gemma4, q_proj/k_proj/v_proj here are sliced at materialize time
-        # from one real *fused* `attn_qkv` GGUF tensor (see _materialize_weights) - splitting a
-        # packed/quantized tensor's raw bytes the same way would need real per-quant-type-aware
-        # byte-range slicing, extra complexity not attempted this round (real, scoped-out follow-
-        # up, not silently dropped). o_proj/up_proj/down_proj/lm_head - each its own real,
-        # standalone GGUF tensor - go quantized-native when this is on.
+        # Unlike mistral3/llama/gemma4, q/k/v_proj here are sliced at materialize time from one
+        # *fused* `attn_qkv` GGUF tensor
+        # (`_materialize_weights`); splitting a packed tensor's raw bytes would need
+        # quant-type-aware byte-range slicing: scoped out,
+        # not dropped. o_proj/up_proj/down_proj/lm_head (each its own GGUF tensor) go
+        # quantized-native when this is on.
         self._enable_quantized_native = enable_quantized_native
         self._dtype = dtype
         arch = metadata.arch_key
@@ -61,11 +57,11 @@ class Phi2Architecture(ModelArchitecture):
         self.layer_norm_eps = metadata.get_f32(arch("attention.layer_norm_epsilon"))
         self.vocab_size = len(metadata.require("tokenizer.ggml.tokens"))
 
-        # Plain floats (not tensors), so unaffected by _construct_without_init's meta-device
-        # trick - kept so _rebuild_derived_buffers can recreate self.rope for real afterward. See
-        # Mistral3TextArchitecture's identical _rope_kwargs for the full reasoning. head_dim is
-        # deliberately rope_dim here, not self.head_dim - see RotaryEmbedding's own docstring:
-        # inv_freq only ever depends on the width actually being rotated.
+        # Plain floats (not tensors), so unaffected by _construct_without_init's meta-device trick;
+        # kept so
+        # _rebuild_derived_buffers can recreate self.rope. See
+        # Mistral3TextArchitecture._rope_kwargs. head_dim is rope_dim here,
+        # not self.head_dim (RotaryEmbedding: inv_freq depends only on the width actually rotated).
         self._rope_kwargs = dict(
             head_dim=self.rope_dim, rope_theta=metadata.get_f32(arch("rope.freq_base"), 10000.0)
         )
@@ -90,16 +86,17 @@ class Phi2Architecture(ModelArchitecture):
         self.lm_head = nn.Linear(self.n_embd, self.vocab_size, bias=True, dtype=dtype)
 
     def _rebuild_derived_buffers(self) -> None:
-        """self.rope.inv_freq is a real computed value, not a GGUF tensor from_gguf ever
-        `.copy_()`'s in - see ModelArchitecture._rebuild_derived_buffers's own docstring for why
-        this has to be recreated for real after _construct_without_init."""
+        """self.rope.inv_freq is a computed value, not a GGUF tensor from_gguf `.copy_`'s in;
+        recreated after
+        _construct_without_init (ModelArchitecture._rebuild_derived_buffers).
+        """
         self.rope = RotaryEmbedding(**self._rope_kwargs)
 
     @property
     def kv_cache_layer_shapes(self) -> list[tuple[int, int]]:
-        """Same `(n_head, head_dim)` pair repeated per layer - plain MHA (no GQA: this
-        architecture's real `attention.head_count_kv` always equals `attention.head_count`), see
-        `KVCache`'s own docstring for why this is a per-layer list at all."""
+        """The same `(n_head, head_dim)` pair per layer: plain MHA (no GQA:
+        `attention.head_count_kv` always equals `attention.head_count`); `KVCache` says why it's per
+        layer."""
         return [(self.n_head, self.head_dim)] * self.n_layer
 
     @classmethod
@@ -146,12 +143,10 @@ class Phi2Architecture(ModelArchitecture):
             layer.input_layernorm.weight.copy_(loader.load_tensor(prefix + "attn_norm.weight"))
             layer.input_layernorm.bias.copy_(loader.load_tensor(prefix + "attn_norm.bias"))
 
-            # attn_qkv is one real fused (3*n_embd, n_embd) tensor (confirmed against a real
-            # moondream2 GGUF) - split into three equal n_embd-row thirds for this model's own
-            # separate q/k/v projections (see Phi2Attention's own docstring for why those stay
-            # separate rather than also fusing them here). Always today's exact path - see
-            # __init__'s own comment on why splitting a packed tensor's raw bytes isn't attempted
-            # this round.
+            # attn_qkv is one fused (3*n_embd, n_embd) tensor (checked on a moondream2 GGUF), split
+            # into three equal n_embd-row
+            # thirds for the separate q/k/v projections (Phi2Attention says why they stay separate).
+            # Always the plain path (see __init__ on why packed bytes aren't split).
             qkv_weight = loader.load_tensor(prefix + "attn_qkv.weight")
             qkv_bias = loader.load_tensor(prefix + "attn_qkv.bias")
             n_embd = self.n_embd
@@ -204,9 +199,10 @@ class Phi2Architecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        """`image_embeddings` - see `LlamaArchitecture._forward_impl`'s own docstring for the full
-        contract; identical handling here (this is the second real vision-fusion-capable
-        architecture - see `app.models.capabilities._VISION_FUSION_ARCHITECTURES`)."""
+        """`image_embeddings`: see `LlamaArchitecture._forward_impl`; identical handling (the second
+        vision-fusion-capable
+        architecture; `app.models.capabilities._VISION_FUSION_ARCHITECTURES`).
+        """
         _, seq_len = input_ids.shape
         logger.debug("forward start: seq_len=%d", seq_len)
         if position_ids is None:

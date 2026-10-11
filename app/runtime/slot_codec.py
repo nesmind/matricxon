@@ -7,7 +7,7 @@ from app.architectures.base import ModelArchitecture
 from app.runtime.mamba_cache import HybridSnapshot, NemotronHHybridCache
 from app.runtime.prompt_slot import CacheSlot
 
-#: Tokens below this are cheaper to recompute than to write and read back.
+# Tokens below this are cheaper to recompute than to write and read back.
 MIN_PERSIST_TOKENS = 64
 
 
@@ -22,14 +22,14 @@ class EncodedSlot:
 
 
 class SlotCodec:
-    """Turns a `CacheSlot` into bytes and back. Only what a later request can reuse is written:
-    a plain cache's whole KV; a hybrid cache's KV up to its newest recurrent snapshot (past that,
-    nothing can be resumed from) plus the snapshots - never the live recurrent state, which is
-    always replaced by a snapshot before a slot is used again (`CacheSlot.rewind`/`fork`)."""
+    """Turns a `CacheSlot` into bytes and back. Only what a later request can reuse is written: a
+    plain cache's whole KV; a hybrid cache's KV up to its newest recurrent snapshot (past that
+    nothing can be resumed) plus the snapshots, never the live recurrent state, which a snapshot
+    always replaces before a slot is used again (`CacheSlot.rewind`/`fork`)."""
 
     @staticmethod
     def encode(slot: CacheSlot) -> EncodedSlot | None:
-        """None when the slot is not worth persisting (too short, or a hybrid without snapshots)."""
+        """None when the slot isn't worth persisting (too short, or a hybrid without snapshots)."""
         keep = max(slot.snapshots, default=0) if slot.hybrid else len(slot.token_ids)
         if keep < MIN_PERSIST_TOKENS:
             return None
@@ -53,8 +53,8 @@ class SlotCodec:
     def decode(
         payload: bytes, architecture: ModelArchitecture, num_ctx: int, dtype: torch.dtype
     ) -> CacheSlot:
-        """Rebuilds the slot on a fresh cache from `architecture`. Raises `ValueError` if it does
-        not fit this model (a stale save) - the caller treats that as a miss."""
+        """Rebuilds the slot on a fresh cache from `architecture`. Raises `ValueError` if it doesn't
+        fit this model (a stale save); the caller treats it as a miss."""
         state = torch.load(io.BytesIO(payload), weights_only=True, map_location="cpu")
         cache = architecture.build_cache(max_seq_len=num_ctx, dtype=dtype)
         snapshots = {

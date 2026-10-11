@@ -1,4 +1,4 @@
-/* f16 lookup table and the Q8_K activation quantizer - see mx_common.h. */
+/* f16 lookup table and Q8_K activation quantizer (see mx_common.h). */
 #include <math.h>
 
 #include "mx_common.h"

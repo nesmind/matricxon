@@ -1,5 +1,5 @@
-"""ModelWorker's scheduler with a fake decoder: the decode steps of replies running at the same
-time arrive together, a cancel stays with its own reply, and the active cap holds."""
+"""ModelWorker's scheduler with a fake decoder: decode steps of replies running together arrive
+together, a cancel stays with its own reply and the active cap holds."""
 
 import asyncio
 import threading
@@ -12,7 +12,7 @@ from app.runtime.batch_decode import CHECKPOINT, DecodeStep
 
 
 class FakeDecoder:
-    """Records each batch it is asked for; the 'logits' just echo the step's token."""
+    """Records each batch it is asked for; the 'logits' echo the step's token."""
 
     def __init__(self) -> None:
         self.batches: list[list[int]] = []
@@ -47,7 +47,7 @@ async def test_decode_steps_of_replies_running_together_are_batched() -> None:
     gate = threading.Event()
 
     def held(first, n):
-        gate.wait(5)  # both replies are queued before the scheduler starts either
+        gate.wait(5)
         yield from reply(first, n)
 
     a = worker.stream(lambda: held(10, 3))
@@ -99,7 +99,7 @@ async def test_cancelling_one_reply_closes_it_and_leaves_the_other_running() -> 
 
     assert await drain(b) == [100, 101, 102]
     assert len(await drain(a)) < 50
-    assert 10 in closed  # its generator was closed, so its cleanup (cache release) ran
+    assert 10 in closed
 
 
 @pytest.mark.asyncio
@@ -118,7 +118,7 @@ async def test_replies_beyond_the_active_cap_wait_their_turn() -> None:
 
     for first, results in zip((10, 20, 30), streams, strict=True):
         assert await drain(results) == [first, first + 1]
-    assert max(len(batch) for batch in decoder.batches) == 2  # never three at once
+    assert max(len(batch) for batch in decoder.batches) == 2
     assert [30, 31] == [t for batch in decoder.batches for t in batch if t >= 30]
 
 
@@ -173,4 +173,4 @@ async def test_a_checkpoint_lets_another_reply_run_in_between() -> None:
     gate.set()
     await drain(a), await drain(b)
 
-    assert order == ["a0", "b", "a1", "a2"]  # b ran after a's first piece, not after all of a
+    assert order == ["a0", "b", "a1", "a2"]

@@ -1,17 +1,16 @@
-"""Gemma4's Per-Layer Embeddings (PLE) - a real, active mechanism confirmed against a real
-`google/gemma-4-E2B-it` GGUF (2026-09-29, `unsloth/gemma-4-E2B-it-GGUF`): a huge auxiliary
-embedding table (`per_layer_token_embd.weight`, one row per vocab entry, packed
-`n_layer * per_layer_dim` wide - 50.5% of that checkpoint's own real total parameters) feeds a
-small residual signal into *every* decoder layer, on top of the ordinary token embedding. Ported
-from real HF `transformers` source (`transformers/models/gemma4/modular_gemma4.py`,
+"""Gemma4's Per-Layer Embeddings (PLE), checked against a `google/gemma-4-E2B-it` GGUF
+(`unsloth/gemma-4-E2B-it-GGUF`): a huge auxiliary embedding table (`per_layer_token_embd.weight`,
+one
+row per vocab entry, packed `n_layer * per_layer_dim` wide, 50.5% of that checkpoint's parameters)
+feeds a small residual signal into every decoder layer on top of the token embedding. Ported from HF
+`transformers` (`models/gemma4/modular_gemma4.py`,
 `Gemma4TextModel.get_per_layer_inputs`/`project_per_layer_inputs`) and cross-checked against
-real llama.cpp GGUF-inference source (`src/models/gemma4.cpp`,
-`build_inp_per_layer`/`project_per_layer_inputs`) - both agree on the exact math below.
+llama.cpp (`src/models/gemma4.cpp`, `build_inp_per_layer`/`project_per_layer_inputs`); both agree.
 
-Two components combine per layer: a "token identity" term (this token's own row of the packed
-per-layer table) and a "context" term (the main hidden state projected down + renormalized) -
-`(context + token_identity) / sqrt(2)`. `Gemma4Architecture._forward_impl` calls this once per
-model forward (not once per layer) and slices the result per layer index.
+Two terms combine per layer: a "token identity" term (this token's row of the packed table) and a
+"context" term (the main hidden state projected down + renormalized): `(context + token_identity) /
+sqrt(2)`. `Gemma4Architecture._forward_impl` calls this once per forward and slices the result per
+layer.
 """
 
 import torch
@@ -43,9 +42,11 @@ class Gemma4PerLayerEmbedding(nn.Module):
         self._combine_scale = 2.0**-0.5
 
     def forward(self, input_ids: torch.Tensor, scaled_inputs_embeds: torch.Tensor) -> torch.Tensor:
-        """Returns `(batch, seq, n_layer, per_layer_dim)` - `Gemma4Architecture` slices
-        `[:, :, i, :]` for layer `i`. `scaled_inputs_embeds` is the main token embedding *after*
-        its own `sqrt(n_embd)` scale (real HF passes the same already-scaled `inputs_embeds`)."""
+        """Returns `(batch, seq, n_layer, per_layer_dim)`; `Gemma4Architecture` slices `[, i,:]`
+        for layer `i`.
+        `scaled_inputs_embeds` is the token embedding *after* its `sqrt(n_embd)` scale (HF passes
+        the same scaled `inputs_embeds`).
+        """
         token_identity = self.embed_tokens_per_layer(input_ids) * self._embed_scale
         token_identity = token_identity.reshape(*input_ids.shape, self.n_layer, self.per_layer_dim)
 

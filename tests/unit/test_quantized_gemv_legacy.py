@@ -1,8 +1,5 @@
-"""Correctness for the legacy-format GEMV kernels (app/gguf/dequant/quantized_gemv_legacy.py) -
-same cross-check pattern as test_quantized_gemv.py's K-quant kernels: agrees with each type's own
-already-oracle-validated `QuantStrategy.dequantize()` (legacy.py) on real multi-row weight
-matrices, so this kernel's own math is right too without re-deriving ggml's spec a third time.
-"""
+"""Legacy-format GEMV kernels (quantized_gemv_legacy.py) vs `QuantStrategy.dequantize`
+(legacy.py), as test_quantized_gemv.py."""
 
 import random
 import struct

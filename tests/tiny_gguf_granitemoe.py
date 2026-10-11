@@ -1,17 +1,15 @@
-"""Builds a tiny, complete, valid `granitemoe` GGUF file - mirrors `tiny_gguf_granite.py`'s
-structure plus real MoE metadata (`granitemoe.expert_count`/`expert_used_count`) and the real
-llama.cpp Mixtral-style per-expert 3D tensor convention (`ffn_gate_inp`/`ffn_gate_exps`/
-`ffn_up_exps`/`ffn_down_exps`, one 3D tensor per projection type rather than N separate 2D
-tensors). `N_EXPERTS=4`/`EXPERTS_PER_TOK=2` with a multi-token prompt in tests exercises both
-"not every expert selected" and "multiple tokens pick overlapping experts" real code paths.
-"""
+"""Builds a tiny, complete, valid `granitemoe` GGUF, mirroring `tiny_gguf_granite.py`, plus MoE
+metadata (`granitemoe.expert_count`/`expert_used_count`) and llama.cpp's Mixtral-style per-expert 3D
+tensor convention (`ffn_gate_inp`/`ffn_gate_exps`/`ffn_up_exps`/`ffn_down_exps`: one 3D tensor per
+projection, not N 2D tensors). `N_EXPERTS=4`/`EXPERTS_PER_TOK=2` with a multi-token prompt exercises
+both "not every expert selected" and "multiple tokens pick overlapping experts"."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2

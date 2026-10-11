@@ -2,27 +2,25 @@ from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends
 
-from app.dependencies import get_model_catalog
+from app.consensus.runtime import ConsensusRuntime
+from app.dependencies import get_consensus_runtime, get_model_catalog
 from app.models.catalog import ModelCatalog
+from app.routers.pull_router import require_pull_lease
 from app.schemas.create import CreateRequest
+from app.server.admin_auth import require_admin
 from app.server.ndjson import NDJSONResponse
+from app.server.node_kind import require_compute
 
 router = APIRouter()
 
 
 class CreateRequestHandler:
-    """Handles `POST /api/create`'s FROM-only case: matricxon has no
-
-    Modelfile parser (TEMPLATE/PARAMETER/SYSTEM directives, if sent, are
-    silently not applied to inference - a real, documented v1 limitation,
-    same spirit as Mistral3PromptBuilder dropping tool calls). `FROM
-    <existing-tag>` is treated as a local re-tag, reusing the same
-    underlying catalog duplication `/api/copy` uses. The actual work (a
-    hardlink + a sidecar write) is fast enough to do synchronously before
-    streaming starts - a real `UnknownModelError` for a bad FROM tag
-    therefore surfaces as a clean pre-stream 404, not an in-band NDJSON
-    error line (unlike `/api/pull`, which can genuinely fail mid-stream).
-    """
+    """Handles `POST /api/create`'s FROM-only case: matricxon has no Modelfile parser
+    (TEMPLATE/PARAMETER/SYSTEM directives are silently ignored, a documented v1 limitation). `FROM
+    <existing-tag>` is a local re-tag via the catalog aliasing `/api/copy` uses. The work (one small
+    alias file) is quick enough to do before streaming, so a bad FROM tag is a clean pre-stream 404
+    (`UnknownModelError`), not an in-band NDJSON error line like a mid-stream `/api/pull`
+    failure."""
 
     def __init__(self, catalog: ModelCatalog) -> None:
         self._catalog = catalog
@@ -35,8 +33,15 @@ class CreateRequestHandler:
         yield {"status": "success"}
 
 
-@router.post("/api/create", response_model=None)
+@router.post(
+    "/api/create",
+    dependencies=[Depends(require_admin), Depends(require_compute)],
+    response_model=None,
+)
 def post_create(
-    request: CreateRequest, catalog: ModelCatalog = Depends(get_model_catalog)
+    request: CreateRequest,
+    catalog: ModelCatalog = Depends(get_model_catalog),
+    runtime: ConsensusRuntime | None = Depends(get_consensus_runtime),
 ) -> NDJSONResponse:
+    require_pull_lease(runtime)
     return CreateRequestHandler(catalog).handle(request)

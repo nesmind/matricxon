@@ -7,12 +7,12 @@ from app.runtime.kv_cache import KVCache
 
 
 class FalconMLP(nn.Module):
-    """`down(gelu(up(x)))` - a plain, non-gated, **bias-free** GELU MLP: real `tiiuae/falcon-7b`
-
-    (`config.bias = False`) - confirmed via a real downloaded GGUF header: no `ffn_up.bias`/
-    `ffn_down.bias` tensor at all. Exact GELU (HF's own default `config.activation = "gelu"`,
-    not the tanh approximation `Starcoder2MLP` uses) - same formula as `Phi2MLP`, just bias-free,
-    so its own small class rather than adding a third flag to that one.
+    """`down(gelu(up(x)))`: a plain, non-gated, **bias-free** GELU MLP (`tiiuae/falcon-7b`,
+    `config.bias = False`; a
+    real GGUF header has no `ffn_up.bias`/`ffn_down.bias`). Exact GELU (HF default
+    `config.activation = "gelu"`, not
+    the tanh approximation of `Starcoder2MLP`). Same formula as `Phi2MLP` but bias-free, hence its
+    own class rather than a third flag there.
     """
 
     def __init__(self, n_embd: int, ffn_len: int, dtype: torch.dtype = torch.float32) -> None:
@@ -25,20 +25,16 @@ class FalconMLP(nn.Module):
 
 
 class FalconDecoderLayer(nn.Module):
-    """Parallel residual: `x = x + attn(norm(x)) + mlp(norm(x))` - one shared, real **biased**
+    """Parallel residual: `x = x + attn(norm(x)) + mlp(norm(x))`: one shared biased `nn.LayerNorm`
+    feeds both branches (a real `tiiuae/falcon-7b` GGUF has `attn_norm.bias` and no `attn_norm_2`:
+    the plain `parallel_attn=True, new_decoder_architecture=False` variant; the dual-norm
+    `new_decoder_architecture` and ALiBi `falcon-rw-*` variants are out of scope).
 
-    `nn.LayerNorm` feeds both branches (confirmed via a real `tiiuae/falcon-7b` GGUF: real
-    `attn_norm.bias` tensor present, and no `attn_norm_2` tensor at all - this is the plain
-    `parallel_attn=True, new_decoder_architecture=False` real Falcon variant; the newer dual-norm
-    `new_decoder_architecture` variant and the older `parallel_attn=False`/ALiBi `falcon-rw-*`
-    variant are both out of scope for this pass, not silently assumed to be the same shape).
-
-    `self_attn` reuses `QwenAttention` directly (`qkv_bias=False, qk_norm_eps=None,
-    o_proj_bias=False`) - real Falcon-7B's attention (real MQA, `head_count_kv=1`; full RoPE, no
-    bias anywhere) is exactly what those flags already produce, `n_head_kv` already generalizing
-    to MQA with no special-casing needed. The real fused `attn_qkv` GGUF tensor still needs
-    splitting into this class's separate q/k/v projections - see `FalconArchitecture.
-    _materialize_weights`'s own comment for the real MQA-aware (not equal-thirds) split.
+    `self_attn` reuses `QwenAttention` (`qkv_bias=False, qk_norm_eps=None, o_proj_bias=False`):
+    Falcon-7B's attention (MQA, `head_count_kv=1`; full RoPE, no bias) is what those flags produce,
+    `n_head_kv` already generalizing to MQA. The fused `attn_qkv` tensor is split into this class's
+    q/k/v projections; see `FalconArchitecture._materialize_weights` for the MQA-aware (not
+    equal-thirds) split.
     """
 
     def __init__(

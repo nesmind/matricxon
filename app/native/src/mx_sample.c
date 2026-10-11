@@ -1,13 +1,13 @@
-/* One fused pass for the sampler (app/runtime/sampler.py): repetition penalty, temperature, top-k,
- * top-p, softmax and the draw - replacing a chain of full-vocabulary torch ops (a sort and three
- * softmaxes over 128K-250K floats, 18-33 ms per token on the dev laptop) with O(vocab) work.
- * Numba twin: app/native/fused_ops_numba.py (kept in sync, see CLAUDE.md).
- *
+/*
+ * One fused sampler pass (app/runtime/sampler.py): repetition penalty, temperature, top-k, top-p,
+ * softmax and the draw, replacing full-vocabulary torch ops (18-33 ms per token on the dev machine)
+ * with O(vocab) work. Numba twin: app/native/fused_ops_numba.py (keep in sync).
+ * 
  * Same maths as the torch pipeline: top-k keeps every logit >= the k-th largest (ties included),
- * top-p keeps the shortest descending prefix whose probability reaches p (always the best token),
- * the draw is inverse-CDF with the caller's uniform `u` in [0, 1). Requires top_k > 0 or
- * top_p >= 1 (top-p over the whole vocabulary needs a full sort - the caller keeps torch for it).
- * Returns the token id, or -1 if memory ran out. */
+ * top-p keeps the shortest descending prefix reaching p (always the best token), the draw is
+ * inverse-CDF with the caller's uniform `u` in [0, 1). Needs top_k > 0 or top_p >= 1 (full top-p
+ * needs a sort; the caller keeps torch). Returns the token id, or -1 if out of memory.
+ */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>

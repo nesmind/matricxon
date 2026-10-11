@@ -23,28 +23,26 @@ logger = logging.getLogger(__name__)
 
 
 class Qwen35Architecture(ModelArchitecture):
-    """Alibaba Qwen3.5 (dense) - a hybrid decoder: every `full_attention_interval`-th layer (3, 7,
-    11, ... for interval 4) is gated full attention (`Qwen35Attention`), every other layer is a
-    Gated DeltaNet linear-attention mixer (`Qwen35GatedDeltaNet`); all layers share a dense SwiGLU
-    FFN. Hyperparameters and tensor names confirmed against the real header of
-    `Jackrong/Qwen3.5-9B-DeepSeek-V4-Flash-GGUF` (range-fetched 2026-10-01): 32 layers, 16 heads /
-    4 KV heads of dim 256, `rope.dimension_count=64`, 16 key / 32 value linear-attention heads of
-    dim 128. `qwen35`'s own `ssm.*` keys are read here as: `group_count` = key heads,
-    `time_step_rank` = value heads, `state_size` = per-head dim, `inner_size` = value dim.
+    """Alibaba Qwen3.5 (dense): a hybrid decoder. Every `full_attention_interval`-th layer (3, 7,
+    11,... for interval 4) is gated full attention (`Qwen35Attention`), every other a Gated
+    DeltaNet linear-attention mixer (`Qwen35GatedDeltaNet`); all share a dense SwiGLU FFN. Checked
+    against the header of `Jackrong/Qwen3.5-9B-DeepSeek-V4-Flash-GGUF`: 32 layers, 16
+    heads / 4 KV heads of dim 256, `rope.dimension_count=64`, 16 key / 32 value linear-attention
+    heads of dim 128. The `ssm.*` keys: `group_count` = key heads, `time_step_rank` = value heads,
+    `state_size` = per-head dim, `inner_size` = value dim.
 
-    Cache: reuses `NemotronHHybridCache` (a KV cache for the attention layers, conv+recurrent state
-    for the linear ones - linear layers are registered under its `"mamba"` kind). Recurrent state
-    can't be rolled back, so `PromptCache` reuses a prefix across turns via snapshots captured
-    during a (chunked) prefill - see its docstring.
+    Cache: reuses `NemotronHHybridCache` (KV for attention layers, conv+recurrent state for linear
+    ones, kind `"mamba"`). Recurrent state can't be rolled back, so `PromptCache` reuses a prefix
+    across turns via snapshots taken during a (chunked) prefill.
 
-    Vision: image embeddings (from `Qwen3VLVisionEncoder`) are spliced in at the image-pad
-    positions, with 3-axis M-RoPE position ids supplied by the caller. Out of scope: the MTP
-    head, and the MoE siblings (`qwen3next`/`qwen4exp`) - different `general.architecture` values.
+    Vision: image embeddings (`Qwen3VLVisionEncoder`) are spliced in at the image-pad positions,
+    with 3-axis M-RoPE position ids from the caller. Out of scope: the MTP head and the MoE siblings
+    (`qwen3next`/`qwen4exp`), which have different `general.architecture` values.
     """
 
     NAME = "qwen35"
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
+    SUPPORTS_BATCHED_DECODE = True
     SUPPORTS_VISION = True
 
     def __init__(
@@ -115,8 +113,8 @@ class Qwen35Architecture(ModelArchitecture):
         )
 
     def _build_rope(self) -> RotaryEmbedding:
-        """Interleaved M-RoPE when the GGUF has `rope.dimension_sections` (every real Qwen3.5
-        does) - it matches plain RoPE for text; image tokens carry 3-axis positions."""
+        """Interleaved M-RoPE when the GGUF has `rope.dimension_sections` (every Qwen3.5 does); it
+        matches plain RoPE for text, and image tokens carry 3-axis positions."""
         if self._rope_sections:
             return InterleavedMRopeEmbedding(**self._rope_kwargs, sections=self._rope_sections)
         return RotaryEmbedding(**self._rope_kwargs)
@@ -134,7 +132,7 @@ class Qwen35Architecture(ModelArchitecture):
             dtype=dtype,
             device=self.device,
         )
-        # The recurrent state accumulates over the whole context - keep it float32 even when
+        # The recurrent state accumulates over the whole context: keep it float32 even when
         # activations/KV are bf16.
         cache.ssm_state = [s.float() for s in cache.ssm_state]
         return cache
@@ -194,14 +192,14 @@ class Qwen35Architecture(ModelArchitecture):
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
         _, seq_len = input_ids.shape
-        if kv_cache is None:  # plain full-sequence pass (tests/oracle): a throwaway cache
+        if kv_cache is None:
             kv_cache = self.build_cache(seq_len, self._dtype)
         if position_ids is None:
             position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)
-        if getattr(kv_cache, "batched", False):  # batched decode: one text position per sequence
+        if getattr(kv_cache, "batched", False):
             cos, sin = RotaryEmbedding.forward(self.rope, position_ids)
         else:
-            cos, sin = self.rope(position_ids)  # (T,) text, or (3, T) with images
+            cos, sin = self.rope(position_ids)
 
         x = self.token_embd(input_ids)
         for start, embeds in image_embeddings or []:
@@ -213,8 +211,8 @@ class Qwen35Architecture(ModelArchitecture):
                 raise GenerationCancelledError(f"stopped after layer {i + 1}/{self.n_layer}")
 
         if self._last_logits_only:
-            # Only the last position's logits are read; a full-sequence LM head would dequantize
-            # the whole vocab matrix and build a (T, vocab) row block per prefill piece.
+            # Only the last position's logits are read; a full-sequence LM head would dequantize the
+            # whole vocab matrix and build a (T, vocab) row block per prefill piece.
             x = x[:, -1:, :]
         x = self.output_norm(x)
         if self._tied_embeddings:

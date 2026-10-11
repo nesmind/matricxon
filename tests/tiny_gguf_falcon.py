@@ -1,19 +1,16 @@
-"""Builds a tiny, complete, valid `falcon` GGUF file - mirrors `tiny_gguf_command_r.py`'s
-
-structure, but with a real fused, bias-free `attn_qkv` tensor in real MQA proportions
-(`head_count=2`, `head_count_kv=1` here - real `tiiuae/falcon-7b` is `71`/`1`) instead of
-separate `attn_q`/`attn_k`/`attn_v`, and a real **biased** `attn_norm` (the one shared
-parallel-residual norm - no `attn_norm_2` tensor at all, confirmed real for this
-`parallel_attn=True, new_decoder_architecture=False` variant) feeding a plain, bias-free,
-non-gated GELU MLP (`ffn_up`/`ffn_down`, no `ffn_gate`).
-"""
+"""Builds a tiny, complete, valid `falcon` GGUF, mirroring `tiny_gguf_command_r.py`, with a fused
+bias-free `attn_qkv` in MQA proportions (`head_count=2`, `head_count_kv=1`; `tiiuae/falcon-7b` is
+`71`/`1`) instead of separate `attn_q`/`attn_k`/`attn_v`, and a **biased** `attn_norm` (the one
+shared parallel-residual norm; no `attn_norm_2`, as in the `parallel_attn=True,
+new_decoder_architecture=False` variant) feeding a plain, bias-free, non-gated GELU MLP
+(`ffn_up`/`ffn_down`, no `ffn_gate`)."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2

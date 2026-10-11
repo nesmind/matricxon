@@ -1,5 +1,5 @@
-"""Experimental GPU mode, checked without a GPU: the `meta` device stands in for CUDA (it is a
-non-CPU device with no data), so placement, caches and masks are exercised, not real kernels."""
+"""Experimental GPU mode without a GPU: the `meta` device stands in for CUDA (a non-CPU device with
+no data), exercising placement, caches and masks, not kernels."""
 
 import json
 from pathlib import Path
@@ -22,7 +22,7 @@ META = torch.device("meta")
 
 
 class FakeGpu(ComputeDevice):
-    """A 'GPU' backed by the meta device with a configurable amount of free VRAM."""
+    """A 'GPU' backed by the meta device with configurable free VRAM."""
 
     def __init__(self, free_bytes: int = 1 << 40) -> None:
         super().__init__(META)
@@ -130,7 +130,7 @@ class TestForwardRouting:
         seen: dict[str, torch.device] = {}
 
         class Probe(Mistral3TextArchitecture):
-            def __init__(self) -> None:  # skip building real layers
+            def __init__(self) -> None:
                 torch.nn.Module.__init__(self)
                 self._materialized = True
                 self._last_logits_only = False
@@ -161,8 +161,8 @@ class CpuBackedGpu(FakeGpu):
 
 class TestPackedModeThroughTheManager:
     def test_unpackable_weights_fall_back_to_real_tensors(self, tmp_path, monkeypatch) -> None:
-        # The tiny mistral3 file is F32 (no packable type): every placeholder is loaded by the
-        # plain fallback path and settled on the device, then a forward must run.
+        # The tiny mistral3 file is F32 (no packable type): every placeholder loads by the plain
+        # fallback and settles on the device, then a forward must run.
         _install(tmp_path / "models")
         monkeypatch.setattr(ComputeDevice, "resolve", classmethod(lambda c, s: CpuBackedGpu()))
         manager = ModelManager(
@@ -179,7 +179,7 @@ class TestPromptCacheBudgetOnVram:
         assert manager._cache_budget_bytes(False, 0, 0) == 2048 << 20
         # 10 GB free, 8 GB of weights -> half of the 2 GB left (1 GB), below the 2 GB setting
         assert manager._cache_budget_bytes(True, 10 << 30, 8 << 30) == 1 << 30
-        assert manager._cache_budget_bytes(True, 1 << 30, 8 << 30) == 0  # nothing left over
+        assert manager._cache_budget_bytes(True, 1 << 30, 8 << 30) == 0
 
 
 class TestStartupDeviceCheck:

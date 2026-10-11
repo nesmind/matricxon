@@ -1,6 +1,5 @@
-"""`Qwen35Architecture` against a tiny synthetic `qwen35` GGUF: registry resolution, layer
-pattern, and that incremental decoding (hybrid cache) matches a single full-sequence pass.
-"""
+"""`Qwen35Architecture` on a tiny `qwen35` GGUF: registry resolution, layer pattern, and incremental
+decoding (hybrid cache) matching a full-sequence pass."""
 
 from pathlib import Path
 

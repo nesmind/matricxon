@@ -21,11 +21,10 @@ def test_chat_skips_generation_when_stop_arrives_while_still_loading(
     tiny_mistral3_model: InstalledModel,
     monkeypatch,
 ) -> None:
-    """Regression guard for the real bug, reproduced through the actual HTTP layer (not just the
-    ModelManager unit tests): a stop request arriving while /api/chat's own get_or_load() call is
-    still stuck loading used to be silently lost, since unload() had no handle yet to signal - see
-    ModelManager.pop_cancelled_load's own docstring. _load is blocked with a threading.Event
-    handshake so this proves the actual race, not a convenient but unrealistic call ordering."""
+    """Regression guard through the HTTP layer (not just ModelManager's unit tests): a stop arriving
+    while /api/chat's get_or_load is still loading used to be lost, as unload had no handle to
+    signal (ModelManager.pop_cancelled_load). _load is blocked with a threading.Event handshake,
+    proving the race rather than a convenient call order."""
     load_started = threading.Event()
     proceed = threading.Event()
     real_load = ModelManager._load
@@ -52,14 +51,14 @@ def test_chat_skips_generation_when_stop_arrives_while_still_loading(
     thread.start()
     try:
         assert load_started.wait(timeout=5)
-        assert model_manager.list_loaded() == []  # still loading - no handle exists yet
-        model_manager.unload(tiny_mistral3_model.tag)  # the real stop request, arriving mid-load
+        assert model_manager.list_loaded() == []
+        model_manager.unload(tiny_mistral3_model.tag)
     finally:
         proceed.set()
         thread.join(timeout=10)
 
     assert result["response"].status_code == 200
     assert result["response"].json() == {}
-    # The model still ended up loaded and cached (the real work wasn't wasted) - just this one
-    # request's own generation was skipped.
+    # The model still ended up loaded and cached (the work wasn't wasted); only this request's
+    # generation was skipped.
     assert model_manager.list_loaded()[0].tag == tiny_mistral3_model.tag

@@ -1,15 +1,14 @@
-"""Builds a tiny, complete, valid `qwen2` GGUF file - mirrors `tiny_gguf_granite.py`'s structure,
-plus real q/k/v bias tensors (non-zero, so a bug that silently drops or misaligns bias changes
-the numeric output, not just shapes) and no `attention.key_length` key (the real, common case for
-Qwen2 GGUFs - `Qwen2Architecture` must fall back to `n_embd // n_head`).
-"""
+"""Builds a tiny, complete, valid `qwen2` GGUF, mirroring `tiny_gguf_granite.py`, plus non-zero
+q/k/v bias tensors (a bug dropping or misaligning bias changes the numeric output, not just shapes)
+and no `attention.key_length` key (the common Qwen2 case: `Qwen2Architecture` must fall back to
+`n_embd // n_head`)."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2

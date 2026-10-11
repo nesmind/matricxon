@@ -1,13 +1,10 @@
-"""GEMV kernels for the remaining 4 K-quant types not already in `quantized_gemv.py` (Q2_K, Q3_K,
-Q5_K, Q8_K) - Phase 2 of the quantized-native compute plan, same real, honest performance profile
-as `qgemv_q4_k`/`qgemv_q6_k` (register-only accumulators, no heap scratch buffer). Correctness
-cross-checked against each type's own already-oracle-validated `QuantStrategy.dequantize()` in
-`kquants.py`/`kquants_extended.py`.
+"""GEMV kernels for the remaining K-quant types (Q2_K, Q3_K, Q5_K, Q8_K), with the performance
+profile of `qgemv_q4_k`/`qgemv_q6_k` (register-only accumulators, no heap scratch). Cross-checked
+against each type's `QuantStrategy.dequantize` in `kquants.py`/`kquants_extended.py`.
 
-Q3_K's scale unpacking (word-level bit reassembly, not a simple per-byte mask) is reused directly
-from `kquants_extended._unpack_q3k_scales` rather than re-derived - that function already runs
-once per real weight-loading call (this kernel calls it once per GEMV call, same cost class), it's
-only the *per-element* dequant+accumulate that needs to avoid ever materializing the full matrix.
+Q3_K's scale unpacking (word-level bit reassembly) reuses `kquants_extended._unpack_q3k_scales`; it
+runs once per GEMV call, and only the per-element dequant+accumulate must avoid materializing the
+matrix.
 """
 
 import numba
@@ -18,10 +15,10 @@ from app.gguf.dequant.kquants_extended import _unpack_q3k_scales
 
 _QK_K = 256
 _K_SCALE_SIZE = 12
-Q2_K_TYPE_SIZE = _QK_K // 16 + _QK_K // 4 + 2 + 2  # 84
-Q3_K_TYPE_SIZE = _QK_K // 8 + _QK_K // 4 + _K_SCALE_SIZE + 2  # 110
-Q5_K_TYPE_SIZE = 2 + 2 + _K_SCALE_SIZE + _QK_K // 8 + _QK_K // 2  # 176
-Q8_K_TYPE_SIZE = 4 + _QK_K + (_QK_K // 16) * 2  # 292
+Q2_K_TYPE_SIZE = _QK_K // 16 + _QK_K // 4 + 2 + 2
+Q3_K_TYPE_SIZE = _QK_K // 8 + _QK_K // 4 + _K_SCALE_SIZE + 2
+Q5_K_TYPE_SIZE = 2 + 2 + _K_SCALE_SIZE + _QK_K // 8 + _QK_K // 2
+Q8_K_TYPE_SIZE = 4 + _QK_K + (_QK_K // 16) * 2
 
 
 def _require_divisible(in_features: int) -> int:
@@ -32,8 +29,8 @@ def _require_divisible(in_features: int) -> int:
 
 @numba.njit(inline="always")
 def _get_scale_min_k4(j: int, scales_row: np.ndarray) -> tuple[np.uint8, np.uint8]:
-    """Same as quantized_gemv.py's own copy - duplicated per that module's own established
-    precedent (small per-file helper, not cross-imported) rather than a new shared import."""
+    """Same as quantized_gemv.py's copy, duplicated per that module's precedent (small per-file
+    helper, not cross-imported)."""
     if j < 4:
         return np.uint8(scales_row[j] & 0x3F), np.uint8(scales_row[j + 4] & 0x3F)
     sc = np.uint8((scales_row[j + 4] & 0x0F) | ((scales_row[j - 4] >> 6) << 4))

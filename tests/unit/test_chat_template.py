@@ -1,6 +1,5 @@
-"""Unit tests for app/runtime/chat_template.py - rendering a GGUF's own Jinja chat template, BOS
-handling, and the per-architecture builder choice (see that module's docstring for the real
-Llama-3.2 bug this fixes)."""
+"""Tests for app/runtime/chat_template.py: rendering a GGUF's Jinja chat template, BOS handling and
+the per-architecture builder choice (the Llama-3.2 bug it fixes: the module docstring)."""
 
 import pytest
 
@@ -18,7 +17,7 @@ from app.runtime.prompt_builder import (
 )
 from app.schemas.chat import ChatMessage
 
-# A trimmed-down version of Llama 3's real template structure.
+# A trimmed-down version of Llama 3's template structure.
 _LLAMA3_TEMPLATE = (
     "{{- bos_token }}"
     "{% for m in messages %}"
@@ -77,9 +76,9 @@ def test_mistral3_keeps_its_hand_verified_builder() -> None:
 
 
 def test_no_template_and_not_mistral3_architecture_gets_the_legacy_builder() -> None:
-    """Not Mistral3PromptBuilder - that format's [SYSTEM_PROMPT] tag is Mistral3-tokenizer-only
-    and broke a real older Mistral fine-tune the same way [INST]-for-everything broke Llama 3.2
-    (see app/runtime/prompt_builder.py:LegacyMistralPromptBuilder's own docstring)."""
+    """Not Mistral3PromptBuilder: its [SYSTEM_PROMPT] tag is Mistral3-tokenizer-only and broke an
+    older Mistral fine-tune like [INST]-for-everything broke Llama 3.2
+    (app/runtime/prompt_builder.py:LegacyMistralPromptBuilder)."""
     builder = PromptBuilderFactory.for_metadata(_metadata("phi2", None))
     assert isinstance(builder, LegacyMistralPromptBuilder)
 
@@ -88,9 +87,9 @@ _LLAVA_VICUNA_TAG = "hf.co/second-state/Llava-v1.6-Vicuna-7B-GGUF:llava-v1.6-vic
 
 
 def test_a_vicuna_tag_gets_the_vicuna_builder_instead_of_the_legacy_guess() -> None:
-    """A tag-name match, not metadata - llava-v1.6-vicuna-7b's own GGUF gives no metadata-only
-    way to detect this (see VicunaPromptBuilder's own docstring: LegacyMistralPromptBuilder's
-    Mistral-shaped guess produced a real, empty, immediate-EOS reply for this exact model)."""
+    """A tag-name match, not metadata: a LLaVA-Vicuna model's GGUF gives no metadata-only way to
+    detect it (VicunaPromptBuilder: LegacyMistralPromptBuilder's Mistral-shaped guess gave an empty
+    immediate-EOS reply for this model)."""
     builder = PromptBuilderFactory.for_metadata(_metadata("llama", None), tag=_LLAVA_VICUNA_TAG)
     assert isinstance(builder, VicunaPromptBuilder)
 
@@ -117,19 +116,19 @@ def test_has_confirmed_template_is_false_without_a_vicuna_tag_match() -> None:
 
 
 def test_generation_tag_template_renders_as_a_transparent_pass_through() -> None:
-    """Real HF templates (Llama 3.1+, Granite 3.x) wrap the assistant turn in `{% generation %}`
-    - crashed a real DictaLM-3.0-24B-Thinking GGUF's /api/tags entry (2026-09-29, unknown Jinja
-    tag) before GenerationTagExtension existed."""
+    """HF templates (Llama 3.1+, Granite 3.x) wrap the assistant turn in `{% generation %}`; this
+    crashed a a DictaLM model GGUF's /api/tags entry (unknown Jinja tag) before
+    GenerationTagExtension."""
     template = "{% generation %}{{ 'hello' }}{% endgeneration %}"
     builder = ChatTemplatePromptBuilder(template, "", "")
     assert builder.build([]) == "hello"
 
 
 def test_unsupported_template_syntax_degrades_to_none_not_a_crash() -> None:
-    """A template using Jinja syntax matricxon's environment still doesn't support must not
-    crash from_metadata's caller (has_confirmed_chat_format is called once per installed model
-    on every GET /api/tags - one bad model's template must not take down every other model's
-    listing, see from_metadata's own except TemplateError)."""
+    """A template with Jinja syntax matricxon's environment doesn't support must not crash
+    from_metadata's caller (has_confirmed_chat_format runs per installed model on every GET
+    /api/tags; one bad template must not take down every model's listing; from_metadata's `except
+    TemplateError`)."""
     metadata = _metadata("llama", "{% this_tag_does_not_exist %}{{ 'x' }}{% endthis_tag %}")
     assert ChatTemplatePromptBuilder.from_metadata(metadata) is None
 
@@ -157,7 +156,7 @@ def test_moondream2_without_a_template_gets_its_builtin_question_answer_format()
     )
 
     assert prompt == "\n\nQuestion: Hi\n\nAnswer:"
-    assert builder.wants_bos(prompt) is True  # moondream's reference code always prepends BOS
+    assert builder.wants_bos(prompt) is True
 
 
 def test_image_markers_lead_the_content_for_vision_fusion() -> None:
@@ -168,7 +167,7 @@ def test_image_markers_lead_the_content_for_vision_fusion() -> None:
     assert prompt == "[IMG][IMG]What?|What?"
 
 
-# The real Llama 3.x template's always-on system block, reduced to what the compact switch keys on.
+# Llama 3.x's always-on system block, reduced to what the compact switch keys on.
 _LLAMA3_WITH_DATE_BLOCK = (
     "{{- bos_token }}<|start_header_id|>system<|end_header_id|>\n\n"
     "Cutting Knowledge Date: December 2023\n"
@@ -195,9 +194,9 @@ def test_llama3_without_tools_skips_the_date_system_block_like_ollama() -> None:
     assert builder.wants_bos(prompt) is False
 
 
-# A trimmed-down version of the real ggml-org/SmolVLM2-2.2B-Instruct-GGUF template - expects
-# `content` as a real list of {"type": ...} parts, not a flat string (confirmed live, 2026-09-30:
-# a flat string either crashed on empty content or silently rendered as if the message had none).
+# A trimmed-down ggml-org/SmolVLM2-2.2B-Instruct-GGUF template: `content` as a list of {"type": ...}
+# parts, not a flat string (a flat string crashed on empty content or rendered as
+# if the message had none).
 _SMOLVLM2_TEMPLATE = (
     "{% for message in messages %}"
     "{{ message['role'] | capitalize }}"
@@ -213,46 +212,39 @@ _SMOLVLM2_TEMPLATE = (
 
 
 def test_structured_content_template_renders_real_text_not_silently_empty() -> None:
-    """Before this fix: a flat `content` string meant `content[0]` indexed its first *character*
-
-    (not a dict), so every `{% if part['type'] == ... %}` branch silently never matched - the
-    real message text vanished from the prompt with no error at all."""
+    """Before the fix a flat `content` string made `content[0]` its first *character*, not a dict,
+    so every `{% if part['type'] == ... %}` silently failed and the message text vanished from the
+    prompt."""
     builder = PromptBuilderFactory.for_metadata(_metadata("llama", _SMOLVLM2_TEMPLATE))
     prompt = builder.build([ChatMessage(role="user", content="hi")])
     assert prompt == "User: hi<eot>\nAssistant:"
 
 
 def test_structured_content_template_does_not_crash_on_empty_content() -> None:
-    """Before this fix: `content[0]` on an empty string raised `IndexError`, surfaced to the
-
-    user as "could not render this model's chat template: str object has no element 0"."""
+    """Before the fix `content[0]` on an empty string raised `IndexError`, shown as "could not
+    render this model's chat template: str object has no element 0"."""
     builder = PromptBuilderFactory.for_metadata(_metadata("llama", _SMOLVLM2_TEMPLATE))
     prompt = builder.build([ChatMessage(role="user", content="")])
     assert prompt == "User: <eot>\nAssistant:"
 
 
 def test_structured_content_template_puts_the_real_image_marker_before_text() -> None:
-    """Real `[IMG]` (vision_fusion.IMAGE_MARKER), not the template's own `<image>` literal - see
-
-    _message_dict's own docstring: a real `{"type": "image"}` part can never carry our marker
-    through (the template ignores it and renders its own hardcoded literal instead), so every
-    part here is `{"type": "text", ...}`, including the image one. Real, accepted cost: the
-    template's own `content[0]['type'] == 'image'` punctuation check now takes its no-image
-    path (a space after "User:") instead of its image one - cosmetic, not structural."""
+    """The `[IMG]` marker (vision_fusion.IMAGE_MARKER), not the template's `<image>` literal
+    (_message_dict: a `{"type": "image"}` part can't carry our marker, as the template renders its
+    own literal), so every part is `{"type": "text", ...}`, the image one included. Accepted cost:
+    the template's `content[0]['type'] == 'image'` punctuation check takes its no-image path (a
+    space after "User:"): cosmetic."""
     builder = PromptBuilderFactory.for_metadata(_metadata("llama", _SMOLVLM2_TEMPLATE))
     prompt = builder.build([ChatMessage(role="user", content="describe", images=["b64"])])
     assert prompt == "User: [IMG]describe<eot>\nAssistant:"
 
 
 def test_structured_content_template_marker_lands_inside_the_turn_not_after_it() -> None:
-    """Real, confirmed-live bug this guards: before _message_dict carried IMAGE_MARKER through a
-
-    text-type part, a structured-content template's rendered prompt never contained `[IMG]` at
-    all, so vision_fusion.build_prompt_with_images's own `prompt.split(IMAGE_MARKER)` found
-    nothing to split on and appended the real image embeddings *after* the whole prompt
-    (including the generation-prompt suffix) instead of inside the user's turn - a real,
-    confirmed cause of an empty first reply (the model's next-token position was mid-image-patch,
-    not right after "Assistant:")."""
+    """Guards a bug: before _message_dict carried IMAGE_MARKER through a text-type part, a
+    structured-content template's prompt had no `[IMG]`, so vision_fusion.build_prompt_with_images's
+    `prompt.split(IMAGE_MARKER)` found nothing and appended the image embeddings *after* the whole
+    prompt (past the generation-prompt suffix) instead of inside the user's turn, giving an empty
+    first reply (the next-token position was mid-image-patch, not after "Assistant:")."""
     from app.runtime.vision_fusion import IMAGE_MARKER
 
     builder = PromptBuilderFactory.for_metadata(_metadata("llama", _SMOLVLM2_TEMPLATE))

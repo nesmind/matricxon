@@ -1,6 +1,6 @@
-"""gemma4 (PLE, sliding masks, MoE-capable) and granitemoe on the device path, without a GPU:
-packed placement on the CPU device must reproduce the plain model's logits, with every expert
-and the packed embedding tables actually held as `DevicePacked*` modules."""
+"""gemma4 (PLE, sliding masks, MoE-capable) and granitemoe on the device path without a GPU: packed
+placement on the CPU device must reproduce the plain model's logits, every expert and packed
+embedding table held as `DevicePacked*` modules."""
 
 from pathlib import Path
 
@@ -41,7 +41,7 @@ def test_packed_placement_matches_the_plain_model(name: str, tmp_path: Path) -> 
     assert torch.allclose(actual, expected, atol=1e-4, rtol=1e-4)
     kinds = {type(m) for m in packed.modules()}
     assert DevicePackedLinear in kinds
-    if name == "gemma4":  # granitemoe never routed token_embd through a packed table
+    if name == "gemma4":
         assert DevicePackedEmbedding in kinds
 
 
@@ -52,4 +52,4 @@ def test_packed_moe_experts_are_per_expert_device_modules(tmp_path: Path) -> Non
     experts = model.layers[0].mlp.experts
     assert len(experts.gate_packed) == experts.num_experts
     assert all(isinstance(m, DevicePackedLinear) for m in experts.gate_packed.values())
-    assert experts.gate_exps.numel() == 0  # the dense placeholder was dropped
+    assert experts.gate_exps.numel() == 0

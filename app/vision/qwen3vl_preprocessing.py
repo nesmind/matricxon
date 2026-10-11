@@ -9,10 +9,10 @@ from PIL import Image
 
 class Qwen3VLImagePreprocessor:
     """Base64 image -> normalized `(1, 3, H, W)` with H and W snapped to multiples of `factor`
-    (`patch_size * merge`, 32), keeping aspect ratio - HF's `smart_resize`: round each side to the
-    nearest multiple, then scale down/up if the area leaves `[min_pixels, max_pixels]`.
-    `max_pixels` is lower than HF's default (16.7M) to bound ViT cost on this project's hardware:
-    1M pixels is at most 1024 merged tokens."""
+    (`patch_size * merge`, 32), keeping aspect ratio (HF's `smart_resize`): round each side to the
+    nearest multiple, then scale down/up if the area leaves `[min_pixels, max_pixels]`. `max_pixels`
+    is below HF's default (16.7M) to bound ViT cost on this hardware: 1M pixels is at most 1024
+    merged tokens."""
 
     def __init__(
         self,

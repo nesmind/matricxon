@@ -1,17 +1,16 @@
-"""A tiny `llama` GGUF whose 2-D weights are Q8_0-quantized (norms stay F32), with tied embeddings
-like a real Llama-3.2 file - big enough (n_embd 64) for Q8_0's 32-value blocks, so the packed
-paths (QuantizedEmbedding, a tied QuantizedLinear lm_head, attn_q/attn_k with their row
-permutation applied to packed rows) can be checked end to end against the float path on the
-exact same quantized values. Tokenizer metadata matches tests/tiny_gguf_llama.py.
-"""
+"""A tiny `llama` GGUF with Q8_0 2-D weights (norms stay F32) and tied embeddings like a Llama-3.2
+file, big enough (n_embd 64) for Q8_0's 32-value blocks, so the packed paths (QuantizedEmbedding, a
+tied QuantizedLinear lm_head, attn_q/attn_k with their row permutation on packed rows) can be
+checked end to end against the float path on the same quantized values. Tokenizer metadata as
+tests/tiny_gguf_llama.py."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
 from tests.tiny_gguf_llama import _CONTROL_TOKENS, _byte_tokens
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 64
 N_HEAD = 4

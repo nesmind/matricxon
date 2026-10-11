@@ -22,10 +22,8 @@ from app.server.errors import UnsupportedArchitectureError
 
 
 class ArchitectureRegistry:
-    """Resolves a GGUF file's `general.architecture` to a ModelArchitecture
-    subclass; fails closed (never attempts a best-effort/approximate forward
-    pass for something unrecognized).
-    """
+    """Resolves a GGUF file's `general.architecture` to a ModelArchitecture subclass; fails closed
+    (never a best-effort/approximate forward pass for something unrecognized)."""
 
     _ARCHITECTURES: list[type[ModelArchitecture]] = [
         Mistral3TextArchitecture,
@@ -54,22 +52,21 @@ class ArchitectureRegistry:
         )
 
     def supported_names(self) -> list[str]:
-        """Every real `general.architecture` string this registry currently
-
-        resolves - each class's own `NAME`, as real data rather than
-        something re-parsed back out of `supports()`'s comparison logic.
-        Used by `GET /api/health` so a caller can ask "can you run this?"
-        without hand-maintaining its own separate copy of this list.
+        """Every `general.architecture` string this registry resolves: each class's `NAME`, as data
+        rather than re-parsed from `supports`.
+        Used by `GET /api/health` so a caller can ask "can you run this?" without keeping its own
+        copy of this list.
         """
         return [architecture_cls.NAME for architecture_cls in self._ARCHITECTURES]
 
     def moe_supported_names(self) -> list[str]:
-        """The subset of `supported_names()` with real, working Mixture-of-Experts support (see
-        `ModelArchitecture.SUPPORTS_MOE`'s own docstring - `llama` for real Mixtral GGUFs,
-        `granitemoe`) - used by `GET /api/health` alongside `supported_architectures` so a
-        caller can tell "resolves this architecture name" apart from "and can actually run its
-        MoE variant", the exact distinction `gemma4`'s own `unsupported_features` MoE flag
-        exists to catch per-checkpoint (this is the same fact, surfaced architecture-wide)."""
+        """The subset of `supported_names` with working Mixture-of-Experts support
+        (`ModelArchitecture.SUPPORTS_MOE`: `llama` for Mixtral
+        GGUFs, `granitemoe`), used by `GET /api/health` so a caller can tell "resolves this name"
+        from "and can run its MoE variant" (the
+        per-checkpoint fact `gemma4`'s `unsupported_features` MoE flag catches, here
+        architecture-wide).
+        """
         return [
             architecture_cls.NAME
             for architecture_cls in self._ARCHITECTURES
@@ -77,8 +74,8 @@ class ArchitectureRegistry:
         ]
 
     def vision_supported_names(self) -> list[str]:
-        """The subset of `supported_names()` that really fuses paired-mmproj image embeddings (see
-        `ModelArchitecture.SUPPORTS_VISION`) - `GET /api/health` reports it so a caller can tell
+        """The subset of `supported_names` that fuses paired-mmproj image embeddings
+        (`ModelArchitecture.SUPPORTS_VISION`), reported by `GET /api/health` so a caller can tell
         "resolves this name" from "and can see images"."""
         return [
             architecture_cls.NAME
@@ -87,26 +84,22 @@ class ArchitectureRegistry:
         ]
 
 
-# Keyed by (path, mtime, size) - same reasoning/pattern as has_confirmed_chat_format's own cache
-# (app/runtime/chat_template.py): a cheap header-only GGUFReader parse, and a file's own metadata
-# never changes without the file itself changing.
+# Keyed by (path, mtime, size), like has_confirmed_chat_format's cache
+# (app/runtime/chat_template.py): a cheap header-only GGUFReader parse, and a file's metadata never
+# changes without the file.
 _unsupported_features_cache: dict[tuple[str, int, int], list[str]] = {}
 
 
 def unsupported_features(gguf_path: str | Path) -> list[str]:
-    """`gguf_path`'s own resolved architecture class's `unsupported_features(metadata)` (see
-    that method's own docstring on `ModelArchitecture` for what this means and why it exists) -
-    for a caller with only a path, not already-parsed `GGUFMetadata` (see
-    `app.models.capabilities.effective_capabilities`'s own `"architecture_features_unsupported"`
-    flag, the real consumer).
+    """`unsupported_features(metadata)` of `gguf_path`'s architecture class (see
+    `ModelArchitecture`), for a caller with only a path (the consumer:
+    `app.models.capabilities.effective_capabilities`'s `"architecture_features_unsupported"`).
 
-    `[]` (not a raised error) when `gguf_path` isn't `ArchitectureRegistry`-resolvable at all - a
-    real, live regression this fixes (2026-09-29): a `clip` mmproj sidecar file (never
-    resolvable on its own, see `capabilities._MMPROJ_ARCHITECTURE`'s own comment) crashed this
-    for every installed model, not just itself, since `effective_capabilities` calls this once
-    per installed tag inside `GET /api/tags`'s own loop - the exact same "one bad file must not
-    take down the whole listing" failure shape `has_confirmed_chat_format`'s own except clause
-    already guards against, just not copied here the first time."""
+    `[]` (not an error) when `gguf_path` isn't resolvable. A `clip` mmproj sidecar (never resolvable
+    alone; `capabilities._MMPROJ_ARCHITECTURE`) used to crash this for every installed model, since
+    `effective_capabilities` calls it per tag inside `GET /api/tags`: one bad file must not take
+    down the listing.
+    """
     path = Path(gguf_path)
     stat = path.stat()
     cache_key = (str(path), stat.st_mtime_ns, stat.st_size)

@@ -12,9 +12,12 @@ def fused_cached_attention(
     window: int | None = None,
 ) -> torch.Tensor | None:
     """Attention of a few new query tokens over the KV cache in one native call (`FusedOps`), or
-    None when that doesn't apply (fused ops off, a prefill, a batched decode, non-float32...) and
-    the caller runs its torch `scaled_dot_product_attention`. `scale=None` is the default
-    1/sqrt(head_dim); `window` is a sliding-window size (None/0: full causal)."""
+    None when that
+    doesn't apply (fused ops off, a prefill, a batched decode, non-float32...) and the caller runs
+    torch
+    `scaled_dot_product_attention`. `scale=None` is the default 1/sqrt(head_dim); `window` is a
+    sliding-window size (None/0: full causal).
+    """
     ops = FusedOps.active()
     if ops is None:
         return None

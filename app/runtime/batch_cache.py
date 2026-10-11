@@ -1,13 +1,13 @@
-"""Wrappers that let ONE forward pass run a decode step for several sequences at once.
+"""Wrappers that let one forward pass run a decode step for several sequences.
 
-A batched decode step feeds `B` sequences' newest tokens through the model as a `(B, 1)` input. The
-linear layers see `B` tokens and read each weight once for all of them (decode is memory-bound, so
-that is where the throughput comes from); attention and recurrent state stay per sequence. These
-wrappers stand in for the usual cache object inside the layers' unchanged code:
+A batched step feeds `B` sequences' newest tokens as a `(B, 1)` input. Linear layers read each
+weight once for all (decode is memory-bound: where throughput comes from); attention and recurrent
+state stay per sequence. The wrappers stand in for the cache object inside the layers' unchanged
+code:
 
-- `length` is a `(B, 1, 1, 1)` tensor of each sequence's current length, so an attention module's
-  own `kv_idx <= q_idx + cache_offset` mask comes out per sequence, shape `(B, 1, 1, kv_len)`;
-- `update` appends each sequence's new key/value to ITS cache and returns the caches padded to a
+- `length` is a `(B, 1, 1, 1)` tensor of each sequence's length, so an attention module's `kv_idx <=
+  q_idx + cache_offset` mask comes out per sequence, `(B, 1, 1, kv_len)`;
+- `update` appends each sequence's new key/value to its cache and returns the caches padded to a
   common length, which that mask hides.
 
 After the forward the caller advances each real cache by one, as for an ordinary step.

@@ -1,10 +1,7 @@
-"""Fast/offline: only reads the real ministral-3:3b GGUF's KB-scale header
-(never the multi-GB tensor data), so this needs no memory cap and no
-network - unlike scripts/oracle/validate_tokenizer.py, which additionally
-cross-checks against the real HF tokenizer as a deeper oracle. Skips
-gracefully without pAIring's local blob store, matching
-tests/integration/conftest.py's real_ministral_model fixture.
-"""
+"""Fast/offline: reads only the ministral-3:3b GGUF's KB-scale header (never the tensor data), so no
+memory cap or network, unlike tools/oracle/validate_tokenizer.py, which also cross-checks against
+the HF tokenizer. Skips without pAIring's blob store (tests/integration/conftest.py
+`real_ministral_model`)."""
 
 import pytest
 
@@ -31,7 +28,7 @@ class TestGGUFTokenizer:
         assert tokenizer.decode(tokenizer.encode(text)) == text
 
     def test_control_token_encodes_as_a_single_id(self, tokenizer: GGUFTokenizer) -> None:
-        # Real ids for this model's tokenizer.ggml.tokens: [..., "[INST]"=3, "[/INST]"=4, ...]
+        # Ids for this model's tokenizer.ggml.tokens: [..., "[INST]"=3, "[/INST]"=4,...]
         assert tokenizer.encode("[INST]") == [3]
 
     def test_control_tokens_short_circuit_around_ordinary_text(

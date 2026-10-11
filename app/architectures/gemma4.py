@@ -21,32 +21,27 @@ logger = logging.getLogger(__name__)
 
 
 class Gemma4Architecture(ModelArchitecture):
-    """The dense (non-MoE) `gemma4` decoder - first built against a real
-    `google/gemma-4-12b-it` GGUF pull (7GB, Q4_0, no expert/routing metadata, no active
-    KV-sharing/PLE), later extended (2026-09-29) against a real `gemma-4-E2B-it` GGUF that DOES
-    activate both real Per-Layer Embeddings (see `gemma4_ple.py`) and cross-layer KV reuse (see
-    `Gemma4Attention`'s own docstring) - this class ports whatever a given real checkpoint's own
-    metadata actually activates, never assumed uniform across checkpoints. MoE (real HF
-    `Gemma4TextExperts`/`Gemma4TextRouter`) is still out of scope - no real GGUF needing it has
-    been checked against yet.
+    """The dense (non-MoE) `gemma4` decoder: first built against a `google/gemma-4-12b-it` GGUF
+    (7GB, Q4_0, no expert/routing metadata, no active KV-sharing/PLE), extended against
+    a `gemma-4-E2B-it` GGUF that activates Per-Layer Embeddings (`gemma4_ple.py`) and cross-layer KV
+    reuse (`Gemma4Attention`). It ports what a checkpoint's metadata activates, never assumed
+    uniform. MoE (HF `Gemma4TextExperts`/`Gemma4TextRouter`) is out of scope: no real MoE GGUF has
+    been checked.
 
-    Genuinely different from `Mistral3TextArchitecture`/`LlamaArchitecture` in ways real tensor
-    inspection surfaced, not assumed from general Gemma familiarity - see `gemma4_layers.py`'s
-    own docstrings for the per-layer attention shape/behavior differences. At the whole-model
-    level: two separate RoPE configurations (local/sliding layers use `freq_base_swa` at
-    `head_dim`=256; global layers use `freq_base`=1e6 at `head_dim`=512, corrected by a real
-    `rope_freqs.weight` tensor - see `_materialize_weights`), which layers are local vs. global
-    comes from the real per-layer `attention.sliding_window_pattern` metadata array (not a
-    hardcoded period), scaled input embeddings (`* sqrt(n_embd)`, the classic Gemma-family
-    convention), and final-logit soft-capping (`tanh(logits / cap) * cap`, real value 30.0 on
-    the original 12B checkpoint).
+    Differs from `Mistral3TextArchitecture`/`LlamaArchitecture` in ways real tensor inspection found
+    (per-layer attention differences: `gemma4_layers.py`). Whole-model: two RoPE configs
+    (local/sliding layers use `freq_base_swa` at `head_dim`=256; global layers `freq_base`=1e6 at
+    `head_dim`=512, corrected by a `rope_freqs.weight` tensor; see `_materialize_weights`); local vs
+    global layers come from the per-layer `attention.sliding_window_pattern` metadata array (not a
+    hardcoded period); scaled input embeddings (`* sqrt(n_embd)`, the Gemma convention); and
+    final-logit soft-capping (`tanh(logits / cap) * cap`, 30.0 on the 12B).
     """
 
     NAME = "gemma4"
     supports_context_shift = True
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
-    SUPPORTS_MOE = True  # real Gemma4TextExperts/Gemma4TextRouter - see gemma4_moe.py
+    SUPPORTS_BATCHED_DECODE = True
+    SUPPORTS_MOE = True
 
     def __init__(
         self,
@@ -57,8 +52,8 @@ class Gemma4Architecture(ModelArchitecture):
         has_moe: list[bool] | None = None,
     ) -> None:
         super().__init__()
-        # No unpermute_rope_rows anywhere here (unlike mistral3/llama) - q_proj/k_proj go
-        # quantized-native too when this is on. No separate lm_head - tied to token_embd.
+        # No unpermute_rope_rows (unlike mistral3/llama); q_proj/k_proj go quantized-native too when
+        # this is on. No separate lm_head: tied to token_embd.
         self._enable_quantized_native = enable_quantized_native
         self._dtype = dtype
         arch = metadata.arch_key
@@ -70,9 +65,8 @@ class Gemma4Architecture(ModelArchitecture):
         self.final_logit_softcapping = metadata.get_f32(arch("final_logit_softcapping"))
         self.sliding_window = metadata.get_u32(arch("attention.sliding_window"))
 
-        # A real per-layer array on gemma-4-E2B-it (the shared-kv layers double their real ffn
-        # width there - llama.cpp's own `use_double_wide_mlp`), a uniform scalar on the 12B
-        # checkpoint - `isinstance` below covers both without assuming either.
+        # A per-layer array on gemma-4-E2B-it (shared-kv layers double their ffn width; llama.cpp's
+        # `use_double_wide_mlp`), a uniform scalar on the 12B: `isinstance` below covers both.
         ffn_len = metadata.require(arch("feed_forward_length"))
         self.ffn_len_per_layer: list[int] = (
             list(ffn_len) if isinstance(ffn_len, list) else [ffn_len] * self.n_layer
@@ -94,10 +88,10 @@ class Gemma4Architecture(ModelArchitecture):
             arch("attention.key_length_swa"), self._head_dim_global
         )
 
-        # Real cross-layer KV reuse (HF `num_kv_shared_layers`/llama.cpp `n_layer_kv_from_start`)
-        # - see Gemma4Attention's own docstring for what this means at forward time.
-        # `_kv_provider_idx` is llama.cpp's own fixed formula (`src/llama-model.cpp`'s `reuse`
-        # callback for LLM_ARCH_GEMMA3N/GEMMA4), not a "last occurrence of this type" search.
+        # Cross-layer KV reuse (HF `num_kv_shared_layers`/llama.cpp `n_layer_kv_from_start`); see
+        # Gemma4Attention.
+        # `_kv_provider_idx` is llama.cpp's fixed formula (`src/llama-model.cpp`'s `reuse` callback
+        # for LLM_ARCH_GEMMA3N/GEMMA4), not a "last occurrence of this type" search.
         n_kv_shared_layers = metadata.get_u32(arch("attention.shared_kv_layers"), 0) or 0
         self._n_layer_kv_from_start = self.n_layer - n_kv_shared_layers
         self._has_own_kv: list[bool] = [
@@ -111,21 +105,22 @@ class Gemma4Architecture(ModelArchitecture):
         self._kv_provider_layers = set(self._kv_provider_idx.values())
         has_attn_v = has_attn_v if has_attn_v is not None else [True] * self.n_layer
 
-        # Real Mixture-of-Experts (see gemma4_moe.py's own docstring for why this can't reuse
-        # GraniteMoeFFN/llama_moe unchanged) - `expert_count`/`expert_used_count` are whole-model
-        # metadata (real HF applies one shared `enable_moe_block` to every layer), but which
-        # layers actually carry expert tensors is still checked per real tensor presence
-        # (`has_moe`, from `from_gguf`) - the same real-fact-over-assumption discipline
-        # `has_attn_v` above already uses, in case a real checkpoint ever mixes MoE/dense layers.
+        # Mixture-of-Experts (why GraniteMoeFFN/llama_moe can't be reused unchanged: gemma4_moe.py).
+        # `expert_count`/
+        # `expert_used_count` are whole-model metadata (HF applies one `enable_moe_block` to every
+        # layer), but which
+        # layers carry expert tensors is checked per tensor (`has_moe`, from `from_gguf`), like
+        # `has_attn_v` above, in case a checkpoint mixes MoE/dense layers.
         num_experts, num_experts_per_tok, moe_ffn_len = detect_moe(metadata, metadata.architecture)
         self.is_moe = num_experts is not None
-        if self.is_moe:  # expert routing isn't batch-checked (test_batched_decode.py)
+        if self.is_moe:
             self.SUPPORTS_BATCHED_DECODE = False
         has_moe = has_moe if has_moe is not None else [self.is_moe] * self.n_layer
 
-        # Plain floats (not tensors), so unaffected by _construct_without_init's meta-device
-        # trick - kept so _rebuild_derived_buffers can recreate the real rope modules
-        # afterward. See Mistral3TextArchitecture's identical _rope_kwargs for the reasoning.
+        # Plain floats (not tensors), so unaffected by _construct_without_init's meta-device trick;
+        # kept so
+        # _rebuild_derived_buffers can recreate the rope modules. See
+        # Mistral3TextArchitecture._rope_kwargs.
         self._rope_kwargs_local = dict(
             head_dim=self._head_dim_local, rope_theta=metadata.get_f32(arch("rope.freq_base_swa"))
         )
@@ -135,8 +130,8 @@ class Gemma4Architecture(ModelArchitecture):
         self.rope_local = RotaryEmbedding(**self._rope_kwargs_local)
         self.rope_global = RotaryEmbedding(**self._rope_kwargs_global)
 
-        # Per-Layer Embeddings - real, active on gemma-4-E2B-it, 0 on the 12B checkpoint (hence
-        # the guard, not an unconditional build). See gemma4_ple.py's own docstring.
+        # Per-Layer Embeddings: active on gemma-4-E2B-it, 0 on the 12B (hence the guard). See
+        # gemma4_ple.py.
         self.per_layer_dim = metadata.get_u32(arch("embedding_length_per_layer_input"), 0) or 0
         if self.per_layer_dim:
             self.per_layer_embedding = Gemma4PerLayerEmbedding(
@@ -180,13 +175,14 @@ class Gemma4Architecture(ModelArchitecture):
             ]
         )
         self.output_norm = RMSNorm(self.n_embd, self.rms_eps, dtype=dtype)
-        # No separate "output.weight" tensor in GGUF for this model - lm_head
-        # is tied to token_embd (confirmed: no such tensor in the real file).
+        # No "output.weight" in the GGUF: lm_head is tied to token_embd (confirmed in the real
+        # file).
 
     def _rebuild_derived_buffers(self) -> None:
-        """Both ropes' inv_freq are computed, not GGUF tensors from_gguf `.copy_()`'s in - see
-        ModelArchitecture._rebuild_derived_buffers for why. `rope_global`'s gets a further real
-        correction from `rope_freqs.weight` once available - see `_materialize_weights`."""
+        """Both ropes' inv_freq are computed, not GGUF tensors
+        (ModelArchitecture._rebuild_derived_buffers). `rope_global`'s
+        gets a further correction from `rope_freqs.weight` once available (`_materialize_weights`).
+        """
         self.rope_local = RotaryEmbedding(**self._rope_kwargs_local)
         self.rope_global = RotaryEmbedding(**self._rope_kwargs_global)
 
@@ -214,14 +210,14 @@ class Gemma4Architecture(ModelArchitecture):
         dtype: torch.dtype = torch.float32,
         enable_quantized_native: bool = False,
     ) -> "Gemma4Architecture":
-        # Real per-layer attn_v presence (see Gemma4Attention's docstring) - checked before
-        # __init__ builds any module, since `use_v_from_k` decides whether a layer's v_proj
-        # submodule exists at all. Cheap: has_tensor indexes tensor_infos, no byte read.
+        # Per-layer attn_v presence (Gemma4Attention) is checked before __init__ builds any module,
+        # since `use_v_from_k`
+        # decides whether v_proj exists. Cheap: has_tensor indexes tensor_infos, no byte read.
         arch = loader.metadata.arch_key
         n_layer = loader.metadata.get_u32(arch("block_count"))
         has_attn_v = [loader.has_tensor(f"blk.{i}.attn_v.weight") for i in range(n_layer)]
-        # Real per-layer expert-tensor presence - same reasoning as has_attn_v above (see
-        # __init__'s own comment on why MoE is still checked per layer, not assumed uniform).
+        # Per-layer expert-tensor presence: like has_attn_v (__init__: MoE is checked per layer, not
+        # assumed uniform).
         has_moe = [loader.has_tensor(f"blk.{i}.ffn_gate_inp.weight") for i in range(n_layer)]
         model = cls._construct_without_init(
             loader.metadata,
@@ -239,22 +235,22 @@ class Gemma4Architecture(ModelArchitecture):
     ) -> None:
         stage_started = time.monotonic()
         enabled = self._enable_quantized_native
-        # Real, confirmed gap (2026-09-30): unlike llama/mistral3, this tensor (256K-vocab, one
-        # of the biggest in any real gemma4 checkpoint) was never routed through
-        # QuantizedEmbedding at all - always the full dequantized table, quantized-native setting
-        # or not. No separate output.weight ever exists here (tied lm_head - see this class's own
-        # docstring), so a packed table always gets its tied lm_head from as_linear() too.
+        # Gap: unlike llama/mistral3, this tensor (256K vocab, one of the biggest in a
+        # gemma4 checkpoint)
+        # never went through QuantizedEmbedding: always the full dequantized table. No output.weight
+        # exists (tied
+        # lm_head, class docstring), so a packed table also gets its lm_head from as_linear.
         self.token_embd = self._load_token_embedding(loader, self.token_embd, self._dtype, enabled)
         if isinstance(self.token_embd, PACKED_EMBEDDINGS):
             self.lm_head = self.token_embd.as_linear()
         self.output_norm.weight.copy_(loader.load_tensor("output_norm.weight"))
         if self.per_layer_dim:
-            # Real, confirmed gap (2026-09-30): per_layer_token_embd is the single biggest tensor
-            # in a real gemma-4-E2B-it checkpoint (packed n_layer * per_layer_dim wide, ~50% of
-            # the file's own real elements - see gemma4_ple.py's own docstring) and, like
-            # token_embd above, was never routed through QuantizedEmbedding either - purely a
-            # lookup table, no tied-output complication, so this is otherwise identical to the
-            # token_embd wiring above.
+            # Gap: per_layer_token_embd is the biggest tensor in a gemma-4-E2B-it
+            # checkpoint (packed
+            # n_layer * per_layer_dim wide, ~50% of its elements; gemma4_ple.py) and, like
+            # token_embd, never went through
+            # QuantizedEmbedding. A pure lookup table with no tied-output complication, otherwise
+            # identical to the token_embd wiring.
             self.per_layer_embedding.embed_tokens_per_layer = self._load_token_embedding(
                 loader,
                 self.per_layer_embedding.embed_tokens_per_layer,
@@ -269,9 +265,9 @@ class Gemma4Architecture(ModelArchitecture):
                 loader.load_tensor("per_layer_proj_norm.weight")
             )
         if loader.has_tensor("rope_freqs.weight"):
-            # Real llama.cpp `freq_factors` convention (confirmed on this checkpoint, not
-            # assumed): divides the formulaic inv_freq per-dimension. Only ever present for
-            # the global rope (shape matches head_dim_global/2 on the real file).
+            # llama.cpp's `freq_factors` convention (confirmed on this checkpoint): divides the
+            # formulaic inv_freq per dimension. Present only for the global rope (shape matches
+            # head_dim_global/2).
             rope_freqs = loader.load_tensor("rope_freqs.weight")
             self.rope_global.inv_freq.copy_(self.rope_global.inv_freq / rope_freqs)
         logger.debug(
@@ -354,7 +350,7 @@ class Gemma4Architecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # real vision support is LlamaArchitecture-only - see base.py
+        del image_embeddings
         _, seq_len = input_ids.shape
         logger.debug("forward start: seq_len=%d", seq_len)
         if position_ids is None:
@@ -368,11 +364,11 @@ class Gemma4Architecture(ModelArchitecture):
         x = self.token_embd(input_ids) * (self.n_embd**0.5)
         logger.debug("embedding lookup: %.1fms", (time.monotonic() - stage_started) * 1000)
 
-        # PLE: computed once, sliced per layer below (see gemma4_ple.py). None if per_layer_dim==0.
+        # PLE: computed once, sliced per layer below (gemma4_ple.py). None if per_layer_dim==0.
         per_layer_inputs = self.per_layer_embedding(input_ids, x) if self.per_layer_dim else None
 
-        # Cross-layer KV reuse: populated by each provider layer as it runs (see
-        # Gemma4Attention's docstring), read by later shared layers - never persisted across calls.
+        # Cross-layer KV reuse: filled by each provider layer as it runs (Gemma4Attention), read by
+        # later shared layers; never persisted across calls.
         shared_kv: dict[bool, tuple[torch.Tensor, torch.Tensor]] = {}
 
         for i, layer in enumerate(self.layers):

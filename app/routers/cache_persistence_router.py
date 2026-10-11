@@ -1,16 +1,20 @@
 from fastapi import APIRouter, Depends
 
+from app.cluster.fs_probe import FilesystemProbe
+from app.config import settings
 from app.dependencies import get_cache_store
 from app.runtime.cache_store import PersistentCacheStore
 from app.schemas.cache_persistence import CachePersistenceStatus, CachePersistenceUpdate
+from app.server.admin_auth import require_admin
 
 router = APIRouter()
 
 
 class CachePersistenceHandler:
-    """Admin view of the encrypted on-disk prompt cache: its limits, what it holds, and a way to
-    change or empty it. Like /api/pull and /api/delete this has no auth of its own - pAIring gates
-    it behind its admin-only Settings page."""
+    """Admin view of the encrypted on-disk prompt cache: its limits, contents, and a way to change
+    or empty it. Like /api/pull and /api/delete it is signed when an admin secret is set; pAIring
+    gates it behind
+    its admin-only Settings page."""
 
     def __init__(self, store: PersistentCacheStore) -> None:
         self._store = store
@@ -24,6 +28,8 @@ class CachePersistenceHandler:
             ttl_hours=policy.ttl_hours,
             files=files,
             used_bytes=used,
+            folder=str(settings.prompt_cache_dir.resolve()),
+            shared=FilesystemProbe().is_shared(settings.prompt_cache_dir),
         )
 
     def update(self, change: CachePersistenceUpdate) -> CachePersistenceStatus:
@@ -49,21 +55,33 @@ def get_cache_persistence(
     return CachePersistenceHandler(store).status()
 
 
-@router.put("/api/cache/persistence", response_model=CachePersistenceStatus)
+@router.put(
+    "/api/cache/persistence",
+    dependencies=[Depends(require_admin)],
+    response_model=CachePersistenceStatus,
+)
 def put_cache_persistence(
     change: CachePersistenceUpdate, store: PersistentCacheStore = Depends(get_cache_store)
 ) -> CachePersistenceStatus:
     return CachePersistenceHandler(store).update(change)
 
 
-@router.delete("/api/cache/persistence", response_model=CachePersistenceStatus)
+@router.delete(
+    "/api/cache/persistence",
+    dependencies=[Depends(require_admin)],
+    response_model=CachePersistenceStatus,
+)
 def delete_cache_persistence(
     store: PersistentCacheStore = Depends(get_cache_store),
 ) -> CachePersistenceStatus:
     return CachePersistenceHandler(store).clear()
 
 
-@router.delete("/api/cache/persistence/chats/{tag}", response_model=CachePersistenceStatus)
+@router.delete(
+    "/api/cache/persistence/chats/{tag}",
+    dependencies=[Depends(require_admin)],
+    response_model=CachePersistenceStatus,
+)
 def delete_chat_cache(
     tag: str, store: PersistentCacheStore = Depends(get_cache_store)
 ) -> CachePersistenceStatus:

@@ -1,7 +1,8 @@
-"""`num_ctx` is only a cache's capacity: a different one must not cost a chat its cached prefix, and
-what is reused must generate exactly what a cold run does."""
+"""`num_ctx` is only cache capacity: changing it must not cost a chat its cached prefix, and reuse
+must generate what a cold run does."""
 
 import logging
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -38,7 +39,7 @@ def model(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[object]:
         arch = LlamaArchitecture.from_gguf(
             GGUFModelLoader(build_tiny_llama_gguf(tmp_path / "m.gguf"), dtype=torch.float32)
         )
-    else:  # a hybrid cache: reuse goes through recurrent snapshots
+    else:
         arch = Qwen35Architecture.from_gguf(
             GGUFModelLoader(build_tiny_qwen35_gguf(tmp_path / "m.gguf"), dtype=torch.float32)
         )
@@ -67,6 +68,13 @@ def test_a_changed_num_ctx_still_reuses_the_prefix_and_generates_the_same(
 
     assert warm == cold
     assert cache.reused_tokens > 0 and "re-reading the entire chat" not in caplog.text
+    # Reported before prefill: how much came from the cache and how much is left to read.
+    said = re.search(
+        r"prompt cache: reusing (\d+) of (\d+) tokens, prefilling the other (\d+)", caplog.text
+    )
+    assert said is not None
+    reused, total, to_read = map(int, said.groups())
+    assert reused == cache.reused_tokens and reused + to_read == total
     assert max(s.key[0] for s in cache._slots) >= second
 
 
@@ -86,16 +94,16 @@ def test_a_disk_file_saved_with_another_num_ctx_is_restored(model, tmp_path):
     store.flush()
     cold = _run(model, PromptCache(4), TURN2, 160)
 
-    after = PromptCache(4, tier=ModelCacheTier(store, "m|1"))  # a restarted server
+    after = PromptCache(4, tier=ModelCacheTier(store, "m|1"))
     warm = _run(model, after, TURN2, 160)
 
     assert warm == cold and after.reused_tokens > 0
 
 
 def test_a_reply_stops_at_the_end_of_the_context_instead_of_failing(model):
-    """num_predict larger than the room left (long chat, long reply): the reply is cut at num_ctx
-    finishes as "length" - it used to raise PromptTooLongError halfway through the stream."""
-    ids = TURN1  # 30 tokens
+    """When num_predict exceeds the room left, the reply is cut at num_ctx and finishes as "length"
+    (it used to raise PromptTooLongError mid-stream)."""
+    ids = TURN1
     sampling = SamplingConfig(temperature=0.0, num_predict=500, num_ctx=len(ids) + 6)
     engine = ChatEngine(model, set(), prompt_cache=PromptCache(4), prefill_chunk=8)
 

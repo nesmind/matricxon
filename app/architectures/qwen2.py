@@ -18,41 +18,28 @@ logger = logging.getLogger(__name__)
 
 
 class Qwen2Architecture(ModelArchitecture):
-    """Alibaba Qwen2 - a plain GQA/RoPE/SwiGLU decoder, the same shape `llama`/`granite` already
-    are, plus one real delta confirmed against HF `transformers`' own `modeling_qwen2.py`
-    (2026-09-22): `q_proj`/`k_proj`/`v_proj` carry a real bias (hardcoded `bias=True` in HF's own
-    source, not config-gated) while `o_proj` never does - confirmed against a real downloaded
-    `Qwen2.5-0.5B-Instruct-GGUF` file's own tensor names (`attn_q.bias`/`attn_k.bias`/
-    `attn_v.bias` present, no `attn_output.bias`).
+    """Alibaba Qwen2: a plain GQA/RoPE/SwiGLU decoder like `llama`/`granite`, plus one delta (HF
+    `modeling_qwen2.py`): `q_proj`/`k_proj`/`v_proj` carry a bias (hardcoded `bias=True`
+    in HF) while `o_proj` never does (a `Qwen2.5-0.5B-Instruct-GGUF` has
+    `attn_q.bias`/`attn_k.bias`/`attn_v.bias`, no `attn_output.bias`).
 
-    **Neither the real q/k weight NOR their bias need `unpermute_rope_rows` at all** - confirmed
-    empirically (2026-09-22) against a real downloaded `Qwen2.5-0.5B-Instruct-GGUF` file (both
-    Q4_K_M and F16) and its real HF `Qwen2.5-0.5B-Instruct` safetensors counterpart. This
-    contradicts `unpermute_rope_rows`'s own docstring, which lists Qwen among the models needing
-    it - that claim was never true for real Qwen2 GGUFs (llama.cpp's real converter evidently
-    does not apply the rotate-half row-interleave to this architecture's q/k projections, the same
-    way `gemma4`'s own converter doesn't - see that architecture's own comment). Applying it
-    anyway silently produced a real, severe bug: real generation was pure garbage (repetitive,
-    ungrammatical tokens, e.g. never predicting "Paris" after "The capital of France is"), even
-    though every other check (tokenizer round-trip, KV-cache-vs-no-cache self-consistency, `rope
-    .freq_base`, tied-embedding detection) passed cleanly - a textbook "runs without error but
-    produces wrong output" bug, exactly the class of mistake real-weight oracle validation exists
-    to catch, caught here by comparing the raw (unmodified) GGUF weight against HF's real
-    `q_proj.weight` directly: cosine ~0.90 raw vs. `-0.04` (anti-correlated) after applying
-    `unpermute_rope_rows`. Both `attn_q.weight`/`attn_k.weight` and their bias tensors are loaded
-    with a plain `.copy_()`, no reordering.
+    Neither the q/k weight nor their bias needs `unpermute_rope_rows`, shown against that GGUF
+    (Q4_K_M and F16) and its HF safetensors; llama.cpp's converter evidently doesn't apply the
+    row-interleave to q/k here, as for `gemma4`. Applying it produced garbage (never predicting
+    "Paris" after "The capital of France is") while tokenizer round-trip, KV-cache self-consistency,
+    `rope.freq_base` and tied-embedding checks passed, a "runs but wrong" bug that real-weight
+    oracle validation catches: raw GGUF weight vs HF `q_proj.weight` has cosine ~0.90, but `-0.04`
+    after `unpermute_rope_rows`. q/k weights and biases load with a plain `.copy_`.
 
-    Real `head_dim` is usually absent from a real Qwen2 GGUF's metadata (falls back to
-    `n_embd // n_head`, HF's own default) - read defensively via `get_u32` with that fallback
-    rather than assumed, the same defensive pattern `llama`'s vocab_size fallback established.
-    Real Qwen2.5 checkpoints tie embeddings up to 3B and stop tying at 7B - detected dynamically
-    (`loader.has_tensor("output.weight")`) rather than assumed by size, same as `llama`/`granite`.
+    `head_dim` is usually absent from a Qwen2 GGUF (falls back to `n_embd // n_head`, HF's default)
+    via `get_u32`, as `llama`'s vocab_size fallback. Qwen2.5 ties embeddings up to 3B and not at 7B:
+    detected via `loader.has_tensor("output.weight")`, not size, as `llama`/`granite`.
     """
 
     NAME = "qwen2"
     supports_context_shift = True
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
+    SUPPORTS_BATCHED_DECODE = True
 
     def __init__(
         self,
@@ -68,8 +55,7 @@ class Qwen2Architecture(ModelArchitecture):
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
-        # Falls back to n_head when absent (no GQA) - see LlamaArchitecture's own docstring for
-        # the real file that confirmed this gap.
+        # Falls back to n_head when absent (no GQA); see LlamaArchitecture.
         self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
         self.head_dim = metadata.get_u32(arch("attention.key_length"), self.n_embd // self.n_head)
         self.n_layer = metadata.get_u32(arch("block_count"))
@@ -194,7 +180,7 @@ class Qwen2Architecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # no real vision-language Qwen2 checkpoint exists yet to fuse
+        del image_embeddings
         _, seq_len = input_ids.shape
         if position_ids is None:
             position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)

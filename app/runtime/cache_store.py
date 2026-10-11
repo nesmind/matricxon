@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 MAGIC = b"MXC1"
 SUFFIX = ".mxc"
-#: Token granularity of prefix matching between a saved cache and a new prompt.
+# Token granularity of prefix matching between a saved cache and a new prompt.
 BLOCK_TOKENS = 64
 
 
@@ -35,10 +36,8 @@ class _Entry:
     length: int
     blocks: list[str]
     saved_at: float
-    tag: str = (
-        ""  # the conversation it came from (opaque), so a deleted chat's files can be dropped
-    )
-    size: int = 0  # the file's size - known only once written, so not part of the sealed meta
+    tag: str = ""
+    size: int = 0
 
     def meta_json(self) -> bytes:
         return json.dumps({k: v for k, v in asdict(self).items() if k != "size"}).encode()
@@ -50,42 +49,89 @@ StoredEntry = _Entry
 class PersistentCacheStore:
     """Encrypted, size- and age-limited prompt-cache files on disk: the tier below the RAM pool.
 
-    A slot is written when the pool evicts it, when its model unloads and on shutdown - never
-    during a reply. File layout: `MAGIC | len | sealed meta | sealed body`, both sealed with
-    AES-256-GCM (the body bound to its meta), so nothing about a conversation - not its tokens, its
-    model, or its length - is readable without the key. The index is rebuilt at startup from the
-    meta headers; a file that fails authentication (wrong key, corruption) is deleted.
+    A slot is written when the pool evicts it, when its model unloads and on shutdown, never during
+    a reply. File layout: `MAGIC | len | sealed meta | sealed body`, both AES-256-GCM sealed (body
+    bound to meta), so nothing about a conversation (tokens, model, length) is readable without the
+    key. The index is rebuilt at startup from the meta headers; a file failing authentication (wrong
+    key, corruption) is deleted.
 
-    A stored cache is consumed when restored (`take`): from then on the RAM pool owns it and writes
-    it back when it is evicted. Limits come from the live `PersistencePolicy` - oldest files go
-    first when over the budget, and any file older than the TTL is dropped.
+    A stored cache is consumed on restore (`take`): the RAM pool then owns it and writes it back
+    when evicted. Limits come from the live `PersistencePolicy`: oldest files go first when over
+    budget, and files older than the TTL are dropped.
     """
 
-    def __init__(self, directory: Path, cipher: CacheCipher, policy: PersistencePolicy) -> None:
+    # A lookup that finds nothing re-reads the shared dir if this long since the last read.
+    MISS_RESCAN_SECONDS = 0.1
+
+    def __init__(
+        self,
+        directory: Path,
+        cipher: CacheCipher,
+        policy: PersistencePolicy,
+        node_id: str = "local",
+        rescan_seconds: float = 5.0,
+    ) -> None:
         self._dir = directory
         self._cipher = cipher
         self.policy = policy
+        self._node_id = node_id
+        self._rescan_seconds = rescan_seconds
+        self._last_scan = 0.0
+        # In a cluster only the owner of the cleanup lease deletes files by age or budget, so none
+        # removes files the others count on. Alone, every node cleans.
+        self.may_clean: Callable[[], bool] = lambda: True
+        self._rejected: set[str] = set()
         self._lock = threading.Lock()
         self._index: dict[str, _Entry] = {}
-        self._forgotten: set[str] = (
-            set()
-        )  # tags of deleted chats: a late spill of theirs is dropped
+        self._forgotten: set[str] = set()
         self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cache-spill")
         self._dir.mkdir(parents=True, exist_ok=True)
         self._scan()
         self.enforce_limits()
 
-    # ---- reading the directory ---------------------------------------------------------------
+    # reading the directory
 
     def _scan(self) -> None:
-        for path in self._dir.glob("*.tmp"):
+        """Startup: drops this node's own leftovers (other nodes' are theirs) and indexes."""
+        for path in self._dir.glob(f"{self._node_id}-*.tmp"):
             path.unlink(missing_ok=True)
-        for path in self._dir.glob(f"*{SUFFIX}"):
+        for path in self._dir.glob(f"*{self._claim_suffix}"):
+            path.unlink(missing_ok=True)
+        self._refresh(drop_unreadable=True)
+
+    def _refresh(self, drop_unreadable: bool = False) -> None:
+        """Syncs the index with the directory: files other nodes wrote or removed."""
+        self._last_scan = time.monotonic()
+        on_disk = {p.name: p for p in self._dir.glob(f"*{SUFFIX}")}
+        with self._lock:
+            known = set(self._index)
+        for name in known - on_disk.keys():
+            with self._lock:
+                self._index.pop(name, None)
+        for name, path in on_disk.items():
+            if name in known or name in self._rejected:
+                continue
             try:
-                self._index[path.name] = self._read_meta(path)
+                entry = self._read_meta(path)
+            except FileNotFoundError:
+                continue
             except (CacheDecryptError, OSError, ValueError, KeyError, TypeError):
-                logger.warning("dropping unreadable prompt-cache file %s", path.name)
-                path.unlink(missing_ok=True)
+                if drop_unreadable:
+                    logger.warning("dropping unreadable prompt-cache file %s", name)
+                    path.unlink(missing_ok=True)
+                else:
+                    self._rejected.add(name)
+                continue
+            with self._lock:
+                self._index[name] = entry
+
+    @property
+    def _claim_suffix(self) -> str:
+        return f".{self._node_id}.claim"
+
+    def _rescan_if_due(self) -> None:
+        if time.monotonic() - self._last_scan >= self._rescan_seconds:
+            self._refresh()
 
     def _read_meta(self, path: Path) -> _Entry:
         with path.open("rb") as handle:
@@ -95,11 +141,11 @@ class PersistentCacheStore:
             meta = json.loads(self._cipher.open(handle.read(meta_len), MAGIC))
         return _Entry(**meta, size=path.stat().st_size)
 
-    # ---- writing -----------------------------------------------------------------------------
+    # writing
 
     def spill_async(self, model_id: str, slot: CacheSlot) -> None:
-        """Queues `slot` to be encoded and written by the background writer; the caller must not
-        touch the slot afterwards (the pool has just dropped it)."""
+        """Queues `slot` for the background writer to encode and write; the caller must not touch
+        the slot afterwards (the pool has dropped it)."""
         if self.policy.enabled and self.policy.budget_bytes > 0:
             self._writer.submit(self._spill, model_id, slot)
 
@@ -130,7 +176,7 @@ class PersistentCacheStore:
         blob = MAGIC + struct.pack(">I", len(meta)) + meta + body
         if len(blob) > self.policy.budget_bytes:
             return
-        fd, tmp = tempfile.mkstemp(dir=self._dir, suffix=".tmp")  # mkstemp creates it 0600
+        fd, tmp = tempfile.mkstemp(dir=self._dir, prefix=f"{self._node_id}-", suffix=".tmp")
         with os.fdopen(fd, "wb") as handle:
             handle.write(blob)
         name = f"{uuid.uuid4().hex}{SUFFIX}"
@@ -139,11 +185,11 @@ class PersistentCacheStore:
         with self._lock:
             self._index[name] = entry
             gone = tag in self._forgotten
-        if gone:  # the chat was deleted while this was being written
+        if gone:
             self._remove(name)
         self.enforce_limits()
 
-    # ---- restoring ---------------------------------------------------------------------------
+    # restoring
 
     def take(
         self,
@@ -153,12 +199,26 @@ class PersistentCacheStore:
         min_tokens: int,
     ) -> tuple[bytes, str] | None:
         """The serialized slot sharing the longest prefix (more than `min_tokens`) with
-        `prompt_ids`, removed from disk, with the chat tag it was saved under - or None. Matching
-        uses the sealed per-block hashes, so a file that would not help is never read, let alone
+        `prompt_ids`, removed from disk, with the chat tag it was saved under, or None. Matching
+        uses the sealed per-block hashes, so a file that wouldn't help is never read, let alone
         consumed."""
-        if not self.policy.enabled or not self._index:
+        if not self.policy.enabled:
             return None
+        self._rescan_if_due()
         wanted = self._cipher.prefix_fingerprints(prompt_ids, BLOCK_TOKENS)
+        best = self._best_match(model_id, dtype, wanted, min_tokens)
+        if best is None and time.monotonic() - self._last_scan >= self.MISS_RESCAN_SECONDS:
+            self._refresh()
+            best = self._best_match(model_id, dtype, wanted, min_tokens)
+        if best is None:
+            return None
+        body = self._consume(best[1])
+        return None if body is None else (body, best[2])
+
+    def _best_match(
+        self, model_id: str, dtype: torch.dtype, wanted: list[str], min_tokens: int
+    ) -> tuple[int, str, str] | None:
+        """(shared blocks, file name, chat tag) of the stored file sharing the longest prefix."""
         best: tuple[int, str, str] | None = None
         with self._lock:
             for name, entry in self._index.items():
@@ -171,10 +231,7 @@ class PersistentCacheStore:
                     shared += 1
                 if shared * BLOCK_TOKENS > min_tokens and (best is None or shared > best[0]):
                     best = (shared, name, entry.tag)
-        if best is None:
-            return None
-        body = self._consume(best[1])
-        return None if body is None else (body, best[2])
+        return best
 
     def inspect(self, prompt_ids: list[int]) -> tuple[list[StoredEntry], list[str]]:
         """The files' headers plus `prompt_ids`' block hashes, to explain a miss."""
@@ -183,7 +240,14 @@ class PersistentCacheStore:
         return entries, self._cipher.prefix_fingerprints(prompt_ids, BLOCK_TOKENS)
 
     def _consume(self, name: str) -> bytes | None:
-        path = self._dir / name
+        """Claims the file by renaming it (atomic: of several nodes, one wins), reads, deletes."""
+        path = self._dir / f"{name}{self._claim_suffix}"
+        try:
+            os.replace(self._dir / name, path)
+        except FileNotFoundError:
+            with self._lock:
+                self._index.pop(name, None)
+            return None
         try:
             with path.open("rb") as handle:
                 handle.seek(len(MAGIC))
@@ -192,20 +256,23 @@ class PersistentCacheStore:
                 body = self._cipher.open(handle.read(), MAGIC + meta)
         except (CacheDecryptError, OSError, struct.error):
             logger.warning("prompt-cache file %s unreadable, dropping it", name)
-            self._remove(name)
+            self._remove(name, path)
             return None
-        self._remove(name)
+        self._remove(name, path)
         return body
 
-    # ---- limits and admin --------------------------------------------------------------------
+    # limits and admin
 
-    def _remove(self, name: str) -> None:
+    def _remove(self, name: str, path: Path | None = None) -> None:
         with self._lock:
             self._index.pop(name, None)
-        (self._dir / name).unlink(missing_ok=True)
+        (path or self._dir / name).unlink(missing_ok=True)
 
     def enforce_limits(self) -> None:
-        """Drops files past the TTL, then the oldest until the total is within the budget."""
+        """Drops files past the TTL, then the oldest until the total is within budget (only on the
+        node owning the cleanup job)."""
+        if not self.may_clean():
+            return
         with self._lock:
             now = time.time()
             doomed = [
@@ -228,6 +295,7 @@ class PersistentCacheStore:
         many files went."""
         if not tag:
             return 0
+        self._refresh()
         with self._lock:
             self._forgotten.add(tag)
             names = [n for n, e in self._index.items() if e.tag == tag]
@@ -236,6 +304,7 @@ class PersistentCacheStore:
         return len(names)
 
     def clear(self) -> None:
+        self._refresh()
         with self._lock:
             names = list(self._index)
         for name in names:
@@ -243,5 +312,6 @@ class PersistentCacheStore:
 
     def usage(self) -> tuple[int, int]:
         """(files, total bytes) currently stored."""
+        self._rescan_if_due()
         with self._lock:
             return len(self._index), sum(e.size for e in self._index.values())

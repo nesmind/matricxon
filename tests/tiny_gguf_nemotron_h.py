@@ -1,18 +1,16 @@
-"""Builds a tiny, complete, valid `nemotron_h` GGUF file - mirrors `tiny_gguf_granitemoe.py`'s
-structure, plus the real per-layer-array metadata (`nemotron_h.attention.head_count_kv`/
-`nemotron_h.feed_forward_length`, one value per layer, 0 for layers that don't have that
-component) that encodes which of the three real layer types (Mamba-2/attention/MLP) each layer
-actually is - see `NemotronHArchitecture`'s own docstring for the real derivation logic this
-fixture exercises. 6 tiny layers cover all three types at least twice (Mamba/MLP) or once
-(attention), matching the real target checkpoint's dominant-Mamba shape.
-"""
+"""Builds a tiny, complete, valid `nemotron_h` GGUF, mirroring `tiny_gguf_granitemoe.py`, plus the
+per-layer-array metadata (`nemotron_h.attention.head_count_kv`/`nemotron_h.feed_forward_length`, one
+value per layer, 0 for layers lacking that component) that encodes each layer's type
+(Mamba-2/attention/MLP); see `NemotronHArchitecture` for the derivation. 6 tiny layers cover all
+three types at least twice (Mamba/MLP) or once (attention), matching the target checkpoint's
+Mamba-dominant shape."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2
@@ -21,7 +19,7 @@ N_HEAD_KV = 2
 FFN_LEN = 16
 MAMBA_NUM_HEADS = 2
 MAMBA_HEAD_DIM = 4
-MAMBA_D_INNER = MAMBA_NUM_HEADS * MAMBA_HEAD_DIM  # 8
+MAMBA_D_INNER = MAMBA_NUM_HEADS * MAMBA_HEAD_DIM
 D_STATE = 4
 N_GROUP = 2
 CONV_KERNEL = 4

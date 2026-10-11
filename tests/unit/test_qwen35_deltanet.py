@@ -1,7 +1,5 @@
-"""`Qwen35GatedDeltaNet` / `gated_delta_rule` against an independent per-token reference
-(explicit loops, no einsum, no F.conv1d) - same treatment as test_nemotron_h_mamba2_mixer.py -
-plus the prefill/decode state-carry invariant the KV-less recurrent cache depends on.
-"""
+"""`Qwen35GatedDeltaNet`/`gated_delta_rule` vs an independent per-token reference (explicit loops,
+as test_nemotron_h_mamba2_mixer.py), plus the prefill/decode state-carry invariant."""
 
 import pytest
 import torch

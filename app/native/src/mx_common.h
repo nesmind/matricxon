@@ -1,20 +1,16 @@
 /*
- * matricxon native kernels - shared definitions.
- *
- * A deliberately small, in-house take on llama.cpp's core trick for quantized matmuls (see
- * ROADMAP.md's "In-house native (C) quantized kernels" entry): quantize the activation vector
- * once to 8-bit (Q8_K), then compute integer dot products directly against the packed GGUF
- * weight blocks, reading the raw bytes in place. Block layouts match ggml's own structs and
- * matricxon's already oracle-validated app/gguf/dequant `...Strategy` classes exactly.
- *
- * K-quant rows are unpacked once per matmul (mx_block_unpacked below) and reused for every
- * token, so a prefill no longer pays the bit-unpacking once per token; a decode step (one token)
- * uses the fused kernels in mx_dot_k_ssse3.c instead.
- *
- * Plain portable C written so gcc -O3 -march=native auto-vectorizes the inner loops, except
- * the block dot products (mx_dot_u8_sc16, mx_dot_k_ssse3.c), which use SSSE3 intrinsics where
- * available - gcc doesn't generate pmaddubsw by itself - with a plain C fallback everywhere
- * else. Little-endian (x86/ARM) is assumed throughout, same as GGUF itself.
+ * matricxon native kernels: shared definitions.
+ * 
+ * Quantize the activation vector once to 8-bit (Q8_K), then take integer dot products against the
+ * packed GGUF weight blocks in place. Block layouts match ggml's structs and the app/gguf/dequant
+ * `...Strategy` classes.
+ * 
+ * K-quant rows are unpacked once per matmul (mx_block_unpacked) and reused for every token; a
+ * decode step (one token) uses the fused kernels in mx_dot_k_ssse3.c.
+ * 
+ * Portable C that gcc -O3 -march=native auto-vectorizes, except the block dot products
+ * (mx_dot_u8_sc16, mx_dot_k_ssse3.c), which use SSSE3 intrinsics (plain C fallback elsewhere).
+ * Little-endian assumed, as GGUF.
  */
 #ifndef MX_COMMON_H
 #define MX_COMMON_H
@@ -68,16 +64,14 @@
 #define MX_IQ1_S_BYTES 50
 #define MX_IQ1_M_BYTES 56
 
-/* The quantized activation block: one f32 scale per 256 values, plus 16-value partial sums so
- * a K-quant's per-sub-block "min" term collapses to one multiply per sub-block. */
+/* Quantized activation block: one f32 scale per 256 values plus 16-value partial sums, so a K-quant's per-sub-block "min" costs one multiply per sub-block. */
 typedef struct {
     float d;
     int8_t qs[MX_QK_K];
     int16_t bsums[MX_QK_K / 16];
 } mx_block_q8_k;
 
-/* f16 -> f32 via a 64K-entry table built once at library load (this project's target CPU,
- * Sandy Bridge, has no F16C instructions). */
+/* f16 -> f32 via a 64K-entry table built at load (the target CPU, Sandy Bridge, has no F16C). */
 extern float mx_fp16_table[1 << 16];
 
 static inline float mx_fp16(const uint8_t *p) {
@@ -86,10 +80,7 @@ static inline float mx_fp16(const uint8_t *p) {
     return mx_fp16_table[h];
 }
 
-/* Port of kquants_extended.py's _unpack_q3k_scales: 16 signed 6-bit scales packed into 12
- * bytes, reassembled at uint32 granularity (bits carry across bytes before masking). `a` gets
- * them as 16 bytes, still +32 - callers subtract 32 (mx_unpack_q3k_scales here, a vector
- * subtract in mx_dot_k_ssse3.c, which keeps these words in registers). */
+/* Port of kquants_extended.py's _unpack_q3k_scales: 16 signed 6-bit scales packed in 12 bytes, reassembled at uint32 granularity. `a` gets 16 bytes still +32; callers subtract 32. */
 static inline void mx_q3k_scale_words(const uint8_t *raw, uint32_t *a) {
     const uint32_t kmask1 = 0x03030303u;
     const uint32_t kmask2 = 0x0F0F0F0Fu;
@@ -111,10 +102,7 @@ static inline void mx_unpack_q3k_scales(const uint8_t *raw, int8_t *out) {
     }
 }
 
-/* Same bit-packing as kquants.py's _get_scale_min_k4, all 8 (scale, min) pairs at once and
- * branch-free at uint32 granularity (the same trick as llama.cpp's utmp/kmask): as bytes, `r`
- * holds the 8 scales then the 8 mins. For j < 4 a pair is the low 6 bits of s[j] / s[j+4]; for
- * j >= 4 it's s[j+4]'s low / high nibble plus the top 2 bits of s[j-4] / s[j]. */
+/* As kquants.py's _get_scale_min_k4: all 8 (scale, min) pairs at once, branch-free at uint32 granularity (llama.cpp's utmp/kmask trick); `r` holds the 8 scales then the 8 mins. For j < 4 a pair is the low 6 bits of s[j] / s[j+4]; for j >= 4 it is s[j+4]'s low / high nibble plus the top 2 bits of s[j-4] / s[j]. */
 static inline void mx_k4_scale_min_words(const uint8_t *s, uint32_t *r) {
     const uint32_t kmask1 = 0x3F3F3F3Fu;
     const uint32_t kmask2 = 0x0F0F0F0Fu;
@@ -127,18 +115,18 @@ static inline void mx_k4_scale_min_words(const uint8_t *s, uint32_t *r) {
     r[3] = ((w[2] >> 4) & kmask2) | (((w[1] >> 6) & kmask3) << 4);
 }
 
-/* One K-quant weight block unpacked for reuse across every token of a prefill (and for the
- * single token of a decode step): values as unsigned bytes `u` plus one integer scale per 16
- * values, so a block's dot product is 16 unsigned x signed byte sums - SSSE3's pmaddubsw does 16
- * byte pairs per instruction (see mx_dot_u8_sc16).
- *
- * `m` means two different things, chosen by the caller's `has_min`:
- * - Q4_K/Q5_K (has_min): the per-16 "min", folded in float as d*sumi - dmin*sum(m*bsums);
- * - Q3_K/Q6_K: the offset that makes their signed values unsigned (u = q + 4 / q + 32) times the
- *   sub-block scale, subtracted from the integer sum - sum(sc*(u-off)*q8) =
- *   sum(sc*u*q8) - sum(sc*off*bsums), so the integer result is exactly the signed one.
- * Bounds: u <= 63 so a pmaddubsw pair stays <= 2*63*127 (no int16 saturation), |sc*off| <=
- * 128*32, and every sum stays far inside int32. */
+/*
+ * One K-quant block unpacked for reuse across a prefill's tokens (and a decode step): unsigned byte
+ * values `u` plus one integer scale per 16 values, so the dot is 16 unsigned x signed byte sums
+ * (SSSE3 pmaddubsw, see mx_dot_u8_sc16).
+ * 
+ * `m` depends on the caller's `has_min`:
+ * - Q4_K/Q5_K: the per-16 "min", folded in float as d*sumi - dmin*sum(m*bsums);
+ * - Q3_K/Q6_K: the offset making signed values unsigned (u = q + 4 / q + 32) times the sub-block
+ * scale, so sum(sc*(u-off)*q8) = sum(sc*u*q8) - sum(sc*off*bsums) is exactly the signed result.
+ * Bounds: u <= 63 so a pmaddubsw pair stays <= 2*63*127 (no int16 saturation), |sc*off| <= 128*32,
+ * and sums stay inside int32.
+ */
 typedef struct {
     uint8_t u[MX_QK_K];
     int16_t sc[MX_QK_K / 16];
@@ -188,8 +176,7 @@ static inline int32_t mx_dot_u8_sc16(const uint8_t *u, const int8_t *q, const in
 #endif
 }
 
-/* Dot product of one unpacked weight row with one quantized activation row. The float folds
- * keep the exact operation order of the original per-type kernels. */
+/* Dot of one unpacked weight row with one quantized activation row; float folds keep the original per-type order. */
 static inline float mx_dot_unpacked(const mx_block_unpacked *w, const mx_block_q8_k *y, int nb,
                                     int has_min) {
     float sumf = 0.0f;
@@ -210,7 +197,7 @@ static inline float mx_dot_unpacked(const mx_block_unpacked *w, const mx_block_q
 
 void mx_quantize_row_q8_k(const float *x, mx_block_q8_k *y, int n);
 
-/* Q8_0 has a float scale per 32 values, so it keeps a direct per-token dot product. */
+/* Q8_0 has a float scale per 32 values, so it keeps a direct per-token dot. */
 float mx_vec_dot_q8_0(const uint8_t *row, const mx_block_q8_k *y, int nb);
 
 #if defined(__SSSE3__)
@@ -221,14 +208,7 @@ float mx_vec_dot_q5_k(const uint8_t *row, const mx_block_q8_k *y, int nb);
 float mx_vec_dot_q6_k(const uint8_t *row, const mx_block_q8_k *y, int nb);
 #endif
 
-/* mx_dot_f32.c: IQ4_NL/IQ4_XS/TQ1_0/TQ2_0 - ported directly from their own already-oracle-
- * validated Numba kernels (app/gguf/dequant/quantized_gemv_iq_ternary.py), which compute
- * against the raw float activation row directly rather than mx_block_q8_k - these types don't
- * fit that convention (IQ4_NL/XS use a real 16-entry non-linear value LUT, TQ1_0/TQ2_0 are
- * base-3/base-4 ternary codes, neither is a simple signed-integer-times-scale sum a Q8_K dot
- * product could compute), so mx_gemm calls these against `x` unchanged instead of quantizing it
- * first - real, deliberate, not a shortcut: quantizing to Q8_K here would need re-deriving a new
- * integer formulation for both, unvalidated anywhere. */
+/* mx_dot_f32.c: IQ4_NL/IQ4_XS/TQ1_0/TQ2_0, ported from the Numba kernels (app/gguf/dequant/quantized_gemv_iq_ternary.py). They work on the raw float activation row, not mx_block_q8_k: IQ4_NL/XS use a non-linear 16-entry LUT and TQ1_0/TQ2_0 are base-3/base-4 ternary codes, so no Q8_K integer dot applies. mx_gemm passes `x` unchanged; a Q8_K formulation would be unvalidated. */
 typedef float (*mx_vec_dot_f32_fn)(const uint8_t *row, const float *x, int nb);
 
 float mx_vec_dot_iq4_nl_f32(const uint8_t *row, const float *x, int nb);
@@ -236,9 +216,7 @@ float mx_vec_dot_iq4_xs_f32(const uint8_t *row, const float *x, int nb);
 float mx_vec_dot_tq1_0_f32(const uint8_t *row, const float *x, int nb);
 float mx_vec_dot_tq2_0_f32(const uint8_t *row, const float *x, int nb);
 
-/* mx_dot_iq2.c/mx_dot_iq3.c/mx_dot_iq1.c: grid-codebook I-quants (IQ2_XXS/XS/S, IQ3_XXS/S,
- * IQ1_S/M) - same "raw float x" reasoning as above, ported from quantized_gemv_iq{1,2,3}.py.
- * Grid/sign tables live in the generated mx_iq_grids.h (scripts/generate_iq_grids_c.py). */
+/* mx_dot_iq2.c/mx_dot_iq3.c/mx_dot_iq1.c: grid-codebook I-quants (IQ2_XXS/XS/S, IQ3_XXS/S, IQ1_S/M), raw float `x` as above, ported from quantized_gemv_iq{1,2,3}.py. Tables: generated mx_iq_grids.h (tools/generate_iq_grids_c.py). */
 float mx_vec_dot_iq2_xxs_f32(const uint8_t *row, const float *x, int nb);
 float mx_vec_dot_iq2_xs_f32(const uint8_t *row, const float *x, int nb);
 float mx_vec_dot_iq2_s_f32(const uint8_t *row, const float *x, int nb);

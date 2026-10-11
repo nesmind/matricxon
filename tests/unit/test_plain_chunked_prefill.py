@@ -1,4 +1,4 @@
-"""A plain KV cache's prefill is chunked, so a cancel keeps the pieces already committed."""
+"""A plain KV cache prefills in chunks, so a cancel keeps the chunks already committed."""
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -30,7 +30,7 @@ def llama(tmp_path: Path) -> Iterator[LlamaArchitecture]:
 
 
 def _stop_after(checks: int) -> Callable[[], bool]:
-    """A stop_check that starts reporting a stop after `checks` calls (one per layer)."""
+    """A stop_check that reports a stop after `checks` calls (one per layer)."""
     calls = {"n": 0}
 
     def stop() -> bool:
@@ -65,14 +65,14 @@ def test_cancelled_prefill_keeps_committed_pieces(llama: LlamaArchitecture) -> N
 
     request = GenerationRequest(torch.tensor([PROMPT]), GREEDY)
     engine = _engine(llama, cache, 4)
-    assert list(engine.stream(request, stop_on_third_piece)) == []  # cancelled in prefill
+    assert list(engine.stream(request, stop_on_third_piece)) == []
     engine.generate(request)
-    assert cache.reused_tokens >= 4  # at least the first piece
+    assert cache.reused_tokens >= 4
 
 
 @pytest.mark.parametrize("chunk", [1, 3, 4, 7])
 def test_chunked_prefill_is_exact_on_other_architectures(tmp_path: Path, chunk: int) -> None:
-    """Gemma4 (sliding-window + global layers) and Qwen3.5 (hybrid) must not drift when split."""
+    """Gemma4 (sliding + global layers) and Qwen3.5 (hybrid) must not drift when chunked."""
     builds = [
         (Gemma4Architecture, build_tiny_gemma4_gguf(tmp_path / "g.gguf")),
         (Qwen35Architecture, build_tiny_qwen35_gguf(tmp_path / "q.gguf")),
@@ -102,12 +102,12 @@ def test_image_prompt_is_never_split(llama: LlamaArchitecture) -> None:
 @pytest.mark.parametrize(
     ("reused", "prompt_len", "expected"),
     [
-        (0, 3, [3]),  # shorter than a piece
-        (0, 4, [4]),  # exactly one piece
-        (0, 8, [4, 8]),  # exact multiple: no empty last piece
+        (0, 3, [3]),
+        (0, 4, [4]),
+        (0, 8, [4, 8]),
         (0, 9, [4, 8, 9]),
-        (5, 9, [9]),  # remainder smaller than a piece
-        (5, 14, [9, 13, 14]),  # pieces start at the reused prefix
+        (5, 9, [9]),
+        (5, 14, [9, 13, 14]),
     ],
 )
 def test_cuts_edge_cases(llama: LlamaArchitecture, reused: int, prompt_len: int, expected) -> None:

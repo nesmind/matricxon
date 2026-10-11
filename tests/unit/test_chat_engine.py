@@ -11,13 +11,10 @@ from app.runtime.kv_cache import KVCache
 
 
 class _AlwaysTokenOneDecoder(ModelArchitecture):
-    """Deterministic stand-in for a real architecture: ignores its input and
-    always makes token 1 the argmax. Still writes through a real (tiny)
-    KVCache each call, so this exercises ChatEngine's cache/position
-    plumbing - including matching the cache's dtype to the model's, which a
-    real bug here (mismatched float32 cache vs a bf16 model) would surface
-    as a crash inside `forward`, not a silent wrong answer.
-    """
+    """Deterministic stand-in for an architecture: ignores its input and always makes token 1 the
+    argmax. It still writes through a tiny real KVCache, exercising ChatEngine's cache/position
+    plumbing, including matching the cache's dtype to the model's (a float32 cache vs bf16 model
+    mismatch would crash in `forward`, not answer wrongly)."""
 
     def __init__(self, dtype: torch.dtype = torch.float32) -> None:
         super().__init__()
@@ -26,9 +23,8 @@ class _AlwaysTokenOneDecoder(ModelArchitecture):
         self.head_dim = 2
         self.kv_cache_layer_shapes = [(self.n_head_kv, self.head_dim)] * self.n_layer
         self._weight = nn.Parameter(torch.zeros(1, dtype=dtype))
-        # Never goes through from_gguf/_defer_materialization - its one real
-        # "weight" is set directly above, so there's nothing to lazily
-        # materialize (see ModelArchitecture._ensure_materialized).
+        # Never goes through from_gguf/_defer_materialization: its one weight is set directly, so
+        # nothing to materialize lazily (ModelArchitecture._ensure_materialized).
         self._materialized = True
 
     @classmethod

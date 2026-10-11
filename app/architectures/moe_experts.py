@@ -1,27 +1,18 @@
-"""A shared, quantized-native-aware Mixture-of-Experts expert FFN - real, reusable core every
-real MoE architecture in this project now composes (`GraniteMoeFFN`/Mixtral via
-`granitemoe_layers.py`, `gemma4_moe.py`), instead of each hand-rolling its own sparse dispatch
-loop over a real 3D `(num_experts, ffn_dim, hidden_size)` weight tensor. A new MoE architecture
-only needs its own router (the real math genuinely differs per architecture - see
-`gemma4_moe.Gemma4Router`'s own docstring for a documented example) and its own activation
-function; the expert computation itself (gather routed tokens, apply that expert's own gate/up/
-down weights, scale, scatter back) is exactly this class, unchanged.
+"""A shared, quantized-native-aware MoE expert FFN, the reusable core of every MoE architecture here
+(`GraniteMoeFFN`/Mixtral via `granitemoe_layers.py`, `gemma4_moe.py`) instead of a hand-rolled
+sparse dispatch loop over a 3D `(num_experts, ffn_dim, hidden_size)` weight. A new MoE architecture
+needs only its router (math differs; see `gemma4_moe.Gemma4Router`) and activation; this class does
+the expert work (gather routed tokens, apply gate/up/down, scale, scatter back).
 
-Closes a real, confirmed gap (2026-09-29, see ROADMAP.md's own entry this replaces): every MoE
-architecture previously always fully dequantized its expert tensors at load time -
-`_load_projection` (the machinery behind `QuantizedLinear`/the native-C and Numba GEMV kernels)
-hard-assumes a plain 2D `(out_features, in_features)` weight, which a real 3D expert tensor
-isn't. The fix doesn't need new kernels at all: a real per-expert tensor is a contiguous, real 2D
-slice of the bigger 3D one - `_materialize_one` below just slices the right byte range per expert
-and hands it to the exact same, already-real, already-tested `QuantizedLinear` unchanged.
+Closes a gap: MoE architectures dequantized expert tensors at load, since
+`_load_projection` (behind `QuantizedLinear` and the native/Numba GEMV kernels) assumes a 2D weight.
+No new kernels: a per-expert tensor is a contiguous 2D slice of the 3D one, so `_materialize_one`
+slices the byte range per expert for the existing `QuantizedLinear`.
 
-The big dense `nn.Parameter` fallback (today's exact pre-existing behavior) is always allocated
-at construction time, same as every 2D projection's own placeholder `nn.Linear` already is - but
-once a projection actually packs, `_materialize_one` frees it (reassigns the attribute to a
-0-sized stub) rather than leaving a full, permanently-unused dense copy allocated forever
-alongside the packed one - the one real way this differs from the 2D placeholder-then-replace
-precedent, and the one that matters most here: expert tensors are usually a real MoE checkpoint's
-single biggest chunk of memory.
+The dense `nn.Parameter` fallback is allocated at construction, like each 2D projection's
+placeholder; once a projection packs, `_materialize_one` frees it (a 0-sized stub) instead of
+keeping an unused dense copy, which matters since expert tensors are usually a MoE checkpoint's
+biggest memory chunk.
 """
 
 from collections.abc import Callable
@@ -52,11 +43,10 @@ class QuantizedMoEExperts(nn.Module):
         self.gate_exps = nn.Parameter(torch.empty(num_experts, ffn_len, n_embd, dtype=dtype))
         self.up_exps = nn.Parameter(torch.empty(num_experts, ffn_len, n_embd, dtype=dtype))
         self.down_exps = nn.Parameter(torch.empty(num_experts, n_embd, ffn_len, dtype=dtype))
-        # Packed (quantized-native) per-expert QuantizedLinear, keyed by str(expert_id) - real
-        # nn.Module children (nn.ModuleDict requires string keys), so
-        # ModelArchitecture._release_packed_modules's own `self.modules()` walk already finds and
-        # releases every one of these automatically before its mmap closes - no changes needed
-        # there at all.
+        # Packed per-expert QuantizedLinear, keyed by str(expert_id) (nn.ModuleDict needs string
+        # keys): real nn.Module
+        # children, so ModelArchitecture._release_packed_modules's `self.modules` walk finds and
+        # releases them before the mmap closes.
         self.gate_packed = nn.ModuleDict()
         self.up_packed = nn.ModuleDict()
         self.down_packed = nn.ModuleDict()
@@ -81,9 +71,11 @@ class QuantizedMoEExperts(nn.Module):
     def forward(
         self, x: torch.Tensor, top_k_weights: torch.Tensor, top_k_idx: torch.Tensor
     ) -> torch.Tensor:
-        """`x`: `(n_tokens, n_embd)`; `top_k_weights`/`top_k_idx`: `(n_tokens, num_experts_per_tok)`
-        - the router's own output, in whatever real order/normalization that architecture's own
-        router produces (this class doesn't care, it only ever reads the values it's handed)."""
+        """`x`: `(n_tokens, n_embd)`; `top_k_weights`/`top_k_idx`: `(n_tokens,
+        num_experts_per_tok)`, the router's output in
+        whatever order/normalization that architecture's router produces (this class only reads the
+        values).
+        """
         n_tokens, n_embd = x.shape
         out = torch.zeros(n_tokens, n_embd, dtype=torch.float32, device=x.device)
         for expert_id in top_k_idx.unique().tolist():
@@ -106,12 +98,13 @@ def _materialize_one(
     enabled: bool,
     dtype: torch.dtype,
 ) -> bool:
-    """Packs every real expert into its own `QuantizedLinear` when `enabled` and a real GEMV
-    kernel exists for this tensor's type, freeing the big dense placeholder once every expert is
-    packed (see this module's own docstring); otherwise falls straight through to today's exact
-    eager `.copy_()`. Returns whether it packed (the caller only needs to keep this loader's mmap
-    open past materialization - see `_mark_quantized_native_used` - if at least one real tensor
-    actually did)."""
+    """Packs each expert into its own `QuantizedLinear` when `enabled` and a GEMV kernel exists for
+    the tensor type, freeing
+    the big dense placeholder once all are packed (module docstring); otherwise the eager
+    `.copy_`. Returns whether it
+    packed (the caller keeps the loader's mmap open past materialization only if at least one tensor
+    did; `_mark_quantized_native_used`).
+    """
     if enabled and experts.pack_device is not None:
         raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
         if TorchDequantizer.supports(ggml_type):
@@ -127,7 +120,7 @@ def _materialize_one(
                     rows, in_features, ggml_type, None, dtype
                 )
             setattr(experts, dense_attr, nn.Parameter(torch.empty(0, dtype=dtype)))
-            return False  # bytes were copied to the device: the mmap need not stay open
+            return False
     elif enabled:
         raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
         if has_gemv_kernel(ggml_type):

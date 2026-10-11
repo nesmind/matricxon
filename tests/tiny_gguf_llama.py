@@ -1,20 +1,13 @@
-"""Builds a tiny, complete, valid `llama` GGUF file - real architecture,
+"""Builds a tiny, complete, valid `llama` GGUF (real architecture and SentencePiece tokenizer
+metadata, all F32), so integration tests run the *entire* pipeline (GGUFReader -> GGUFModelLoader ->
+ArchitectureRegistry -> LlamaArchitecture -> SentencePieceTokenizer -> ChatEngine -> NDJSON) fast
+and memory-safely. The text is gibberish (near-random weights): this exercises the wiring; the
+TinyLlama-1.1B-Chat-v1.0 pull validated the math.
 
-real SentencePiece tokenizer metadata, all F32 - so integration tests can
-run the *entire* real pipeline (GGUFReader -> GGUFModelLoader ->
-ArchitectureRegistry -> LlamaArchitecture -> SentencePieceTokenizer ->
-ChatEngine -> NDJSON) end to end, fast and memory-safely. The generated
-text is gibberish (tiny near-random weights) - this is for exercising the
-wiring, not model quality; the real TinyLlama-1.1B-Chat-v1.0 pull already
-validated the real math (see ROADMAP.md's M10 llama-architecture entry, and
-scripts/oracle/validate_sentencepiece_tokenizer.py for the tokenizer side).
-
-Vocab is deliberately minimal, same philosophy as tiny_gguf.py's GPT-2
-fixture: control tokens (type 3) plus all 256 byte-fallback tokens (type 6,
-`<0xNN>`) and nothing else - every character falls through to byte-fallback,
-so no real BPE merge ever needs to succeed (`tokenizer.ggml.scores` can all
-be 0.0 unused) while `encode`/`decode` still round-trip correctly for any
-input text.
+Vocab is minimal, like tiny_gguf.py's GPT-2 fixture: control tokens (type 3) plus all 256
+byte-fallback tokens (type 6, `<0xNN>`), so every character falls to byte-fallback, no BPE merge
+must succeed (`tokenizer.ggml.scores` can all be 0.0) and `encode`/`decode` still round-trip any
+text.
 """
 
 from pathlib import Path
@@ -22,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2
@@ -71,16 +64,15 @@ def build_tiny_llama_gguf(path: Path, seed: int = 0, tied_embeddings: bool = Fal
     )
 
     def add(name: str, array: np.ndarray) -> None:
-        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed) - see
-        # the row-permute note in app/architectures/layers.py.
+        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed); see the row-permute note in
+        # app/architectures/layers.py.
         builder.add_tensor(
             name, list(reversed(array.shape)), GGMLQuantizationType.F32, array.tobytes()
         )
 
     add("token_embd.weight", _random_weight(rng, vocab_size, N_EMBD))
-    # Real Llama-3.2-1B/3B-Instruct GGUFs have no separate "output.weight" tensor at all
-    # (tie_word_embeddings=true) - see LlamaArchitecture's own docstring for the real bug this
-    # covers (2026-09-22).
+    # Llama-3.2-1B/3B-Instruct GGUFs have no "output.weight" (tie_word_embeddings=true); the bug
+    # this covers: LlamaArchitecture.
     if not tied_embeddings:
         add("output.weight", _random_weight(rng, vocab_size, N_EMBD))
     add("output_norm.weight", np.ones(N_EMBD, dtype="<f4"))

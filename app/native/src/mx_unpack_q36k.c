@@ -1,11 +1,4 @@
-/*
- * Q3_K and Q6_K rows unpacked into mx_block_unpacked (see mx_common.h).
- *
- * Both use 16 sub-blocks of 16 values with one signed scale each and no min term; their signed
- * values are stored shifted to unsigned, with the shift undone through the activation's bsums
- * (see mx_block_unpacked). Element order mirrors Q3_KStrategy (kquants_extended.py) and
- * Q6_KStrategy (kquants.py) dequantize exactly.
- */
+/* Q3_K and Q6_K rows unpacked into mx_block_unpacked (see mx_common.h). Both use 16 sub-blocks of 16 values with one signed scale and no min; signed values are stored shifted to unsigned, undone through the activation's bsums. Element order mirrors Q3_KStrategy (kquants_extended.py) and Q6_KStrategy (kquants.py). */
 #include "mx_common.h"
 
 /* Sub-block scales plus the offset term (see mx_block_unpacked): m[s] = scale * off. */
@@ -17,9 +10,7 @@ static inline void mx_scales_with_offset(const int8_t *scales, int16_t off,
     }
 }
 
-/* Q3_K block: {u8 hmask[32]; u8 qs[64]; u8 scales[12]; f16 d} - 110 bytes. Each value is 2
- * low bits from qs plus hmask's high bit, inverted: bit clear means -4. Stored unsigned as
- * u = q2 | hbit << 2 (0..7), i.e. value + 4. */
+/* Q3_K block: {u8 hmask[32]; u8 qs[64]; u8 scales[12]; f16 d} - 110 bytes. Each value is 2 low bits from qs plus hmask's high bit, inverted (clear means -4); stored as u = q2 | hbit << 2 (0..7), i.e. value + 4. */
 void mx_unpack_q3_k(const uint8_t *restrict row, mx_block_unpacked *restrict out, int nb) {
     int8_t scales[16];
     for (int i = 0; i < nb; ++i) {
@@ -44,9 +35,7 @@ void mx_unpack_q3_k(const uint8_t *restrict row, mx_block_unpacked *restrict out
     }
 }
 
-/* Q6_K block: {u8 ql[128]; u8 qh[64]; i8 scales[16]; f16 d} - 210 bytes. 6-bit values are
- * 4 bits from ql plus 2 from qh, offset by -32; two 128-value halves of four 32-lane groups.
- * Stored unsigned (0..63), i.e. value + 32. */
+/* Q6_K block: {u8 ql[128]; u8 qh[64]; i8 scales[16]; f16 d} - 210 bytes. 6-bit values: 4 bits from ql plus 2 from qh, offset -32; two 128-value halves of four 32-lane groups. Stored unsigned (0..63), i.e. value + 32. */
 void mx_unpack_q6_k(const uint8_t *restrict row, mx_block_unpacked *restrict out, int nb) {
     for (int i = 0; i < nb; ++i) {
         const uint8_t *b = row + (size_t)i * MX_Q6_K_BYTES;

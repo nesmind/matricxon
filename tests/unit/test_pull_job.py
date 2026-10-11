@@ -71,8 +71,8 @@ class TestPullJobHappyPath:
 
 
 class TestPullJobAlreadyDownloaded:
-    """See app.pull.download_coordinator's own docstring: a second PullJob for the same tag, getting
-    its turn at the lock only after an earlier one already finished, must not re-download."""
+    """A second PullJob for the same tag, getting the lock after an earlier one finished, must not
+    re-download (app.pull.download_coordinator)."""
 
     def test_skips_the_download_when_the_file_already_exists(self, tmp_path: Path) -> None:
         gguf_bytes = build_tiny_mistral3_gguf(tmp_path / "source.gguf").read_bytes()

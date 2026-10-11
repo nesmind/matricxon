@@ -1,16 +1,14 @@
-"""Builds a tiny, complete, valid `command-r` GGUF file - mirrors `tiny_gguf_qwen2.py`'s
-structure, but with real bias-free `LayerNorm` metadata/tensors (`attn_norm`/`output_norm` have
-weight only - no bias tensor at all, confirmed real for this architecture) and a real
-`logit_scale` value (non-1.0, so a bug that silently drops the multiply changes the numeric
-output, not just shapes).
-"""
+"""Builds a tiny, complete, valid `command-r` GGUF, mirroring `tiny_gguf_qwen2.py`, with bias-free
+`LayerNorm` metadata/tensors (`attn_norm`/`output_norm` weight only, no bias tensor, real for this
+architecture) and a non-1.0 `logit_scale`, so a bug dropping the multiply changes the numeric
+output, not just shapes."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2

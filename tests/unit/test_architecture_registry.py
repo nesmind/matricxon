@@ -21,17 +21,13 @@ from app.architectures.registry import ArchitectureRegistry, unsupported_feature
 from app.architectures.starcoder2 import Starcoder2Architecture
 from app.gguf.constants import GGUFValueType
 from app.gguf.metadata import GGUFMetadata
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 
 class TestNameMatchesSupports:
-    """Regression guard for the real refactor this required: `supports()`
-
-    used to compare `metadata.architecture` against a literal string
-    duplicated in each subclass; now both `supports()` and `NAME` read
-    from the same single source (see ModelArchitecture.NAME's own
-    docstring) - this pins that they can never drift apart again.
-    """
+    """Guards the refactor where `supports` compared `metadata.architecture` against a literal
+    string duplicated per subclass; both `supports` and `NAME` now read one source
+    (ModelArchitecture.NAME), and this pins that they can't drift."""
 
     def test_every_registered_architecture_declares_a_name(self) -> None:
         for architecture_cls in ArchitectureRegistry()._ARCHITECTURES:
@@ -118,21 +114,18 @@ class TestVisionSupportedNames:
 
 
 def test_model_architecture_declares_name_as_a_class_var() -> None:
-    # Every concrete subclass must set it - the base class deliberately leaves it
-    # undeclared (no default) so a new architecture can't silently omit it.
+    # Every concrete subclass must set it; the base class leaves it undeclared (no default) so a new
+    # architecture can't silently omit it.
     assert "NAME" not in ModelArchitecture.__dict__
 
 
 class TestUnsupportedFeatures:
-    """`ModelArchitecture.unsupported_features` (real gated-variant gaps a `supports()`-matched
-    checkpoint's own metadata can still activate) - added 2026-09-29 after a real gemma-4-E2B-it
-    GGUF's Per-Layer Embeddings/cross-layer KV reuse were silently never read at all by
-    `Gemma4Architecture`, with nothing distinguishing it from a fully-supported checkpoint.
-    `Gemma4Architecture` itself no longer has a known gap to test against (its own MoE variant,
-    the original real example, was implemented 2026-09-29 too - see `gemma4_moe.py`) - the
-    mechanism itself is still real and reusable, so it's exercised here through a minimal fake
-    override rather than a real architecture's gap that may or may not exist at any given time.
-    """
+    """`ModelArchitecture.unsupported_features` (gated-variant gaps a `supports`-matched
+    checkpoint's metadata can still activate), after a gemma-4-E2B-it GGUF's
+    Per-Layer Embeddings/cross-layer KV reuse were silently ignored by `Gemma4Architecture`. Gemma4
+    has no known gap left to test (its MoE variant was implemented: `gemma4_moe.py`); the
+    mechanism is reusable, so it is exercised through a minimal fake override rather than a real gap
+    that may not exist."""
 
     def test_default_is_empty_for_every_registered_architecture(self) -> None:
         for architecture_cls in ArchitectureRegistry()._ARCHITECTURES:
@@ -176,10 +169,9 @@ def test_unsupported_features_resolves_the_real_architecture_from_a_gguf_file(
 def test_unsupported_features_is_empty_not_raised_for_an_unresolvable_architecture(
     tmp_path: Path,
 ) -> None:
-    """A real, live regression (2026-09-29): a `clip` mmproj sidecar (never resolvable on its
-    own - see app.models.capabilities._MMPROJ_ARCHITECTURE's own comment) crashed GET /api/tags
-    for every installed model, not just itself, since effective_capabilities calls this once per
-    installed tag inside that endpoint's own loop."""
+    """Regression: a `clip` mmproj sidecar (never resolvable alone;
+    app.models.capabilities._MMPROJ_ARCHITECTURE) crashed GET /api/tags for every installed model,
+    as effective_capabilities calls this once per tag inside that loop."""
     path = (
         GGUFBuilder()
         .set_str("general.architecture", "clip")

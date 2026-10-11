@@ -3,18 +3,31 @@ from pathlib import Path
 
 
 class PidFile:
-    """Writes this running process's own PID to `path` on write(), and removes it on remove().
-
-    The single source of truth scripts/start.sh, scripts/stop.sh and scripts/status.sh all read
-    (via MATRICXON_PID_FILE) — deliberately self-reported by the process itself (os.getpid()),
-    not captured by the launching shell's own `$!`, since that capture is only ever as reliable
-    as exactly how the process was spawned (a plain background job, a session leader via setsid,
-    a process supervisor, a container entrypoint, ...). A self-written PID file is correct
-    regardless of any of that.
-    """
+    """Writes this process's PID to `path` on write, removes it on remove. The single source of
+    truth scripts/start.sh, stop.sh and status.sh read (via MATRICXON_PID_FILE): self-reported by
+    the process (os.getpid), not captured by the launching shell's `$!`, which is only as reliable
+    as how the process was spawned (background job, setsid, supervisor, container entrypoint...). A
+    self-written file is right regardless."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
+
+    def previous_run_died(self) -> bool:
+        """True if the file names another process that is gone: the last run was killed or crashed.
+        A clean stop removes the file; an in-place restart keeps the same pid: neither counts."""
+        try:
+            previous = int(self._path.read_text().strip())
+        except (OSError, ValueError):
+            return False
+        if previous == os.getpid():
+            return False
+        try:
+            os.kill(previous, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        return False
 
     def write(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

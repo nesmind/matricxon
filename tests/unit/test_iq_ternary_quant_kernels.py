@@ -1,10 +1,7 @@
-"""Cross-checks the IQ4_NL/IQ4_XS/TQ1_0/TQ2_0 dequant strategies (app/gguf/dequant/iq_ternary.py)
-against slow, scalar, line-by-line ports of ggml's real reference dequantize_row_iq4_nl/
-dequantize_row_iq4_xs/dequantize_row_tq1_0/dequantize_row_tq2_0 functions (ggml/src/ggml-quants.c,
-llama.cpp `master`) - not code reuse from the shipped strategies, just a test oracle written
-independently here, matching the pattern already established in test_extended_quant_kernels.py
-for Q2_K/Q3_K/Q8_K.
-"""
+"""Cross-checks IQ4_NL/IQ4_XS/TQ1_0/TQ2_0 (app/gguf/dequant/iq_ternary.py) against slow scalar
+line-by-line ports of ggml's dequantize_row_iq4_nl/iq4_xs/tq1_0/tq2_0 (ggml/src/ggml-quants.c,
+llama.cpp `master`): an oracle written independently, as test_extended_quant_kernels.py does for
+Q2_K/Q3_K/Q8_K."""
 
 import random
 import struct

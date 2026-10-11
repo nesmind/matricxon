@@ -1,7 +1,6 @@
-"""`/api/chat` against a tiny but real `qwen2` GGUF (see tests/tiny_gguf_qwen2.py). Real
-GGUFModelLoader/Qwen2Architecture/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked. See
-scripts/oracle/validate_qwen2.py for the real-weight numeric proof.
-"""
+"""`/api/chat` against a tiny `qwen2` GGUF (tests/tiny_gguf_qwen2.py). Real
+GGUFModelLoader/Qwen2Architecture/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked. Real-weight
+proof: tools/oracle/validate_qwen2.py."""
 
 import json
 

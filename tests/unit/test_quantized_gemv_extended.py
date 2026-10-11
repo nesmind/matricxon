@@ -1,8 +1,5 @@
-"""Correctness for the remaining K-quant GEMV kernels (app/gguf/dequant/quantized_gemv_extended.py)
-- same cross-check pattern as test_quantized_gemv.py: agrees with each type's own already-oracle-
-validated `QuantStrategy.dequantize()` (kquants.py/kquants_extended.py) on real multi-row weight
-matrices.
-"""
+"""Remaining K-quant GEMV kernels (quantized_gemv_extended.py) vs each type's oracle-validated
+`QuantStrategy.dequantize`, as test_quantized_gemv.py."""
 
 import random
 import struct
@@ -114,9 +111,11 @@ class TestQgemvQ8K:
         n_super = in_features // 256
 
         def per_block(r: random.Random) -> bytes:
-            return struct.pack("<f", r.uniform(0.01, 2.0)) + struct.pack(
-                "<256b", *(r.randrange(-127, 128) for _ in range(256))
-            ) + _random_bytes(r, 32)
+            return (
+                struct.pack("<f", r.uniform(0.01, 2.0))
+                + struct.pack("<256b", *(r.randrange(-127, 128) for _ in range(256)))
+                + _random_bytes(r, 32)
+            )
 
         raw = _random_row(rng, out_features * n_super, per_block)
         _check(Q8_KStrategy(), qgemv_q8_k, raw, out_features, in_features)

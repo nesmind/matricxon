@@ -30,37 +30,26 @@ from app.runtime.prompt_cache import PromptCache
 from app.runtime.tool_call_formats import ToolCallFormats
 from app.server.errors import DeviceUnavailableError
 
-# How many not-yet-started cancelled reply ids to remember (see ModelManager.cancel_request).
+# How many not-yet-started cancelled reply ids to remember (ModelManager.cancel_request).
 _MAX_REMEMBERED_CANCELS = 1024
 
 
 class ModelManager:
-    """Loads GGUF models on demand and keeps up to `max_loaded` resident,
-    evicting the least-recently-used one past its keep-alive.
+    """Loads GGUF models on demand and keeps up to `max_loaded` resident, evicting the
+    least-recently-used one past its keep-alive.
 
-    `max_loaded=2` (not 1) matches pAIring's real usage: its RAG path calls
-    `embed()` then `chat_stream()` back-to-back on every turn, so 1 would
-    thrash-reload a model on every single turn (see ROADMAP.md).
+    `max_loaded=2` matches pAIring's usage: its RAG path calls `embed` then `chat_stream` each turn,
+    so 1 would reload a model every turn. There is no upper bound, but raising it on a
+    RAM-constrained box relies on `_ensure_enough_memory_to_load`, which fails a load that clearly
+    won't fit with `InsufficientMemoryError` instead of risking an OOM kill.
 
-    Loads models in bf16 when the hardware can actually accelerate it (CUDA, or a CPU with
-    `avx512_bf16`/`amx_bf16`), otherwise float32 if that demonstrably fits in currently available
-    memory, else bf16 anyway - see `app.models.load_dtype.select_load_dtype`'s own docstring for
-    the full reasoning:
-    bf16 halves memory (e.g. ~6.9GB versus ~13.7GB for a real 3.85B-param model, see the
-    hardware-constraints project memory) but is dramatically *slower* than float32 on a CPU
-    without native bf16 support - and float32 being faster doesn't help if it swap-thrashes the
-    machine instead.
+    Loads in bf16 when the hardware accelerates it (CUDA, or a CPU with `avx512_bf16`/`amx_bf16`),
+    otherwise float32 if that demonstrably fits in available memory, else bf16
+    (`app.models.load_dtype.select_load_dtype`): bf16 halves memory (~6.9GB vs ~13.7GB for a
+    3.85B-param model) but is far slower on a CPU without native bf16, and float32 doesn't help if
+    it thrashes swap.
 
-    `max_loaded` itself has no upper bound baked in - the eviction/capacity
-    logic below is written generically against `self._max_loaded`, not
-    hardcoded to 2 - but raising it on a RAM-constrained box needs the real
-    memory circuit breaker `_ensure_enough_memory_to_load` provides (see its
-    own docstring): a load that clearly wouldn't fit now fails closed with a
-    clear `InsufficientMemoryError` instead of risking an OS-level OOM kill.
-
-    `clock` is injectable so eviction/expiry logic (and every `ModelHandle`
-    it creates or touches) can be unit-tested deterministically with a fake
-    clock instead of real sleeps.
+    `clock` is injectable so eviction/expiry logic is testable with a fake clock.
     """
 
     def __init__(
@@ -80,7 +69,7 @@ class ModelManager:
         gpu_weight_mode: str = "dequantized",
         cache_store: PersistentCacheStore | None = None,
     ) -> None:
-        # Raises DeviceUnavailableError for a GPU that isn't there (never a silent CPU fallback).
+        # Raises DeviceUnavailableError for a missing GPU (never a silent CPU fallback).
         self._device = ComputeDevice.resolve(device)
         self._gpu_weight_mode = gpu_weight_mode
         self._cache_store = cache_store
@@ -88,12 +77,11 @@ class ModelManager:
         self._max_loaded = max_loaded
         self._default_keep_alive_seconds = default_keep_alive_seconds
         self._memory_safety_margin = memory_safety_margin
-        # Off by default - see Settings.enable_mixed_precision_loading's own docstring for the real
-        # 2026-09-20 end-to-end finding (measured slower, not faster, on this project's target
-        # hardware) behind this flag.
+        # Off by default (Settings.enable_mixed_precision_loading: the end-to-end
+        # finding, measured slower on the target hardware).
         self._enable_mixed_precision_loading = enable_mixed_precision_loading
-        # Off by default - see Settings.enable_quantized_native_compute's own docstring. A real,
-        # permanent user choice (2026-09-21), not a rollout toggle.
+        # Off by default (Settings.enable_quantized_native_compute). A permanent user choice
+        # , not a rollout toggle.
         self._enable_quantized_native_compute = enable_quantized_native_compute
         self._clock = clock
         self._prompt_cache_slots = prompt_cache_slots
@@ -102,10 +90,9 @@ class ModelManager:
         self._max_decode_batch = max_decode_batch
         self._handles: dict[str, ModelHandle] = {}
         self._registry = ArchitectureRegistry()
-        # Tags stop-requested while they had no handle yet - see unload()'s own docstring for why
-        # that's a real, common case (not just a stray/duplicate call) on this project's slow-CPU
-        # target: loading alone routinely takes tens of seconds, and a caller can ask to stop well
-        # before that finishes.
+        # Tags stop-requested while they had no handle yet (unload says why that is common, not a
+        # stray call): on the slow-CPU target loading takes tens of seconds, and a caller can ask to
+        # stop well before it finishes.
         self._cancelled_loads: set[str] = set()
         self._cancelled_requests: OrderedDict[str, None] = OrderedDict()
 
@@ -121,8 +108,8 @@ class ModelManager:
         if len(self._handles) >= self._max_loaded:
             self._evict_least_recently_used()
 
-        # A fresh load attempt always starts clean - any cancellation flag left over here belongs
-        # to a *previous*, already-finished attempt for this same tag, not this one.
+        # A fresh load starts clean: a leftover cancellation flag belongs to a previous finished
+        # attempt for this tag.
         self._cancelled_loads.discard(tag)
         handle = self._load(tag, keep_alive_seconds, now)
         self._handles[tag] = handle
@@ -130,10 +117,9 @@ class ModelManager:
 
     def cancel_request(self, tag: str, request_id: str) -> None:
         """Stops one reply (`ChatRequest.request_id`) without unloading anything: the model, other
-        users' replies and the caches are untouched. If the reply isn't on a worker yet (still
-        loading the model, or between the router and the worker) the id is remembered, so
-        `pop_cancelled_request` can drop it the moment it would start. See `ModelWorker.cancel_job`.
-        """
+        users' replies and caches are untouched. If the reply isn't on a worker yet (still loading
+        the model, or between router and worker) the id is remembered, so `pop_cancelled_request`
+        can drop it when it would start. See `ModelWorker.cancel_job`."""
         handle = self._handles.get(tag)
         if handle is not None and handle.worker.cancel_job(request_id):
             return
@@ -146,47 +132,36 @@ class ModelManager:
         return self._cancelled_requests.pop(request_id, 0) is None
 
     def pop_cancelled_load(self, tag: str) -> bool:
-        """True (and consumes the flag) if unload() was called for `tag` while it had no handle
-        yet - i.e. while a get_or_load() call for it was still stuck inside `_load()`'s
-        many-seconds dequantization step, well before there was any ModelWorker for unload()'s own
-        request_stop() to reach. The one caller that needs this (ChatRequestHandler.handle(), right
-        after its own get_or_load() call returns) uses it to skip straight to a "done, nothing
-        generated" response instead of starting a generation nobody wants anymore - the
-        freshly-loaded handle itself stays cached regardless: the real loading work already
-        happened, so there's no reason to throw it away over one cancelled request."""
+        """True (and consumes the flag) if unload was called for `tag` while it had no handle,
+        i.e. while a get_or_load for it was in `_load`'s many-seconds dequantization step,
+        before any ModelWorker existed for unload's request_stop to reach. The caller
+        (ChatRequestHandler.handle, right after get_or_load returns) uses it to answer "done,
+        nothing generated" instead of starting a generation nobody wants; the loaded handle stays
+        cached (the work was done)."""
         if tag in self._cancelled_loads:
             self._cancelled_loads.discard(tag)
             return True
         return False
 
     def unload(self, tag: str) -> None:
-        """Evicts `tag`'s handle and, if it has one, tells its worker to abort whatever job is
-        currently running - see ModelWorker.request_stop's own docstring for why setting a flag is
-        enough to actually halt the underlying compute, not just this manager's own bookkeeping.
-        Popping the dict entry alone (the only thing this used to do) left a mid-generation worker
-        thread completely unaware anything happened: it kept computing every remaining token up to
-        max_new_tokens/EOS, orphaned from the manager and invisible to `/api/ps`, but still pegging
-        the CPU - confirmed live via ChatRequest.is_unload_call()'s own "stop" contract (the same
-        one app.services.matricxon_client.stop_model sends after e.g. a mid-stream message
-        delete).
+        """Evicts `tag`'s handle and, if it has one, tells its worker to abort the running job
+        (`ModelWorker.request_stop`). Popping the dict entry alone (the old behavior) left a
+        mid-generation worker thread running: it kept computing every token up to
+        max_new_tokens/EOS, invisible to `/api/ps` and still using the CPU. This is the "stop"
+        contract of ChatRequest.is_unload_call (sent by app.services.matricxon_client.stop_model,
+        e.g. after a mid-stream message delete).
 
-        `wait_until_idle()` runs before `architecture.close()`, not just `request_stop()` - real
-        bug this closes (2026-09-22, confirmed live): `request_stop()` only sets a flag the worker
-        notices at its next per-layer/per-token check, so without waiting, `close()` could run on
-        this thread while the worker's own thread was still mid-`forward()` - with real
-        quantized-native compute on, still actively reading a `QuantizedLinear`'s live raw-mmap
-        view via a fused GEMV kernel call at that exact moment. `close()` released that view and
-        closed the mmap out from under it, crashing with a real `BufferError: cannot close
-        exported pointers exist`. Waiting first means `close()` only ever runs once the worker has
-        genuinely stopped touching this model's weights, not just been asked to.
+        `wait_until_idle` runs before `architecture.close`: `request_stop` only sets a flag seen at
+        the next per-layer/per-token check, so `close` could run mid-`forward` while
+        quantized-native compute read a `QuantizedLinear`'s raw-mmap view through a fused GEMV
+        kernel, crashing with `BufferError: cannot close exported pointers exist`. Waiting first
+        means `close` runs after the worker has stopped touching the weights.
 
-        If `tag` has no handle at all right now, that most likely means a get_or_load() call for
-        it is still loading (see pop_cancelled_load's own docstring) - confirmed live as the actual
-        dominant case, not a rare edge: on this project's target hardware, loading alone can easily
-        take longer than a user waits before giving up and deleting their message, so the stop
-        request routinely arrives before any handle - let alone any worker job - exists yet.
-        Recording it here is what lets that in-flight load notice, the moment it finishes, that
-        nobody wants the generation it's about to start."""
+        If `tag` has no handle, a get_or_load for it is most likely still loading
+        (`pop_cancelled_load`), the common case since loading can outlast a user's patience.
+        Recording the stop lets that load notice, when it finishes, that nobody wants the
+        generation.
+        """
         handle = self._handles.pop(tag, None)
         if handle is not None:
             handle.worker.request_stop()
@@ -197,22 +172,34 @@ class ModelManager:
 
     def _retire(self, handle: ModelHandle) -> None:
         """Drops a handle for good: its idle cached conversations go to the disk tier first (a
-        background write - the slots are independent of the weights closed right after)."""
+        background write; the slots are independent of the weights closed right after)."""
         handle.prompt_cache.persist_all()
         handle.architecture.close()
 
+    def holds_chat(self, tag: str) -> bool:
+        """Is a conversation of the chat `tag` in RAM on any loaded model? (cluster routing)"""
+        return any(handle.prompt_cache.holds(tag) for handle in self.list_loaded())
+
+    def spill_chat(self, tag: str) -> int:
+        """Writes the chat's idle RAM conversations to the shared disk tier and waits for the files,
+        so another node can continue the chat; the models stay loaded. Returns how many."""
+        moved = sum(handle.prompt_cache.spill_chat(tag) for handle in self.list_loaded())
+        if moved and self._cache_store is not None:
+            self._cache_store.flush()
+        return moved
+
     def shutdown(self) -> None:
         """Server stop: halts every reply, saves every model's cached conversations to disk and
-        waits for the writes - what lets a restart keep long chats cheap to resume."""
+        waits for the writes, so a restart keeps long chats cheap to resume."""
         for tag in list(self._handles):
             self.unload(tag)
         if self._cache_store is not None:
             self._cache_store.flush()
 
     def _cache_budget_bytes(self, on_gpu: bool, free_before_load: int, weight_bytes: int) -> int:
-        """Prompt-cache budget. On a GPU the cached KV lives in VRAM next to the weights, so it is
-        capped at half of the VRAM left once this model's weights are in (never above the setting;
-        the weights may not be uploaded yet, hence the estimate rather than a fresh reading)."""
+        """Prompt-cache budget. On a GPU the cached KV lives in VRAM beside the weights, so it is
+        capped at half the VRAM left once this model's weights are in (never above the setting; the
+        weights may not be uploaded yet, hence the estimate)."""
         if not on_gpu:
             return self._prompt_cache_budget_bytes
         return min(self._prompt_cache_budget_bytes, max(0, free_before_load - weight_bytes) // 2)
@@ -222,11 +209,9 @@ class ModelManager:
         return self._device.is_gpu
 
     def now(self) -> float:
-        """Exposes the manager's own (possibly injected/fake) clock, so a
-        caller computing a `ModelHandle`'s `expires_in()` reads the same
-        clock its `last_used_at` was set from - a wall-clock `time.monotonic()`
-        call at the API boundary would silently disagree under a fake clock.
-        """
+        """Exposes the manager's own (possibly fake) clock, so a caller computing a `ModelHandle`'s
+        `expires_in` reads the same clock its `last_used_at` came from (a wall-clock
+        `time.monotonic` at the API boundary would disagree under a fake clock)."""
         return self._clock()
 
     def list_loaded(self) -> list[ModelHandle]:
@@ -237,12 +222,10 @@ class ModelManager:
         self._evict_expired(self._clock())
 
     def _evict_expired(self, now: float) -> None:
-        # A handle whose worker is_busy() (still generating - see ModelWorker.is_busy's own
-        # docstring for why this matters) is never evicted, expired keep-alive or not: nothing
-        # about the timer running out makes it safe to yank the handle out from under a job that's
-        # still actively consuming it - the worker thread would keep computing regardless, now
-        # orphaned from this dict and invisible to /api/ps, with unload() (the ONE explicit way to
-        # actually stop it, see that method's own docstring) unable to find it anymore either.
+        # A handle whose worker is_busy (ModelWorker.is_busy says why) is never evicted,
+        # keep-alive expired or not: the timer running out doesn't make it safe to yank the handle
+        # from a job still using it; the worker would keep computing, orphaned from this dict and
+        # invisible to /api/ps, with unload (the one way to stop it) unable to find it.
         for tag in [
             tag
             for tag, handle in self._handles.items()
@@ -251,11 +234,10 @@ class ModelManager:
             self._retire(self._handles.pop(tag))
 
     def _evict_least_recently_used(self) -> None:
-        # Same "never evict a busy handle" rule as _evict_expired above - if every currently-loaded
-        # handle is busy, this is a deliberate no-op: get_or_load's own caller then simply loads the
-        # new model alongside them, temporarily over max_loaded rather than corrupting an in-flight
-        # generation. A soft cap under real contention is the honest tradeoff; there is no safe way
-        # to free a slot that's actually in use.
+        # Same "never evict a busy handle" rule as _evict_expired: if every loaded handle is busy
+        # this is a deliberate no-op, and get_or_load's caller loads the new model alongside,
+        # temporarily over max_loaded rather than corrupting an in-flight generation. A soft cap
+        # under contention is the honest tradeoff; a slot in use can't be safely freed.
         idle = {tag: handle for tag, handle in self._handles.items() if not handle.worker.is_busy()}
         if not idle:
             return
@@ -266,27 +248,23 @@ class ModelManager:
         installed = self._catalog.get(tag)
         gguf_path = self._catalog.gguf_path_for_tag(tag)
 
-        # Parsed here (ahead of the memory check) rather than left to GGUFModelLoader's own
-        # constructor below, purely so the exact tensor shapes it reads are available to compute
-        # bf16_bytes from before deciding whether to attempt the load at all - GGUFReader.read()
-        # is a cheap, KB-scale header-only parse (see its own docstring), so re-parsing the same
-        # header a second time inside GGUFModelLoader.__init__ costs nothing worth avoiding.
-        # `.metadata` (not just `.tensor_infos`) is kept too, to resolve the architecture class
-        # below without a second parse of the same header.
+        # Parsed here (before the memory check), not left to GGUFModelLoader's constructor, so the
+        # tensor shapes are available to compute bf16_bytes before deciding whether to attempt the
+        # load. GGUFReader.read is a cheap KB-scale header parse, so GGUFModelLoader.__init__
+        # re-parsing costs nothing worth avoiding. `.metadata` is kept to resolve the architecture
+        # class below without another parse.
         parsed = GGUFReader(gguf_path).read()
         tensor_infos = parsed.tensor_infos
         bf16_bytes = exact_bf16_bytes(tensor_infos)
         architecture_cls = self._registry.resolve(parsed.metadata)
 
-        # See Settings.enable_quantized_native_compute's own docstring / estimate_quantized_
-        # native_bytes's own docstring for why this circuit breaker needs its own, smaller,
-        # real estimate when this mode is active - `select_load_dtype` below still uses the
-        # full `bf16_bytes` figure (it only decides float32-vs-bf16 for the tensors that *do*
-        # get fully materialized either way - norms/embeddings/attn_q/attn_k - a smaller number
-        # there would risk wrongly picking float32 for those with less real headroom than it
-        # assumes, not a safety problem `ensure_enough_memory_to_load` itself can afford).
-        # The CPU packed-weight kernels read the mmap, so a GPU model either materializes in
-        # bf16 or, with gpu_weight_mode="packed", uploads supported quant types still packed.
+        # Why this breaker needs its own smaller estimate in this mode:
+        # Settings.enable_quantized_native_compute / estimate_quantized_native_bytes.
+        # `select_load_dtype` below still uses the full `bf16_bytes`: it decides float32-vs-bf16
+        # only for tensors fully materialized either way (norms/embeddings/attn_q/attn_k), and a
+        # smaller number could wrongly pick float32 with less headroom than assumed. The CPU
+        # packed-weight kernels read the mmap, so a GPU model either materializes in bf16 or, with
+        # gpu_weight_mode="packed", uploads supported quant types still packed.
         on_gpu = self._device.is_gpu
         if on_gpu and not architecture_cls.SUPPORTS_GPU:
             raise DeviceUnavailableError(
@@ -314,9 +292,9 @@ class ModelManager:
             memory_kind="VRAM" if on_gpu else "memory",
         )
         # float32-vs-bf16 for what stays float: with quantized-native compute that is a small part
-        # of the model, so size the decision from the real (packed) footprint, not the full
-        # unpacked bf16 size - which made a 4B model always fall to bf16, ~10x slower here (no
-        # hardware bf16; measured 2026-10-01, Qwen3.5-4B decode 1.65 -> 0.18 tok/s).
+        # of the model, so size the decision from the real packed footprint, not the full unpacked
+        # bf16 size, which made a 4B model always fall to bf16, ~10x slower here (no hardware bf16;
+        # measured: Qwen3.5-4B decode 1.65 -> 0.18 tok/s).
         dtype = (
             self._device.load_dtype()
             if on_gpu
@@ -326,8 +304,8 @@ class ModelManager:
             )
         )
 
-        # Mixed per-layer float32/bf16 precision - see plan_mixed_precision_load's own docstring,
-        # including why it's off (returns (None, dtype)) by default.
+        # Mixed per-layer float32/bf16 precision: plan_mixed_precision_load (including why it
+        # returns (None, dtype) by default).
         layer_dtypes, loader_dtype = plan_mixed_precision_load(
             tensor_infos,
             dtype,
@@ -336,14 +314,13 @@ class ModelManager:
             supports_mixed_precision=architecture_cls is Mistral3TextArchitecture,
         )
 
-        # No `with` block here on purpose: on-the-fly dequant means `from_gguf` defers reading any
-        # tensor bytes at all until this model's first real forward pass (see
-        # ModelArchitecture._ensure_materialized), so the mmap behind `loader` has to stay open past
-        # this method returning - ownership transfers to `architecture` itself once from_gguf
-        # succeeds. If anything fails before then, this closes it here instead of leaking it.
+        # No `with` block on purpose: on-the-fly dequant means `from_gguf` defers reading tensor
+        # bytes until the first forward pass (ModelArchitecture._ensure_materialized), so the mmap
+        # behind `loader` must stay open past this method; ownership passes to `architecture` once
+        # from_gguf succeeds. If anything fails first, this closes it here instead of leaking it.
         loader = GGUFModelLoader(gguf_path, dtype=loader_dtype)
         try:
-            # See Settings.enable_quantized_native_compute's own docstring - only architectures in
+            # See Settings.enable_quantized_native_compute: only architectures in
             # QUANTIZED_NATIVE_WIRED_ARCHITECTURES accept this kwarg today.
             quantized_native_kwargs = (
                 {"enable_quantized_native": True} if quantized_native_enabled else {}

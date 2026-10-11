@@ -1,21 +1,20 @@
 """Builds a tiny, complete, valid `qwen35` GGUF: 4 layers (3 Gated DeltaNet + 1 full attention at
-`full_attention_interval=4`), fewer key heads than value heads (exercises the head expansion),
-`head_dim` != `N_EMBD // N_HEAD`, and `rope.dimension_count` < `head_dim` (partial RoPE). Tensor
-names/shapes mirror a real `Qwen3.5-9B` GGUF header (range-fetched 2026-10-01).
-"""
+`full_attention_interval=4`), fewer key than value heads (exercises head expansion), `head_dim` !=
+`N_EMBD // N_HEAD` and `rope.dimension_count` < `head_dim` (partial RoPE). Tensor names/shapes
+mirror a `Qwen3.5-9B` GGUF header (range-fetched)."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2
 N_HEAD_KV = 1
-HEAD_DIM = 8  # attention head dim; != N_EMBD // N_HEAD (4)
-ROPE_DIM = 4  # < HEAD_DIM: partial RoPE
+HEAD_DIM = 8
+ROPE_DIM = 4
 N_LAYER = 4
 FFN_LEN = 16
 CONV_KERNEL = 4

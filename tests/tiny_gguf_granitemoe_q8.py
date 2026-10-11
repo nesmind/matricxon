@@ -1,28 +1,26 @@
-"""A tiny `granitemoe` GGUF whose expert tensors (`ffn_gate_exps`/`ffn_up_exps`/`ffn_down_exps`)
-are Q8_0-quantized - mirrors `tiny_gguf_granitemoe.py`'s structure with bigger, block-aligned
-dims (n_embd/ffn_len both 32, Q8_0's own block size), so the real `QuantizedMoEExperts` packed
-path (`app/architectures/moe_experts.py`) can be checked end to end against the dense/F32 path
-on the exact same quantized values - same precedent as `tests/tiny_gguf_llama_q8.py`. The router
-(`ffn_gate_inp`) and attention tensors stay F32 - neither is ever packed (see
-`QuantizedMoEExperts`'s own docstring for the router; attention here is small and not the
-concern of this fixture).
-"""
+"""A tiny `granitemoe` GGUF with Q8_0 expert tensors
+(`ffn_gate_exps`/`ffn_up_exps`/`ffn_down_exps`), mirroring `tiny_gguf_granitemoe.py` with bigger
+block-aligned dims (n_embd/ffn_len 32, Q8_0's block size), so the `QuantizedMoEExperts` packed path
+(app/architectures/moe_experts.py) can be checked end to end against the dense/F32 path on the same
+quantized values, like tests/tiny_gguf_llama_q8.py. The router (`ffn_gate_inp`) and attention
+tensors stay F32: the router is never packed (see `QuantizedMoEExperts`), and attention here is
+small and not this fixture's concern."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
 from tests.tiny_gguf_llama_q8 import _q8_0_bytes
+from tools.make_tiny_gguf import GGUFBuilder
 
-# 256 (not just a Q8_0-block-aligned 32) so the native C backend's own real block-size
-# requirement for this type (MX_QK_K=256, see mx_common.h) is satisfied too - a smaller size
-# would silently only ever exercise the Numba/dequant fallback, never native C.
+# 256 (not just a Q8_0-block-aligned 32) so the native C backend's block-size requirement
+# (MX_QK_K=256, mx_common.h) is met too; a smaller size would exercise only the Numba/dequant
+# fallback, never native C.
 N_EMBD = 256
 N_HEAD = 2
 N_HEAD_KV = 1
-HEAD_DIM = 128  # N_HEAD * HEAD_DIM == N_EMBD, same real relationship every actual checkpoint has
+HEAD_DIM = 128
 N_LAYER = 1
 FFN_LEN = 256
 N_EXPERTS = 4

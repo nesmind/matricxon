@@ -1,6 +1,6 @@
-"""Streaming side of tool calling: passes normal reply text through untouched, but holds back
-anything that starts a tool call so its markup never reaches the visible message, then turns the
-held text into structured `tool_calls` when the reply ends."""
+"""Streaming side of tool calling: passes normal reply text through but holds back anything that
+starts a tool call so its markup never reaches the visible message, then turns the held text into
+structured `tool_calls` when the reply ends."""
 
 import uuid
 
@@ -12,8 +12,8 @@ class ToolCallScanner:
     def __init__(self, call_format: ToolCallFormat, tools: list[dict] | None) -> None:
         self._format = call_format
         self._schemas = ToolSchemas(tools)
-        self._pending = ""  # text that might still turn out to be the start of a call
-        self._held = ""  # text from the start of a call onward
+        self._pending = ""
+        self._held = ""
         self._capturing = False
         self._undecided = call_format.start_marker is None
 
@@ -41,7 +41,7 @@ class ToolCallScanner:
         calls = self._format.parse(self._held, self._schemas)
         for call in calls:
             call.id = f"call_{uuid.uuid4().hex[:8]}"
-        # Not really a call after all (malformed): show it rather than swallow it.
+        # Not a call after all (malformed): show it rather than swallow it.
         return ("" if calls else self._held), calls
 
     def _feed_bare_json(self) -> str:

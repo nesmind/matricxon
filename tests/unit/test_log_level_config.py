@@ -1,9 +1,7 @@
-"""`Settings.log_level` (0-2, see its own docstring) and the level-2 per-decoder-layer trace it
-gates - app.main.MatricxonApp maps this onto Python's stdlib `logging` levels (0->WARNING,
-1->INFO, 2->DEBUG); this file checks the setting's own bounds and, separately, that the level-2
-trace this session added to Mistral3TextArchitecture._forward_impl actually fires once per real
-layer on a real (if tiny) forward pass - not just that the log call exists in the source.
-"""
+"""`Settings.log_level` (0-2) and the level-2 per-decoder-layer trace it gates.
+app.main.MatricxonApp maps it to stdlib `logging` levels (0->WARNING, 1->INFO, 2->DEBUG); this
+checks the setting's bounds and that the level-2 trace in Mistral3TextArchitecture._forward_impl
+fires once per layer on a tiny forward pass, not just that the log call exists."""
 
 import logging
 from pathlib import Path
@@ -22,9 +20,9 @@ from tests.tiny_gguf_nemotron_h import LAYER_TYPES, build_tiny_nemotron_h_gguf
 
 class TestLogLevelBounds:
     def test_defaults_to_0(self) -> None:
-        # _env_file=None: isolates this specific check from a real .env file that may genuinely
-        # exist in the repo root (see Settings.model_config's own docstring for why one now does,
-        # by design) - this test is about the hardcoded fallback, not this machine's local config.
+        # _env_file=None: isolates this check from a real .env in the repo root
+        # (Settings.model_config says why one exists); this tests the hardcoded fallback, not this
+        # machine's config.
         assert Settings(_env_file=None).log_level == 0
 
     @pytest.mark.parametrize("level", [0, 1, 2])
@@ -75,10 +73,9 @@ class TestPerLayerTrace:
 
 
 class TestNemotronHPerLayerTrace:
-    """nemotron_h's own per-layer debug line (added 2026-09-29 after a real report: its hybrid
-    Mamba/attention/MLP layers logged nothing at DEBUG level at all, unlike every other
-    architecture's own per-layer/per-substage lines - see NemotronHArchitecture._forward_impl's
-    own comment)."""
+    """nemotron_h's per-layer debug line ( after a report: its hybrid
+    Mamba/attention/MLP layers logged nothing at DEBUG, unlike other architectures'
+    per-layer/per-substage lines; NemotronHArchitecture._forward_impl)."""
 
     def test_debug_level_emits_one_line_per_layer_with_its_real_type(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture

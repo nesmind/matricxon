@@ -23,12 +23,9 @@ class F16Strategy(QuantStrategy):
 
 
 class BF16Strategy(QuantStrategy):
-    """bfloat16: the top 16 bits of an IEEE754 float32 (sign + 8-bit exponent
-
-    + 7-bit mantissa). Widened back to float32 by left-shifting into the
-    upper half of a uint32 and reinterpreting - exact, since bf16 only drops
-    float32's low mantissa bits rather than re-encoding them.
-    """
+    """bfloat16: the top 16 bits of an IEEE754 float32 (sign + 8-bit exponent + 7-bit mantissa).
+    Widened to float32 by left-shifting into the upper half of a uint32 and reinterpreting: exact,
+    since bf16 only drops float32's low mantissa bits."""
 
     block_size = 1
     type_size = 2

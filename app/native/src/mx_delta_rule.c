@@ -1,7 +1,9 @@
-/* Gated DeltaNet recurrence (Qwen3.5 linear attention) - see
- * app/architectures/qwen35_delta_kernels.py for the Numba twin and the exact math.
- * Layouts (float32, contiguous): q/k (T,H,dk), v/out (T,H,dv), g/beta (T,H), state (H,dk,dv),
- * updated in place. Heads are independent over time, so they run in parallel. */
+/*
+ * Gated DeltaNet recurrence (Qwen3.5 linear attention); Numba twin and math:
+ * app/architectures/qwen35_delta_kernels.py.
+ * Layouts (float32, contiguous): q/k (T,H,dk), v/out (T,H,dv), g/beta (T,H), state (H,dk,dv)
+ * updated in place. Heads are independent, so they run in parallel.
+ */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>

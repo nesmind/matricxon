@@ -1,6 +1,4 @@
-/* Integer dot product for Q8_0 weight rows against a Q8_K activation row. Q8_0 has a float
- * scale per 32 values (not an integer sub-block scale), so it doesn't fit mx_block_unpacked and
- * stays a direct per-token kernel - its values are already plain int8, nothing to unpack. */
+/* Integer dot of Q8_0 weight rows with a Q8_K activation row. Q8_0 has a float scale per 32 values, not an integer sub-block scale, so it stays a direct per-token kernel on plain int8. */
 #include "mx_common.h"
 
 /* Q8_0 block: {f16 d; i8 qs[32]} - 34 bytes, eight per 256-value activation block. */

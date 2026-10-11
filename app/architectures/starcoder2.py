@@ -17,48 +17,37 @@ logger = logging.getLogger(__name__)
 
 
 class Starcoder2Architecture(ModelArchitecture):
-    """BigCode StarCoder2 - a plain GQA/RoPE decoder (confirmed against HF `transformers`' own
+    """BigCode StarCoder2: a plain GQA/RoPE decoder (HF `modeling_starcoder2.py`). Deltas from the
+    other GQA/RoPE decoders here:
+    - A bias on every projection (`q_proj`/`k_proj`/`v_proj`/`o_proj` and the MLP's
+      `up_proj`/`down_proj`): `config.use_bias` gates all (default `True` on every released
+      checkpoint; no GGUF metadata key, so bias presence follows tensor existence, hardcoded `True`
+      like `qwen2`'s `qkv_bias`).
+    - A plain bias-affine `nn.LayerNorm`, not `RMSNorm` (key `attention.layer_norm_epsilon`, as
+      `command_r.py`, whose LayerNorm is bias-free).
+    - A plain non-gated MLP (`ffn_up`/`ffn_down`, no `ffn_gate`) with tanh-approximated GELU
+      (`Starcoder2MLP`).
+    - Sequential (not parallel) residual: the two-block pre-norm shape of `QwenDecoderLayer`.
 
-    `modeling_starcoder2.py`, 2026-09-29), real, confirmed deltas from every GQA/RoPE decoder
-    already in this repo:
-    - Real bias on **every** projection (`q_proj`/`k_proj`/`v_proj`/`o_proj` and the MLP's
-      `up_proj`/`down_proj`) - `config.use_bias` gates all of them identically (real default
-      `True` on every released checkpoint; not exposed as its own GGUF metadata key - bias
-      presence is entirely tensor-existence-driven, same as every other architecture here,
-      hardcoded `True` since no real released checkpoint sets it any other way, the same
-      precedent `qwen2`'s own docstring already established for its own hardcoded `qkv_bias`).
-    - Real, plain (bias-affine) `nn.LayerNorm`, not `RMSNorm` - the real GGUF metadata key itself
-      signals this (`attention.layer_norm_epsilon`, the same key `command_r.py` uses for its own
-      `LayerNorm`), unlike `command_r`'s bias-free variant: StarCoder2's real norm keeps its bias.
-    - A plain, non-gated MLP (`ffn_up`/`ffn_down`, no `ffn_gate`) using the **tanh approximation**
-      of GELU - see `Starcoder2MLP`'s own docstring.
-    - Sequential (not parallel) residual - same two-block pre-norm shape as `QwenDecoderLayer`.
+    No `unpermute_rope_rows`, from source: llama.cpp's `conversion/starcoder.py` registers
+    `StarCoder2Model` with no overrides (no `modify_tensors` or permute call, unlike
+    `LlamaModel.permute`). A third case (after `qwen2`/`qwen3` and `command-r`) showing RoPE-family
+    resemblance is never sufficient evidence (see `unpermute_rope_rows`).
 
-    **No `unpermute_rope_rows` needed** - confirmed via real source evidence, not assumed:
-    llama.cpp's real `conversion/starcoder.py` registers `StarCoder2Model` with zero overrides
-    beyond `model_arch` (no `modify_tensors`, no permute call, unlike `LlamaModel`'s own
-    `permute` method) - a third real, independently-confirmed case (after `qwen2`/`qwen3` and
-    `command-r`) that RoPE-family resemblance alone is never sufficient evidence either way
-    (`unpermute_rope_rows`'s own docstring has the full history of what happened when that
-    assumption was trusted without verification).
+    `bigcode/starcoder2-3b/-7b/-15b` tie embeddings, detected via
+    `loader.has_tensor("output.weight")`, not `Starcoder2Config`'s `tie_word_embeddings=True`
+    default.
 
-    Real checkpoints (`bigcode/starcoder2-3b/-7b/-15b`) tie embeddings - detected dynamically
-    (`loader.has_tensor("output.weight")`), same as every other architecture here, not assumed
-    from `Starcoder2Config`'s own `tie_word_embeddings=True` class default.
-
-    **Real-weight validated (2026-09-29)** against a real downloaded
-    `second-state/StarCoder2-3B-GGUF` (Q4_K_M, bf16 forward, via
-    `scripts/manual_generate_check_starcoder2.py`): `"def fibonacci(n):"` greedily completed into
-    coherent, syntactically valid Python (`"\n    if n == 0:\n        return 1\n    elif n == 1
-    or n <"`) - real, working confirmation of the "no `unpermute_rope_rows`" finding above (wrong
-    either way here would have produced garbage, the same signal that caught the real `qwen2`
-    bug). `tokenizer.ggml.pre` is unset on this real file - the plain GPT-2 pre-tokenizer regex
-    `GGUFTokenizer` already defaults to needs no per-architecture override here, unlike Llama 3's.
+    Validated on `second-state/StarCoder2-3B-GGUF` (Q4_K_M, bf16,
+    `tools/manual_generate_check_starcoder2.py`): `"def fibonacci(n):"` completed into valid Python,
+    confirming no `unpermute_rope_rows` (a wrong choice gives garbage, as with `qwen2`).
+    `tokenizer.ggml.pre` is unset on this file; `GGUFTokenizer`'s default GPT-2 pre-tokenizer regex
+    suffices.
     """
 
     NAME = "starcoder2"
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
+    SUPPORTS_BATCHED_DECODE = True
 
     def __init__(
         self,
@@ -74,8 +63,7 @@ class Starcoder2Architecture(ModelArchitecture):
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
-        # Falls back to n_head when absent (no GQA) - see LlamaArchitecture's own docstring for
-        # the real file that confirmed this gap.
+        # Falls back to n_head when absent (no GQA); see LlamaArchitecture.
         self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
         self.head_dim = metadata.get_u32(arch("attention.key_length"), self.n_embd // self.n_head)
         self.n_layer = metadata.get_u32(arch("block_count"))
@@ -163,16 +151,15 @@ class Starcoder2Architecture(ModelArchitecture):
                 loader.load_tensor(prefix + "ffn_norm.weight")
             )
             layer.post_attention_layernorm.bias.copy_(loader.load_tensor(prefix + "ffn_norm.bias"))
-            # No unpermute_rope_rows anywhere - confirmed not needed for this architecture, see
-            # this class's own docstring. q/k stay on the plain float path always, same as every
-            # other architecture here (only v/o/mlp are ever quantized-native eligible).
+            # No unpermute_rope_rows: not needed here (class docstring). q/k stay on the plain float
+            # path, as every other architecture (only v/o/mlp can be quantized-native).
             layer.self_attn.q_proj.weight.copy_(loader.load_tensor(prefix + "attn_q.weight"))
             layer.self_attn.q_proj.bias.copy_(loader.load_tensor(prefix + "attn_q.bias"))
             layer.self_attn.k_proj.weight.copy_(loader.load_tensor(prefix + "attn_k.weight"))
             layer.self_attn.k_proj.bias.copy_(loader.load_tensor(prefix + "attn_k.bias"))
             enabled = self._enable_quantized_native
-            # Real bias on every one of these (see this class's own docstring) - the first real
-            # reuse of `_load_projection`'s `bias_tensor_name` param outside `phi2.py`.
+            # A bias on each of these (class docstring): the first reuse of `_load_projection`'s
+            # `bias_tensor_name` outside `phi2.py`.
             layer.self_attn.v_proj = self._load_projection(
                 loader,
                 prefix + "attn_v.weight",
@@ -222,7 +209,7 @@ class Starcoder2Architecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # no real vision-language StarCoder2 checkpoint exists to fuse
+        del image_embeddings
         _, seq_len = input_ids.shape
         if position_ids is None:
             position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)

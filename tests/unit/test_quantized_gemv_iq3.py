@@ -1,8 +1,5 @@
-"""Correctness for the IQ3_XXS/IQ3_S GEMV kernels (app/gguf/dequant/quantized_gemv_iq3.py) - same
-cross-check pattern as test_quantized_gemv_extended.py: agrees with each type's own
-already-oracle-validated `QuantStrategy.dequantize()` (iq3_family.py, see
-test_iq3_family_quant_kernels.py) on real multi-row weight matrices.
-"""
+"""IQ3_XXS/IQ3_S GEMV kernels (quantized_gemv_iq3.py) vs `QuantStrategy.dequantize`
+(iq3_family.py), as test_quantized_gemv_extended.py."""
 
 import random
 import struct

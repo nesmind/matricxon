@@ -7,6 +7,7 @@ from app.models.manager import ModelManager
 from app.runtime.embedding_engine import EmbeddingEngine
 from app.schemas.embeddings import EmbeddingsRequest, EmbeddingsResponse
 from app.server.errors import PromptTooLongError
+from app.server.node_kind import require_compute
 
 
 class EmbeddingsRequestHandler:
@@ -29,11 +30,13 @@ class EmbeddingsRequestHandler:
 router = APIRouter()
 
 
-@router.post("/api/embeddings", response_model=EmbeddingsResponse)
+@router.post(
+    "/api/embeddings", dependencies=[Depends(require_compute)], response_model=EmbeddingsResponse
+)
 async def post_embeddings(
     request: EmbeddingsRequest, model_manager: ModelManager = Depends(get_model_manager)
 ) -> EmbeddingsResponse:
-    # Offloaded to a thread for the same reason as /api/chat: model loading
-    # and the forward pass both block, and must not stall the event loop.
+    # Offloaded to a thread, like /api/chat: model loading and the forward pass block and must not
+    # stall the event loop.
     handler = EmbeddingsRequestHandler(model_manager)
     return await asyncio.to_thread(handler.handle, request)

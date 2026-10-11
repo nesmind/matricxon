@@ -5,36 +5,24 @@ from app.gguf.metadata import GGUFMetadata
 _CONTROL_TOKEN_TYPE = 3
 _USER_DEFINED_TOKEN_TYPE = 4
 _BYTE_TOKEN_TYPE = 6
-_SPACE_MARKER = "▁"  # "▁"
+_SPACE_MARKER = "▁"
 
 
 class Gemma4Tokenizer:
-    """BPE tokenizer built directly from a GGUF file's `tokenizer.ggml.*`
+    """BPE tokenizer built from a GGUF's `tokenizer.ggml.*` metadata for `tokenizer.ggml.model =
+    "gemma4"` (checked on a `google/gemma-4-12b-it` pull). Rank-based merge-list BPE
+    (`tokenizer.ggml.merges`, as `GGUFTokenizer` for "gpt2"), but that class can't be reused:
+    Gemma's vocab keeps ordinary Unicode characters instead of GPT-2's byte-to-unicode remapping
+    (falling back to literal `<0xNN>` byte tokens only for out-of-vocab pieces, like
+    `SentencePieceTokenizer` but with rank-based, not score-based, merges), and there is no GPT-2
+    regex pre-tokenizer: the whole input is merged as one span (this GGUF has no
+    `tokenizer.ggml.pre`).
 
-    metadata - matches `tokenizer.ggml.model = "gemma4"` (confirmed against
-    a real `google/gemma-4-12b-it` GGUF pull, not assumed). Real
-    ordered-merge-list BPE (`tokenizer.ggml.merges` exists, same rank-based
-    algorithm `GGUFTokenizer` already implements for "gpt2"), but two real
-    differences meant it couldn't just reuse that class: no GPT-2-style
-    byte-to-unicode remapping (Gemma's vocab keeps ordinary Unicode
-    characters as-is, falling back to literal `<0xNN>` byte tokens only for
-    genuinely out-of-vocab pieces - the same convention `SentencePieceTokenizer`
-    uses for "llama", just with rank-based merge selection instead of
-    score-based), and no GPT-2 regex pre-tokenizer splitting text into
-    words first - the *whole* input is merged as one span, relying on the
-    trained vocab's own merge ranks to naturally respect word boundaries
-    rather than an explicit pre-split (confirmed: this GGUF carries no
-    `tokenizer.ggml.pre` value at all).
-
-    Reverse-engineered against the real HF tokenizer's own serialized
-    `tokenizer.json` (`bt.pre_tokenizer`/`bt.normalizer`, not guessed from a
-    reference implementation) and cross-checked end to end
-    (scripts/oracle/validate_gemma_tokenizer.py) - a naive first hypothesis
-    (GPT-2-style word-then-merge, or attaching the space marker to the
-    *preceding* word per the raw pre-tokenizer config's literal
-    `Split(" ", MergedWithPrevious)` behavior) both failed against real
-    prompts before the actual rule (normalize the whole text first with no
-    dummy prefix, merge it as a single span) was confirmed to match.
+    Reverse-engineered from the HF `tokenizer.json` (`bt.pre_tokenizer`/`bt.normalizer`) and
+    cross-checked end to end (tools/oracle/validate_gemma_tokenizer.py). Two earlier hypotheses
+    failed on real prompts (GPT-2-style word-then-merge; attaching the space marker to the preceding
+    word) before the rule was settled: normalize the whole text with no dummy prefix, merge it as
+    one span.
     """
 
     def __init__(self, metadata: GGUFMetadata) -> None:
@@ -64,11 +52,8 @@ class Gemma4Tokenizer:
         self.eos_token_id: int | None = metadata.get("tokenizer.ggml.eos_token_id")
 
     def encode(self, text: str, add_bos: bool = False) -> list[int]:
-        """`add_bos` is the caller's explicit call, same contract as
-
-        `GGUFTokenizer.encode`/`SentencePieceTokenizer.encode` - see either
-        one's own docstring for why.
-        """
+        """`add_bos` is the caller's explicit call, as
+        `GGUFTokenizer.encode`/`SentencePieceTokenizer.encode` (see their docstrings for why)."""
         token_ids: list[int] = []
         if add_bos and self.bos_token_id is not None:
             token_ids.append(self.bos_token_id)
@@ -100,13 +85,9 @@ class Gemma4Tokenizer:
         return [self._byte_token_ids[b] for b in symbol.encode("utf-8")]
 
     def _bpe(self, word: str) -> list[str]:
-        """Rank-based merge selection (lowest merge rank wins) over the
-
-        *whole* normalized span at once - see this class's own docstring
-        for why there's no regex pre-split into words first. Same
-        algorithm/complexity as `GGUFTokenizer._bpe`, just without that
-        class's byte-to-unicode remapping.
-        """
+        """Rank-based merge selection (lowest merge rank wins) over the *whole* normalized span at
+        once (class docstring says why no regex pre-split). Same algorithm/complexity as
+        `GGUFTokenizer._bpe`, without its byte-to-unicode remapping."""
         if word in self._bpe_cache:
             return self._bpe_cache[word]
 

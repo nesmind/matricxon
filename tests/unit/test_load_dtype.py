@@ -1,9 +1,7 @@
-"""Unit tests for app/models/load_dtype.py's mixed-precision planning helpers
-(group_bytes_by_layer/plan_layer_dtypes) - the ModelManager._load()/Mistral3TextArchitecture
-machinery that actually uses these is covered separately (tests/unit/test_model_manager_memory.py),
-this file is pure-function-level: synthetic GGUFTensorInfo lists in, dict out, no GGUF file, no
-torch model construction.
-"""
+"""Tests for app/models/load_dtype.py's mixed-precision planning
+(group_bytes_by_layer/plan_layer_dtypes). The ModelManager._load/Mistral3TextArchitecture
+machinery using them is in tests/unit/test_model_manager_memory.py; this is pure-function level:
+synthetic GGUFTensorInfo lists in, dict out, no GGUF file or torch model."""
 
 import torch
 
@@ -13,8 +11,8 @@ from app.models.load_dtype import NON_LAYER_GROUP, group_bytes_by_layer, plan_la
 
 def _tensor(name: str, n_elements: int) -> GGUFTensorInfo:
     # shape/ggml_type/offset are irrelevant to these two functions (only .name/.n_elements are
-    # read) - filled with harmless placeholders rather than made optional on the real dataclass
-    # just for this test file's convenience.
+    # read): harmless placeholders rather than optional fields on the dataclass for this file's
+    # convenience.
     return GGUFTensorInfo(name=name, shape=(n_elements,), ggml_type=0, offset=0)
 
 
@@ -59,7 +57,7 @@ class TestPlanLayerDtypes:
 
     def test_non_layer_group_is_tried_first(self) -> None:
         # NON_LAYER_GROUP (100) + blk.0 (100) both fit (budget 150) only if NON_LAYER_GROUP goes
-        # first and blk.0 doesn't - proves the priority order, not just that *something* fits.
+        # first and blk.0 doesn't: proves the priority order, not just that *something* fits.
         layer_bytes = {"blk.0": 100, NON_LAYER_GROUP: 100}
         plan = plan_layer_dtypes(layer_bytes, available_bytes=150, safety_margin=1.0)
         assert plan[NON_LAYER_GROUP] == torch.float32
@@ -72,9 +70,9 @@ class TestPlanLayerDtypes:
 
     def test_safety_margin_shrinks_the_effective_budget(self) -> None:
         layer_bytes = {"blk.0": 100}
-        # Raw budget (150) covers blk.0, but 150 / 1.5 = 100 - exactly enough (<=), still fits.
+        # Raw budget (150) covers blk.0, but 150 / 1.5 = 100: exactly enough (<=), still fits.
         assert plan_layer_dtypes(layer_bytes, 150, safety_margin=1.5)["blk.0"] == torch.float32
-        # 140 / 1.5 = 93.3 - doesn't fit anymore.
+        # 140 / 1.5 = 93.3: doesn't fit anymore.
         assert plan_layer_dtypes(layer_bytes, 140, safety_margin=1.5)["blk.0"] == torch.bfloat16
 
     def test_none_available_bytes_assigns_float32_to_everything(self) -> None:

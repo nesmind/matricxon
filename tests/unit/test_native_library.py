@@ -1,6 +1,6 @@
-"""Unit tests for app/native/compiler_flags.py (per-platform build variants) and
-app/native/library.py's variant fallback. The macOS cases only check the flags chosen - nothing here
-can actually build on a Mac; the fallback test compiles for real with this machine's gcc."""
+"""Tests for app/native/compiler_flags.py (per-platform build variants) and app/native/library.py's
+variant fallback. The macOS cases check only the flags chosen (nothing here can build on a Mac); the
+fallback test compiles for real with this machine's gcc."""
 
 import shutil
 
@@ -46,7 +46,7 @@ def test_mac_with_homebrew_libomp_uses_xpreprocessor_openmp(
     assert variants[0].name == "openmp"
     assert ("-Xpreprocessor", "-fopenmp") == variants[0].flags[-3:-1]
     assert variants[0].link_flags == (f"-L{tmp_path}/lib", "-lomp")
-    assert "-march=native" in variants[0].flags  # Intel Macs keep -march=native
+    assert "-march=native" in variants[0].flags
 
 
 class _FixedVariants(CompilerFlags):
@@ -74,7 +74,7 @@ def test_a_failing_variant_falls_back_to_the_next_one(tmp_path) -> None:
 
     gemm = NativeGemm(library.load(), n_threads=2)
 
-    assert "openmp=no" in gemm.build_info  # really the single-threaded build that loaded
+    assert "openmp=no" in gemm.build_info
 
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="needs a C compiler")
@@ -89,4 +89,4 @@ def test_every_variant_failing_reports_each_one(tmp_path) -> None:
 
     with pytest.raises(NativeBuildError, match=r"\[first\][\s\S]*\[second\]"):
         library.build()
-    assert not list(tmp_path.glob("*.tmp"))  # no half-written temp library left behind
+    assert not list(tmp_path.glob("*.tmp"))

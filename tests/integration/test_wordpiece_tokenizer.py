@@ -1,9 +1,6 @@
-"""Fast/offline: only reads the real all-MiniLM GGUF's KB-scale header
-(never the tensor data), so this needs no memory cap and no network -
-unlike scripts/oracle/validate_wordpiece_tokenizer.py, which additionally
-cross-checks against the real HF tokenizer. Skips gracefully without
-pAIring's local blob store.
-"""
+"""Fast/offline: reads only the all-MiniLM GGUF's KB-scale header (never tensor data), so no memory
+cap or network, unlike tools/oracle/validate_wordpiece_tokenizer.py, which also cross-checks the HF
+tokenizer. Skips without pAIring's blob store."""
 
 import pytest
 
@@ -50,7 +47,7 @@ class TestWordPieceTokenizer:
         assert len(ids) > 3
 
     def test_unknown_garbage_falls_back_to_unk(self, tokenizer: WordPieceTokenizer) -> None:
-        # A "word" with no possible wordpiece match at any prefix length.
+        # A "word" with no wordpiece match at any prefix length.
         ids = tokenizer.encode("\U0001f600\U0001f600\U0001f600" * 40)
 
         assert tokenizer.unk_token_id in ids

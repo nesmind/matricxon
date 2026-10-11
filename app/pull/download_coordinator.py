@@ -6,19 +6,14 @@ from pathlib import Path
 
 
 class DownloadCoordinator:
-    """Serializes concurrent `/api/pull` requests for the same destination file - real bug found
-    via a pAIring report (2026-09-21): PullJob._run had no coordination between two in-flight
-    pulls of the same tag (e.g. a retry while an earlier, now-orphaned attempt was still
-    running), so both HFDownloader.download calls streamed to the same `<dest>.partial` path.
-    Whichever finished first renamed it away to `dest`; the other then crashed the whole ASGI
-    response with a raw `FileNotFoundError` on its own `partial_path.rename(dest)` - which is
-    exactly what a client watching the SSE stream sees as a mid-stream connection drop, not a
-    clean in-band `{"error": ...}` line the way every other pull failure here is handled.
+    """Serializes concurrent `/api/pull` requests for the same destination file. Without it, two
+    in-flight pulls of one tag (e.g. a retry while an orphaned attempt still ran) both streamed to
+    `<dest>.partial`; the first to finish renamed it to `dest` and the other crashed the ASGI
+    response with a raw `FileNotFoundError` on `partial_path.rename(dest)`, which an SSE client sees
+    as a mid-stream connection drop, not an in-band `{"error":...}` line.
 
-    One `threading.Lock` per distinct `dest` (not one global lock across every pull - two
-    different tags must still download fully in parallel, only the same one needs to wait its
-    turn), created lazily and dropped again once nothing's waiting on it, so this never grows
-    unbounded across a long-running process pulling many different models over its lifetime.
+    One `threading.Lock` per distinct `dest` (not one global lock: different tags still download in
+    parallel), created lazily and dropped when idle.
     """
 
     def __init__(self) -> None:
@@ -28,10 +23,9 @@ class DownloadCoordinator:
 
     @contextmanager
     def guard(self, dest: Path) -> Iterator[None]:
-        """Blocks until no other caller is inside `guard(dest)` for this exact `dest`, then
-        holds it until the `with` block exits (success or exception) - the caller decides what
-        "already handled by someone else" means once it has the lock (see PullJob._run, which
-        checks `dest.exists()` first)."""
+        """Blocks until no other caller is inside `guard(dest)` for this `dest`, then holds it until
+        the `with` block exits (success or exception); the caller decides what "already handled by
+        someone else" means (PullJob._run checks `dest.exists` first)."""
         lock = self._acquire_lock_slot(dest)
         lock.acquire()
         try:
@@ -54,8 +48,8 @@ class DownloadCoordinator:
                 del self._waiters[dest]
 
 
-# One process-wide instance - every PullJob (each request gets its own, see pull_router.py)
-# needs to coordinate against the same registry to catch a same-tag race between two requests.
+# One process-wide instance: every PullJob (one per request, pull_router.py) must coordinate against
+# the same registry to catch a same-tag race between requests.
 _coordinator = DownloadCoordinator()
 
 

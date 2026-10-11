@@ -16,17 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 class NomicBertArchitecture(ModelArchitecture):
-    """`nomic-bert`: a modernized BERT variant (fused QKV, no bias, rotary
-    position embeddings instead of learned absolute ones, SwiGLU FFN) -
-    still encoder-only/non-causal, still post-LN, so it shares the same
-    overall shape as `BertArchitecture` (token+type embeddings -> LN ->
-    encoder stack -> final hidden states) but differs enough in the actual
-    layer internals to warrant its own class rather than parameterizing one
-    shared implementation (see `nomic_bert_layers.py`).
+    """`nomic-bert`: a modernized BERT (fused QKV, no bias, rotary instead of learned positions,
+    SwiGLU FFN), still encoder-only, non-causal and post-LN, so `BertArchitecture`'s overall shape
+    but different layer internals (`nomic_bert_layers.py`).
 
-    No `position_embd` tensor exists in this GGUF at all (confirmed) - RoPE
-    replaces it entirely, computed once here and passed to every layer, the
-    same pattern `Mistral3TextArchitecture` uses.
+    No `position_embd` tensor: RoPE is computed once here and passed to every layer, as
+    `Mistral3TextArchitecture`.
     """
 
     NAME = "nomic-bert"
@@ -44,8 +39,9 @@ class NomicBertArchitecture(ModelArchitecture):
         self.vocab_size = len(metadata.require("tokenizer.ggml.tokens"))
 
         # Plain floats/ints (not tensors), so unaffected by _construct_without_init's meta-device
-        # trick - kept so _rebuild_derived_buffers can recreate self.rope for real afterward. See
-        # Mistral3TextArchitecture's identical _rope_kwargs for the full reasoning.
+        # trick; kept so
+        # _rebuild_derived_buffers can recreate self.rope. See
+        # Mistral3TextArchitecture._rope_kwargs.
         self._rope_kwargs = dict(
             head_dim=self.head_dim, rope_theta=metadata.get_f32(arch("rope.freq_base"))
         )
@@ -69,9 +65,10 @@ class NomicBertArchitecture(ModelArchitecture):
         )
 
     def _rebuild_derived_buffers(self) -> None:
-        """self.rope.inv_freq is a real computed value, not a GGUF tensor from_gguf ever
-        `.copy_()`'s in - see ModelArchitecture._rebuild_derived_buffers's own docstring for why
-        this has to be recreated for real after _construct_without_init."""
+        """self.rope.inv_freq is a computed value, not a GGUF tensor from_gguf `.copy_`'s in;
+        recreated after
+        _construct_without_init (ModelArchitecture._rebuild_derived_buffers).
+        """
         self.rope = RotaryEmbedding(**self._rope_kwargs)
 
     @classmethod
@@ -134,12 +131,12 @@ class NomicBertArchitecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # real vision support is LlamaArchitecture-only - see base.py
+        del image_embeddings
         _, seq_len = input_ids.shape
         logger.debug("forward start: seq_len=%d", seq_len)
         if position_ids is None:
             position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)
-        token_type_ids = torch.zeros_like(input_ids)  # v1: no sentence-pair inputs
+        token_type_ids = torch.zeros_like(input_ids)
         stage_started = time.monotonic()
         cos, sin = self.rope(position_ids)
         logger.debug("rope: %.1fms", (time.monotonic() - stage_started) * 1000)

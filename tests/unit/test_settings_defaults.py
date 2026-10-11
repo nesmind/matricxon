@@ -1,6 +1,5 @@
-"""A fresh install's defaults (no `.env`, no env vars): the memory safety margin, quantized-native
-compute with the C kernels, quiet logging. `_env_file=None` so a developer's local `.env` can't
-mask a changed default."""
+"""Fresh-install defaults (no `.env`, no env vars): memory safety margin, quantized-native compute
+with C kernels, quiet logging. `_env_file=None` keeps a local `.env` from masking changes."""
 
 import pytest
 from pydantic import ValidationError

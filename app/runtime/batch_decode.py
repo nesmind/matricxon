@@ -1,11 +1,11 @@
-"""One decode step for several in-flight replies at once.
+"""One decode step for several in-flight replies.
 
-`ChatEngine.stream_steps` yields a `DecodeStep` whenever a reply needs the logits for its newest
-token; the worker's scheduler collects the pending steps of every active reply and hands them to
-`BatchDecoder.decode`, which runs ONE forward pass for all of them when the architecture supports
-it (see `ModelArchitecture.SUPPORTS_BATCHED_DECODE` and `batch_cache`): the linear layers then read
-each weight once for the whole batch. Otherwise, or for a lone reply, each step is an ordinary
-single-sequence forward - the same numbers either way.
+`ChatEngine.stream_steps` yields a `DecodeStep` when a reply needs the logits for its newest token;
+the worker collects every active reply's pending step and gives them to `BatchDecoder.decode`, which
+runs one forward pass for all when the architecture supports it
+(`ModelArchitecture.SUPPORTS_BATCHED_DECODE`, `batch_cache`), so linear layers read each weight once
+per batch. Otherwise, or for a lone reply, each step is an ordinary single-sequence forward, with
+the same numbers.
 """
 
 import logging
@@ -33,8 +33,8 @@ class DecodeStep:
 
 
 class Checkpoint:
-    """Yielded between prefill pieces: the reply is still running, but the scheduler may now give
-    other replies their turn (one long prompt must not stall everyone else's decoding)."""
+    """Yielded between prefill pieces: the reply is still running, but the scheduler may give other
+    replies a turn (one long prompt must not stall everyone's decoding)."""
 
 
 CHECKPOINT = Checkpoint()
@@ -47,7 +47,7 @@ class BatchDecoder:
         self._can_batch: bool | None = None
 
     def can_batch(self) -> bool:
-        """Batching needs an architecture that supports it, and matmuls that profit from several
+        """Batching needs an architecture that supports it and matmuls that profit from several
         tokens: packed weights on the Numba kernels would dequantize a whole matrix per call."""
         if self._can_batch is None:
             numba_packed = any(
@@ -58,7 +58,7 @@ class BatchDecoder:
         return self._can_batch
 
     def decode(self, steps: list[DecodeStep]) -> list[torch.Tensor | Exception]:
-        """Logits `(1, 1, vocab)` for each step, in order - or the exception that step raised."""
+        """Logits `(1, 1, vocab)` for each step, in order, or the exception that step raised."""
         results: list[torch.Tensor | Exception] = []
         for start in range(0, len(steps), self._max_batch):
             results.extend(self._decode_chunk(steps[start : start + self._max_batch]))

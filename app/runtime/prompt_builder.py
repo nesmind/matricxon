@@ -5,35 +5,23 @@ from app.server.errors import UnsupportedChatRoleError
 
 
 class Mistral3PromptBuilder:
-    """Builds a prompt string for `GGUFTokenizer.encode()` from a chat
-    message list, matching the core structure of
-    `mistralai/Ministral-3-3B-Instruct-2512`'s real (Jinja) chat template -
-    confirmed against the real `chat_template.jinja` from that HF repo, not
-    assumed: `[SYSTEM_PROMPT]...[/SYSTEM_PROMPT]`, `[INST]...[/INST]` per
-    user turn, assistant turns followed by `</s>`, plus M10's tool-calling
-    support - `[AVAILABLE_TOOLS]<tools json>[/AVAILABLE_TOOLS]` once before
-    the first user turn, `[TOOL_CALLS]<name>[ARGS]<args json>` per tool call
-    on an assistant turn, `[TOOL_RESULTS]<content>[/TOOL_RESULTS]` for a
-    "tool" role message.
+    """Builds a prompt string for `GGUFTokenizer.encode` from a chat message list, matching the core
+    structure of `mistralai/Ministral-3-3B-Instruct-2512`'s Jinja chat template (checked against its
+    `chat_template.jinja`): `[SYSTEM_PROMPT]...[/SYSTEM_PROMPT]`, `[INST]...[/INST]` per user turn,
+    assistant turns followed by `</s>`, plus tool calling: `[AVAILABLE_TOOLS]<tools
+    json>[/AVAILABLE_TOOLS]` once before the first user turn, `[TOOL_CALLS]<name>[ARGS]<args json>`
+    per tool call on an assistant turn, `[TOOL_RESULTS]<content>[/TOOL_RESULTS]` for a "tool"
+    message.
 
-    Deliberately still simplified from the real template: it doesn't
-    implement the real template's consecutive-same-role message merging or
-    role-ordering validation (real tool-calling flows don't send consecutive
-    same-role turns in practice), and still injects no default system
-    message when none is given - a vendor persona by default is wrong for a
-    generic inference backend standing in for Ollama, not for being "Le
-    Chat." Also out of scope: parsing a *generated* `[TOOL_CALLS]...[ARGS]...`
-    span back out of the model's own output into a structured response
-    `tool_calls` field - a real fine-tuned model emits `</s>` right after
-    one (see the real template's own `{{- eos_token }}` placement), so it
-    still terminates generation correctly, but the raw control-token text
-    currently passes through as plain `content` rather than being
-    restructured; a caller wanting to act on it must parse it itself for
-    now.
+    Simplified: no consecutive-same-role merging or role-order validation (tool flows don't send
+    consecutive same-role turns), and no default system message (a vendor persona is wrong for a
+    generic backend standing in for Ollama). Parsing a generated `[TOOL_CALLS]...[ARGS]...` span
+    back into `tool_calls` is out of scope: a fine-tuned model emits `</s>` right after one, so
+    generation still ends, but the raw control-token text passes through as `content` for the caller
+    to parse.
 
-    Each control-token substring emitted here (`[INST]`, `</s>`, etc.) is
-    matched literally by GGUFTokenizer's control-token short-circuit, so the
-    caller doesn't need to know their token ids - only their literal text.
+    Each control-token substring (`[INST]`, `</s>`, ...) is matched literally by GGUFTokenizer's
+    control-token short-circuit, so callers need only the literal text.
     """
 
     def build(self, messages: list[ChatMessage], tools: list[dict] | None = None) -> str:
@@ -48,7 +36,7 @@ class Mistral3PromptBuilder:
         return "".join(parts)
 
     def wants_bos(self, prompt: str) -> bool:
-        """Always - this format has no BOS of its own (see app.runtime.chat_template)."""
+        """Always: this format has no BOS of its own (app.runtime.chat_template)."""
         return True
 
     def _render_turn(self, message: ChatMessage) -> str:
@@ -81,20 +69,17 @@ def _render_tool_calls(tool_calls: list[ToolCall] | None) -> str:
 
 class LegacyMistralPromptBuilder:
     """Fallback for a GGUF with no `tokenizer.chat_template` whose `general.architecture` isn't
-    `mistral3` - historically how Mistral-7B-Instruct v0.1/v0.2 and most of their community
-    fine-tunes get tagged by llama.cpp conversion (structurally close enough to Llama to be
-    classed as `general.architecture == "llama"`), and many such fine-tunes ship no
-    chat_template metadata at all.
+    `mistral3`: how Mistral-7B-Instruct v0.1/v0.2 and most community fine-tunes get tagged by
+    llama.cpp conversion (close enough to Llama to be `"llama"`), many without chat_template
+    metadata.
 
-    Renders the older, plainer format these were actually trained on: `[INST] ... [/INST]` per
-    user turn, `</s>` after each assistant turn, and no `[SYSTEM_PROMPT]` tag - that control
-    token is Mistral3-tokenizer-only and these older models have never seen it as anything but
-    ordinary text. Confirmed against Hebrew-Mistral-7B-Q5_K_M (2026-09-27): its vocab has no
-    `[SYSTEM_PROMPT]`/`[INST]` special tokens, and Mistral3PromptBuilder's format made it echo
-    `[/SYSTEM_PROMPT]` back and invent its own closing tags rather than answering. A system
-    message, if present, is folded into the front of the next user turn instead - the official
-    v0.1/v0.2 template has no system role at all, and this is the same workaround most
-    community templates for those models use.
+    Renders the older plain format they were trained on: `[INST]... [/INST]` per user turn, `</s>`
+    after each assistant turn, no `[SYSTEM_PROMPT]` tag (a Mistral3-tokenizer-only control token
+    these models only saw as text). On a Hebrew Mistral fine-tune, whose vocab has no
+    `[SYSTEM_PROMPT]`/`[INST]` special tokens, Mistral3PromptBuilder's format made it echo
+    `[/SYSTEM_PROMPT]` and invent closing tags. A system message is folded into the front of the
+    next user turn: the official v0.1/v0.2 template has no system role, and community templates do
+    the same.
     """
 
     def build(self, messages: list[ChatMessage], tools: list[dict] | None = None) -> str:
@@ -123,25 +108,22 @@ class LegacyMistralPromptBuilder:
         return "".join(parts)
 
     def wants_bos(self, prompt: str) -> bool:
-        """Always - this format has no BOS of its own (see app.runtime.chat_template)."""
+        """Always: this format has no BOS of its own (app.runtime.chat_template)."""
         return True
 
 
 class VicunaPromptBuilder:
-    """Vicuna v1.1's own conversation format (FastChat's `vicuna_v1` conv_template, the same one
-    LLaVA's Vicuna-based checkpoints - e.g. `llava-v1.6-vicuna-7b` - are fine-tuned on top of):
-    a plain-text system preamble, `USER: {msg}` / `ASSISTANT: {msg}` turns separated by newlines,
-    `</s>` after each assistant turn. Confirmed against Ollama's own published raw template for
-    this exact model family (`{{ .System }}\\n\\nUSER: {{ .Prompt }}\\n\\nASSISTANT:`) and
-    FastChat's default system string, not assumed from "it's llama-architecture" alone.
+    """Vicuna v1.1's conversation format (FastChat's `vicuna_v1` template, which LLaVA's
+    Vicuna-based checkpoints are fine-tuned on): a plain-text system preamble, `USER: {msg}` /
+    `ASSISTANT: {msg}` turns separated by newlines, `</s>` after each assistant turn. Checked
+    against Ollama's raw template for this family and FastChat's default system string.
 
-    Selected by tag/filename match (see app.runtime.chat_template.PromptBuilderFactory.for_metadata
-    and its own `_VICUNA_TAG_MARKER`), not GGUF metadata - a Vicuna fine-tune's GGUF carries no
-    `tokenizer.chat_template` and nothing in its metadata says "vicuna" (confirmed live,
-    2026-09-27, llava-v1.6-vicuna-7b: `general.name = "LLaMA v2"`), so there is no metadata-only
-    way to detect this - it would otherwise silently fall into LegacyMistralPromptBuilder's
-    Mistral-shaped guess, which is wrong for this format and produced a real, empty (1-token,
-    immediate-EOS) reply once a real system prompt was included."""
+    Selected by tag/filename match (chat_template.PromptBuilderFactory.for_metadata,
+    `_VICUNA_TAG_MARKER`), not GGUF metadata: a Vicuna GGUF has no `tokenizer.chat_template` and
+    nothing says "vicuna" (a LLaVA-Vicuna model has `general.name = "LLaMA v2"`), so it would fall
+    into LegacyMistralPromptBuilder's Mistral-shaped guess, which gave an empty 1-token
+    immediate-EOS reply once a system prompt was included.
+    """
 
     _DEFAULT_SYSTEM = (
         "A chat between a curious human and an artificial intelligence assistant. The assistant "
@@ -149,11 +131,9 @@ class VicunaPromptBuilder:
     )
 
     def build(self, messages: list[ChatMessage], tools: list[dict] | None = None) -> str:
-        # Falls back to _DEFAULT_SYSTEM only when the caller sent no system message at all - a
-        # caller that explicitly sends one with empty content (see pAIring's
-        # app.services.chat_service, which always sends a system message specifically so this
-        # distinction is possible) means "genuinely no preamble," not "no opinion," and must be
-        # honored as blank rather than silently overridden.
+        # Falls back to _DEFAULT_SYSTEM only when the caller sent no system message: one with empty
+        # content (pAIring's chat_service always sends a system message so this is distinguishable)
+        # means "genuinely no preamble", not "no opinion", and stays blank.
         has_system_message = any(m.role == "system" for m in messages)
         system_parts = [m.content for m in messages if m.role == "system"]
         system = "\n\n".join(system_parts) if has_system_message else self._DEFAULT_SYSTEM
@@ -163,10 +143,9 @@ class VicunaPromptBuilder:
             if message.role == "system":
                 continue
             if message.role in ("user", "tool"):
-                # Vicuna has no native tool-result role - folded in as a user-shaped turn, the
-                # same "no real convention for this, so treat it as a message" choice
-                # LegacyMistralPromptBuilder's own [TOOL_RESULTS] wrapping avoids only because
-                # Mistral's real template actually defines one; Vicuna's doesn't.
+                # Vicuna has no tool-result role: folded in as a user-shaped turn.
+                # LegacyMistralPromptBuilder's [TOOL_RESULTS] wrapping avoids this only because
+                # Mistral's template defines one.
                 parts.append(f"USER: {content}\n\n")
             elif message.role == "assistant":
                 tool_calls = _render_tool_calls(message.tool_calls)
@@ -177,5 +156,5 @@ class VicunaPromptBuilder:
         return "".join(parts)
 
     def wants_bos(self, prompt: str) -> bool:
-        """Always - this format has no BOS of its own (see app.runtime.chat_template)."""
+        """Always: this format has no BOS of its own (app.runtime.chat_template)."""
         return True

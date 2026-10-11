@@ -1,15 +1,12 @@
-"""Builds a tiny, complete, valid `phi2` GGUF file - real architecture, real gpt2-BPE tokenizer
-metadata, all F32 - so integration tests can run the *entire* real pipeline (GGUFReader ->
-GGUFModelLoader -> ArchitectureRegistry -> Phi2Architecture -> GGUFTokenizer -> ChatEngine ->
-NDJSON) end to end, fast and memory-safely. The generated text is gibberish (tiny near-random
-weights) - this exercises the wiring (including the real fused-qkv split and partial-rotary
-shapes, both real Phi-2 novelties - see app/architectures/phi2.py's own docstring), not model
-quality; a real moondream2 pull is what validates the actual math (see
-tests/integration/test_real_fixture_moondream2.py).
+"""Builds a tiny, complete, valid `phi2` GGUF (real architecture, gpt2-BPE tokenizer metadata, all
+F32), so integration tests run the *entire* pipeline (GGUFReader -> GGUFModelLoader ->
+ArchitectureRegistry -> Phi2Architecture -> GGUFTokenizer -> ChatEngine -> NDJSON) fast and
+memory-safely. The text is gibberish; this exercises the wiring (fused-qkv split, partial-rotary
+shapes: app/architectures/phi2.py), not quality; a moondream2 pull validates the math
+(tests/integration/test_real_fixture_moondream2.py).
 
-ROPE_DIM < HEAD_DIM on purpose (2 of 4, the same 1:2 ratio moondream2's own real GGUF uses - 32 of
-64) so this fixture actually exercises `apply_rotary_pos_emb_partial`'s split/concat path, not just
-a degenerate full-head case.
+ROPE_DIM < HEAD_DIM on purpose (2 of 4, moondream2's 1:2 ratio: 32 of 64) so
+`apply_rotary_pos_emb_partial`'s split/concat path runs, not a degenerate full-head case.
 """
 
 from pathlib import Path
@@ -17,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2
@@ -69,8 +66,8 @@ def build_tiny_phi2_gguf(path: Path, seed: int = 0, n_layer: int = N_LAYER) -> P
     )
 
     def add(name: str, array: np.ndarray) -> None:
-        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed) - see
-        # the row-permute note in app/architectures/layers.py.
+        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed); see the row-permute note in
+        # app/architectures/layers.py.
         builder.add_tensor(
             name, list(reversed(array.shape)), GGMLQuantizationType.F32, array.tobytes()
         )

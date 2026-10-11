@@ -5,11 +5,10 @@
 A small, readable LLM inference runtime written from scratch in Python and PyTorch (optionally native C kernels are used for the dequantization stages and various forward-pass steps, for speed). It runs GGUF models locally - chat and text generation, embeddings, and vision-language
 models - and serves them through an HTTP API, so tools like [pAIring](https://github.com/nesmind/pairing) can use all of its features.
 
+**Cluster mode:** several Matricxon nodes can share models and chat caches and agree on membership through built-in Paxos consensus. The cluster is fully managed from pAIring's advanced cluster management, with live node and cluster status on an interactive map that adapts from a few nodes to hundreds. Cluster mode is in BETA: it is designed for hundreds of nodes, but so far only small clusters have been tested.
+
 The project started as part of the pAIring UI. We ran into limited advanced configuration options when working with Ollama, such as advanced memory management (for concurrent workloads) and others. We also made some important improvements to various inference stages, and everything is managed from the advanced pAIring UI, where Matricxon is the main inference engine.
 
-For now, Matricxon is best suited to **learning and research**. It is written to be read, and it
-shows how a GGUF file becomes tokens, how quantized weights are multiplied, how a KV cache and a
-sampler work, and how hybrid models (attention plus state-space layers) are served.
 
 Everything is built from scratch, with no llama.cpp, ggml or vLLM code or bindings: file parsing,
 dequantization, the transformer forward passes, caching, sampling and scheduling. It runs on CPUs & GPUs (BETA).
@@ -175,14 +174,14 @@ variables win). All of them are listed in `app/config.py`.
 Forward passes and tokenizers are also compared with Hugging Face on real models:
 
 ```bash
-.venv/bin/python -m scripts.oracle.validate_qwen3          # also validate_qwen2, validate_bert, ...
-.venv/bin/python -m scripts.oracle.validate_tokenizer
+.venv/bin/python -m tools.oracle.validate_qwen3          # also validate_qwen2, validate_bert, ...
+.venv/bin/python -m tools.oracle.validate_tokenizer
 ```
 
-See [`scripts/README_oracle.md`](scripts/README_oracle.md) for running these on a machine with
-limited RAM. `scripts/manual_chat_check.py`, `manual_embed_check.py` and `manual_pull_check.py`
+See [`tools/README_oracle.md`](tools/README_oracle.md) for running these on a machine with
+limited RAM. `tools/manual_chat_check.py`, `manual_embed_check.py` and `manual_pull_check.py`
 exercise the real HTTP API end to end. Long benchmarks can overheat a laptop: use
-`scripts/thermal_guard.py` to stop them at a safe temperature.
+`tools/thermal_guard.py` to stop them at a safe temperature.
 
 
 <br><br>

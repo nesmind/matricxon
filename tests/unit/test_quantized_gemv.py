@@ -1,10 +1,5 @@
-"""Correctness for the Numba-JIT quantized GEMV spike (app/gguf/dequant/quantized_gemv.py, see its
-own module docstring and the approved plan behind it). Cross-checks against the existing
-`Q4_KStrategy`/`Q6_KStrategy` dequantize-then-matmul path - already oracle-validated against a
-scalar port of ggml's real reference in tests/unit/test_kquant_kernels.py - rather than re-deriving
-the same per-block math a third time: if this kernel agrees with that already-proven-correct path
-on real multi-row weight matrices, its own math is right too.
-"""
+"""Numba quantized GEMV (app/gguf/dequant/quantized_gemv.py) cross-checked against the
+oracle-validated `Q4_KStrategy`/`Q6_KStrategy` dequantize-then-matmul path on multi-row matrices."""
 
 import random
 import struct
@@ -46,7 +41,7 @@ def _random_q6_k_row(rng: random.Random, n_super: int) -> bytes:
 class TestQgemvQ4K:
     def test_matches_dequantize_then_matmul(self) -> None:
         rng = random.Random(1)
-        out_features, in_features = 5, 512  # 2 superblocks/row
+        out_features, in_features = 5, 512
         n_super = in_features // 256
         raw = b"".join(_random_q4_k_row(rng, n_super) for _ in range(out_features))
         x = torch.randn(in_features, dtype=torch.float32)

@@ -15,9 +15,8 @@ class TagsRequestHandler:
         self._catalog = catalog
 
     def handle(self) -> TagsResponse:
-        # See show_router.py's identical comment - only report the smaller quantized-native
-        # figure for an architecture that's actually wired to use it, never just because the
-        # setting is on globally.
+        # As show_router.py: report the smaller quantized-native figure only for an architecture
+        # wired to use it, never just because the setting is on globally.
         entries = [
             TagEntry(
                 name=installed.tag,

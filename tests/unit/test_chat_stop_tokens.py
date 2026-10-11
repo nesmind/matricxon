@@ -1,7 +1,6 @@
-"""app.runtime.chat_stop_tokens.extra_eos_token_ids - real, confirmed gap (2026-09-29): a real
-DictaLM-3.0-1.7B-Thinking GGUF declares `eos_token_id=151643` (`<|endoftext|>`) but its own real
-chat template is ChatML-shaped and every real turn actually ends with `<|im_end|>` instead.
-"""
+"""app.runtime.chat_stop_tokens.extra_eos_token_ids. Gap: a a DictaLM model
+GGUF declares `eos_token_id=151643` (`<|endoftext|>`), but its chat template is ChatML and every
+turn ends with `<|im_end|>`."""
 
 from app.gguf.metadata import GGUFMetadata
 from app.runtime.chat_stop_tokens import extra_eos_token_ids

@@ -1,29 +1,23 @@
-"""Builds a tiny, complete, valid `clip` (llama.cpp mmproj) GGUF file - real
-
-vision-tower shape (patch embedding, learned position embedding, a
-pre-norm ViT encoder stack, an MLP projector), all F32 - so unit tests can
-run the entire real ClipVisionEncoder pipeline (GGUFReader ->
-GGUFModelLoader -> ClipVisionEncoder) end to end, fast and memory-safely.
-The real moondream2 mmproj pull (910MB) already validated the real
-architecture's numerics/statistics manually (see ROADMAP.md's M10 vision
-entry) - this is for exercising the wiring, including the real, confirmed
-`ffn_up`/`ffn_down` naming swap (see ClipVisionEncoderLayer's own
-docstring), not model quality.
-"""
+"""Builds a tiny, complete, valid `clip` (llama.cpp mmproj) GGUF with a vision-tower shape (patch
+embedding, learned position embedding, pre-norm ViT encoder stack, MLP projector), all F32, so unit
+tests run the ClipVisionEncoder pipeline (GGUFReader -> GGUFModelLoader -> ClipVisionEncoder) fast
+and memory-safely. The moondream2 mmproj pull (910MB) validated numerics manually; this exercises
+the wiring, including the `ffn_up`/`ffn_down` naming swap
+(ClipVisionEncoderLayer)."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2
 N_LAYER = 2
 FFN_LEN = 16
 PATCH_SIZE = 4
-IMAGE_SIZE = 8  # -> (8/4)^2 = 4 patches
+IMAGE_SIZE = 8
 PROJECTOR_HIDDEN = 12
 PROJECTION_DIM = 6
 IMAGE_MEAN = [0.5, 0.5, 0.5]
@@ -59,8 +53,8 @@ def build_tiny_clip_gguf(path: Path, seed: int = 0) -> Path:
     )
 
     def add(name: str, array: np.ndarray) -> None:
-        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed) - see
-        # the row-permute note in app/architectures/layers.py.
+        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed); see the row-permute note in
+        # app/architectures/layers.py.
         builder.add_tensor(
             name, list(reversed(array.shape)), GGMLQuantizationType.F32, array.tobytes()
         )
@@ -91,8 +85,8 @@ def build_tiny_clip_gguf(path: Path, seed: int = 0) -> Path:
         add(prefix + "attn_out.bias", np.zeros(N_EMBD, dtype="<f4"))
         add(prefix + "ln2.weight", np.ones(N_EMBD, dtype="<f4"))
         add(prefix + "ln2.bias", np.zeros(N_EMBD, dtype="<f4"))
-        # Real, confirmed naming swap (see ClipVisionEncoderLayer's own docstring): "ffn_down"
-        # is the expanding (n_embd -> ffn_len) projection, "ffn_up" is the contracting one.
+        # Naming swap (ClipVisionEncoderLayer): "ffn_down" is the expanding (n_embd -> ffn_len)
+        # projection, "ffn_up" the contracting one.
         add(prefix + "ffn_down.weight", _random_weight(rng, FFN_LEN, N_EMBD))
         add(prefix + "ffn_down.bias", np.zeros(FFN_LEN, dtype="<f4"))
         add(prefix + "ffn_up.weight", _random_weight(rng, N_EMBD, FFN_LEN))

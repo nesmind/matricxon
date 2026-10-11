@@ -1,10 +1,7 @@
-"""Cross-checks the vectorized K-quant kernels against a slow, scalar,
-line-by-line port of ggml's reference dequantize_row_q{4,5,6}_K functions
-(from the public GGUF/ggml block-layout spec - not llama.cpp/ggml code reuse
-in the shipped kernels themselves, just a test oracle written independently
-here). Any vectorization mistake in app/gguf/dequant/kquants.py should show
-up as a mismatch against this intentionally naive reference.
-"""
+"""Cross-checks the vectorized K-quant kernels against a slow scalar line-by-line port of ggml's
+dequantize_row_q{4,5,6}_K (from the public GGUF/ggml block-layout spec; an oracle written
+independently, not shipped code). A vectorization mistake in app/gguf/dequant/kquants.py should
+mismatch this deliberately naive reference."""
 
 import random
 import struct
@@ -17,7 +14,7 @@ _K_SCALE_SIZE = 12
 
 
 def _f16_roundtrip(value: float) -> float:
-    """Rounds through float16, matching what the kernel reads back from bytes."""
+    """Rounds through float16, as the kernel reads back from bytes."""
     return struct.unpack("<e", struct.pack("<e", value))[0]
 
 

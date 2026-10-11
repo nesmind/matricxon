@@ -1,19 +1,15 @@
-"""Builds a tiny, complete, valid `mistral3` GGUF file - real architecture,
-real tokenizer metadata, all F32 (no quantization needed at this size) -
-so integration tests can run the *entire* real pipeline (GGUFReader ->
-GGUFModelLoader -> ArchitectureRegistry -> Mistral3TextArchitecture ->
-GGUFTokenizer -> ChatEngine -> NDJSON) end to end, fast and memory-safely.
-The generated text is gibberish (tiny near-random weights) - this is for
-exercising the wiring, not model quality; ROADMAP.md's M3/M4 already
-validated the real forward-pass math against the real weights.
-"""
+"""Builds a tiny, complete, valid `mistral3` GGUF (real architecture and tokenizer metadata, all
+F32), so integration tests run the *entire* pipeline (GGUFReader -> GGUFModelLoader ->
+ArchitectureRegistry -> Mistral3TextArchitecture -> GGUFTokenizer -> ChatEngine -> NDJSON) fast and
+memory-safely. The text is gibberish (near-random weights): this exercises the wiring, not quality;
+ROADMAP.md M3/M4 validated the forward-pass math against real weights."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2
@@ -22,12 +18,10 @@ HEAD_DIM = 4
 N_LAYER = 1
 FFN_LEN = 16
 
-# Control tokens (matching what Mistral3PromptBuilder/GGUFTokenizer expect,
-# including the M10 tool-calling ones - confirmed as real control tokens via
-# mistralai/Ministral-3-3B-Instruct-2512's real tokenizer_config.json
-# `extra_special_tokens`, not assumed) followed by one token per byte value
-# (0-255), covering every possible UTF-8 byte sequence without needing any
-# real BPE merges.
+# Control tokens (as Mistral3PromptBuilder/GGUFTokenizer expect, including M10's tool-calling ones,
+# confirmed control tokens via mistralai/Ministral-3-3B-Instruct-2512's tokenizer_config.json
+# `extra_special_tokens`) followed by one token per byte value (0-255), covering every UTF-8 byte
+# sequence without needing BPE merges.
 _CONTROL_TOKENS = [
     "<unk>",
     "<s>",
@@ -60,10 +54,9 @@ def _random_weight(rng: np.random.RandomState, out_features: int, in_features: i
 
 
 def build_tiny_mistral3_gguf(path: Path, seed: int = 0, n_layer: int = N_LAYER) -> Path:
-    """`n_layer` defaults to the module's own single-layer N_LAYER (every existing caller gets
-    identical output to before this param existed) - only tests that specifically need a multi-
-    layer model (e.g. mixed per-layer dtype planning, see tests/unit/test_model_manager_memory.py)
-    pass a larger value."""
+    """`n_layer` defaults to the module's single-layer N_LAYER (existing callers get identical
+    output); only tests needing a multi-layer model (e.g. mixed per-layer dtype planning,
+    tests/unit/test_model_manager_memory.py) pass more."""
     rng = np.random.RandomState(seed)
     tokens = _CONTROL_TOKENS + _byte_tokens()
     token_types = [3] * len(_CONTROL_TOKENS) + [1] * 256
@@ -96,8 +89,8 @@ def build_tiny_mistral3_gguf(path: Path, seed: int = 0, n_layer: int = N_LAYER) 
     )
 
     def add(name: str, array: np.ndarray) -> None:
-        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed) - see
-        # the row-permute note in app/architectures/mistral3.py.
+        # GGUF's ne[] is fastest-dim-first (PyTorch's shape reversed); see the row-permute note in
+        # app/architectures/mistral3.py.
         builder.add_tensor(
             name, list(reversed(array.shape)), GGMLQuantizationType.F32, array.tobytes()
         )

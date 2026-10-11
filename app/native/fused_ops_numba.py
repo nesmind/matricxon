@@ -1,6 +1,6 @@
-"""Numba twins of the C kernels in app/native/src/mx_fused_ops.c, mx_attention.c and mx_sample.c -
-the same maths, kept in sync with them (see CLAUDE.md). Used when `Settings.gemv_backend` is
-"numba" or the C library didn't build. Layouts match the C versions: see their header comments."""
+"""Numba twins of the C kernels in app/native/src/mx_fused_ops.c, mx_attention.c and mx_sample.c:
+the same maths, kept in sync (CLAUDE.md). Used when `Settings.gemv_backend` is "numba" or the C
+library didn't build. Layouts match the C versions (see their header comments)."""
 
 import math
 
@@ -35,8 +35,8 @@ def rope(x, out, cos, sin):  # pragma: no cover - jitted
 
 @numba.njit(cache=True, fastmath=True)
 def attention(q, k, v, out, scale, offset, window):  # pragma: no cover - jitted
-    """Serial on purpose (a `prange` over heads measured slower at decode sizes: the thread
-    hand-off dominates), and `fastmath` so the dot-product reductions vectorize."""
+    """Serial on purpose (a `prange` over heads measured slower at decode sizes: thread hand-off
+    dominates), with `fastmath` so the dot-product reductions vectorize."""
     n_heads, n_q, dim = q.shape
     group = n_heads // k.shape[0]
     n_kv = k.shape[1]

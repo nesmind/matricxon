@@ -9,24 +9,20 @@ from app.native.gemm import NativeGemm
 
 class QuantizedEmbedding(nn.Module):
     """`nn.Embedding` replacement that keeps `token_embd.weight` packed and dequantizes only the
-    rows a forward pass actually looks up. The old path dequantized the whole table to float
-    up front: for Llama-3.2-3B (128256 x 3072, Q6_K) that was ~1.5 GB of float32 and ~18 s of the
-    first request's materialization, all before a single token was computed.
+    looked-up rows. The old path dequantized the whole table: for Llama-3.2-3B (128256 x 3072, Q6_K)
+    ~1.5 GB of float32 and ~18 s of the first request's materialization.
 
-    A tied-embeddings model (Llama-3.2, mistral3 - no separate `output.weight`) also uses this
-    same packed table as its output projection: `as_linear()` wraps the same bytes in a
-    `QuantizedLinear`, so the lm_head runs on the quantized kernels instead of a float32 matmul
-    against the full dequantized table (which read all 1.5 GB for every generated token).
+    A tied-embeddings model (Llama-3.2, mistral3) also uses the packed table as its output
+    projection: `as_linear` wraps the same bytes in a `QuantizedLinear`, so the lm_head runs on
+    quantized kernels instead of a float32 matmul over the dequantized table (1.5 GB read per
+    token).
 
-    Two real row-dequantize paths, same "real kernel when available, already-correct Python
-    fallback otherwise" split `QuantizedLinear` uses: `NativeGemm.dequant_rows` (real C, the
-    K-quant family only - see `mx_dequant_rows.c`'s own docstring) when available, else this
-    class's own original per-row `QuantStrategy.dequantize` (every real quant type this project
-    supports, just never benchmarked against a native kernel - a real, permanent fallback, not a
-    stopgap).
+    Two row-dequantize paths, the "real kernel when available, Python fallback otherwise" split of
+    `QuantizedLinear`: `NativeGemm.dequant_rows` (C, K-quant family only; `mx_dequant_rows.c`), else
+    per-row `QuantStrategy.dequantize` (every supported type; a permanent fallback).
 
-    Like `QuantizedLinear`, `raw` must stay a live view into its source GGUF mmap until
-    `release()` - see `ModelArchitecture.close`.
+    As `QuantizedLinear`, `raw` must stay a live view into its GGUF mmap until `release`
+    (`ModelArchitecture.close`).
     """
 
     def __init__(
@@ -51,13 +47,13 @@ class QuantizedEmbedding(nn.Module):
         )
 
     def as_linear(self) -> QuantizedLinear:
-        """The tied output projection over this same packed table (vocab x embedding_dim)."""
+        """The tied output projection over this packed table (vocab x embedding_dim)."""
         return QuantizedLinear(
             self.num_embeddings, self.embedding_dim, self._ggml_type, self._raw, dtype=self.dtype
         )
 
     def release(self) -> None:
-        """Drops the live views into the source mmap - see `QuantizedLinear.release`."""
+        """Drops the live views into the source mmap (`QuantizedLinear.release`)."""
         self._raw = None
         self._rows = None
 

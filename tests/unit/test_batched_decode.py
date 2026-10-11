@@ -1,6 +1,6 @@
-"""A decode step run as part of a batch must give the same logits as run alone - checked per
-architecture before it may set `SUPPORTS_BATCHED_DECODE`. Three sequences of different lengths
-(so padding/masks matter), a few steps each, tiny fixtures."""
+"""A decode step run in a batch must give the same logits as alone, checked per architecture before
+it may set `SUPPORTS_BATCHED_DECODE`. Three sequences of different lengths (so padding/masks
+matter), a few steps each, tiny fixtures."""
 
 from collections.abc import Callable
 from pathlib import Path
@@ -78,7 +78,7 @@ def _prefilled(model: ModelArchitecture) -> list[object]:
 def _decode_logits(model: ModelArchitecture, batched: bool) -> list[list[torch.Tensor]]:
     caches = _prefilled(model)
     decoder = BatchDecoder(model)
-    decoder._can_batch = batched  # discovery: force the path under test
+    decoder._can_batch = batched
     out = []
     for step in range(STEPS):
         steps = [
@@ -114,7 +114,7 @@ def test_a_batched_decode_step_matches_decoding_alone(
 ) -> None:
     model = _load(builder, cls, tmp_path)
     matches = batched_matches(model)
-    if model.SUPPORTS_BATCHED_DECODE:  # per model: a MoE checkpoint of a flagged class turns it off
+    if model.SUPPORTS_BATCHED_DECODE:
         assert matches, f"{cls.__name__} ({name}) claims batched decode but its logits differ"
     print(f"{name}: batched matches = {matches}, flagged = {model.SUPPORTS_BATCHED_DECODE}")
     model.close()

@@ -1,8 +1,7 @@
-"""`/api/chat` against a tiny real `qwen35` GGUF (tests/tiny_gguf_qwen35.py): real loader,
-`Qwen35Architecture`, hybrid cache, tokenizer and NDJSON stack - multi-token prefill followed by
-single-token decode through both Gated DeltaNet and gated-attention layers. The recurrence math
-itself is covered in tests/unit/test_qwen35_deltanet.py.
-"""
+"""`/api/chat` against a tiny `qwen35` GGUF (tests/tiny_gguf_qwen35.py): real loader,
+`Qwen35Architecture`, hybrid cache, tokenizer and NDJSON stack; multi-token prefill then
+single-token decode through Gated DeltaNet and gated-attention layers. The recurrence math:
+tests/unit/test_qwen35_deltanet.py."""
 
 import json
 

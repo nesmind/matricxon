@@ -20,42 +20,27 @@ logger = logging.getLogger(__name__)
 
 
 class LlamaArchitecture(ModelArchitecture):
-    """Plain (no YaRN) GQA decoder - the "simpler special case" M10's own
+    """Plain (no YaRN) GQA decoder: RMSNorm + grouped-query attention + SwiGLU MLP + unscaled rotary
+    embeddings. A `TinyLlama-1.1B-Chat-v1.0` GGUF has the `Mistral3TextArchitecture` tensor layout,
+    so it reuses `Mistral3DecoderLayer`/`GroupedQueryAttention`/`SwiGLUMLP`; only the RoPE class
+    (plain `RotaryEmbedding`, no `rope.scaling.*`) and the output projection differ.
 
-    ROADMAP entry anticipated once `Mistral3TextArchitecture` existed:
-    RMSNorm + grouped-query attention + SwiGLU MLP + un-scaled rotary
-    embeddings, confirmed identical enough in real tensor layout (against a
-    real `TinyLlama-1.1B-Chat-v1.0` GGUF pull, not assumed) to reuse
-    `Mistral3DecoderLayer`/`GroupedQueryAttention`/`SwiGLUMLP` directly
-    rather than duplicating them - only the RoPE class (plain
-    `RotaryEmbedding`, no `rope.scaling.*` metadata exists for this
-    architecture at all) and the output projection differ.
+    A `llama` GGUF may lack `output.weight`: TinyLlama has it, but `Llama-3.2-1B/3B-Instruct` ties
+    embeddings and llama.cpp omits it (loading Llama-3.2-3B crashed with `UnknownModelError`). So
+    `tied_embeddings` (detected in `from_gguf` via
+    `loader.has_tensor("output.weight")`) takes the `mistral3` tied path.
 
-    A real `llama`-arch GGUF may or may not carry its own separate
-    `output.weight` tensor: a real `TinyLlama-1.1B-Chat-v1.0` pull has one,
-    but real `Llama-3.2-1B/3B-Instruct` pulls don't (`tie_word_embeddings:
-    true` in their HF configs) - llama.cpp's own conversion omits
-    `output.weight` entirely for those, the same way it always has for
-    `mistral3` (see that architecture's own comment). Confirmed live
-    (2026-09-22): loading a real `Llama-3.2-3B-Instruct-GGUF` crashed with
-    `UnknownModelError: GGUF file has no tensor named 'output.weight'` -
-    `tied_embeddings` (detected once, in `from_gguf`, via
-    `loader.has_tensor("output.weight")`) now takes the same tied path
-    `mistral3` always does instead of assuming every llama-arch file has a
-    separate projection.
-
-    **Mixtral (2026-09-30)**: real Mixtral GGUFs share this same `"llama"` architecture string
-    (no separate `mixtral` one exists) - `self.is_moe` detects it per real metadata presence and
-    injects a sparse MoE FFN into each `Mistral3DecoderLayer` instead of a plain `SwiGLUMLP` - see
-    `app.architectures.llama_moe`'s own module docstring for the full real-source verification.
+    Mixtral: Mixtral GGUFs use the `"llama"` architecture string, so `self.is_moe`
+    detects it from metadata and injects a sparse MoE FFN into each `Mistral3DecoderLayer` instead
+    of a `SwiGLUMLP` (`app.architectures.llama_moe`).
     """
 
     NAME = "llama"
     supports_context_shift = True
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
+    SUPPORTS_BATCHED_DECODE = True
     SUPPORTS_VISION = True
-    SUPPORTS_MOE = True  # real Mixtral GGUFs - see llama_moe.detect_moe's own module docstring
+    SUPPORTS_MOE = True
 
     def __init__(
         self,
@@ -65,56 +50,54 @@ class LlamaArchitecture(ModelArchitecture):
         tied_embeddings: bool = False,
     ) -> None:
         super().__init__()
-        # When this is on, every per-layer projection goes quantized-native - q_proj/k_proj too,
-        # with unpermute_rope_rows applied to their packed rows (see
-        # PackedWeightLoading._load_projection) - and so does token_embd (QuantizedEmbedding).
-        # `lm_head` is `output.weight` for an untied checkpoint, or that same packed embedding
-        # table for a tied one (QuantizedEmbedding.as_linear), exactly like mistral3.
+        # When on, every per-layer projection goes quantized-native (q_proj/k_proj too, with
+        # unpermute_rope_rows on their
+        # packed rows; PackedWeightLoading._load_projection), and so does token_embd
+        # (QuantizedEmbedding). `lm_head` is
+        # `output.weight` for an untied checkpoint, or the same packed table for a tied one
+        # (QuantizedEmbedding.as_linear), as mistral3.
         self._enable_quantized_native = enable_quantized_native
         self._dtype = dtype
         self._tied_embeddings = tied_embeddings
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
-        # Real, confirmed gap (2026-09-29): a real SmolVLM2-2.2B-Instruct text-half GGUF (SmolLM2
-        # backbone, plain MHA, no GQA) omits `attention.head_count_kv` entirely - llama.cpp's own
-        # writer only emits it when it differs from `head_count`. Crashed every `_load_projection`/
-        # `nn.Linear(..., n_head_kv * head_dim, ...)` call downstream with `unsupported operand
-        # type(s) for *: 'NoneType' and 'int'` before this fallback (same real convention HF/
-        # llama.cpp use: no key present means "no grouping", not "malformed file").
+        # Gap: a SmolVLM2-2.2B-Instruct text-half GGUF (SmolLM2 backbone, plain MHA)
+        # omits
+        # `attention.head_count_kv`; llama.cpp writes it only when it differs from `head_count`.
+        # Every `_load_projection`/
+        # `nn.Linear(..., n_head_kv * head_dim,...)` crashed with `unsupported operand type(s) for
+        # *: 'NoneType' and 'int'`.
+        # No key means "no grouping" (HF/llama.cpp's convention), not a malformed file.
         self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
-        # Real, confirmed gap (2026-09-28): a real DictaLM-3.0-24B-Thinking GGUF has
-        # `embedding_length=5120, head_count=32` but real `attention.key_length=128` - the naive
-        # `n_embd // n_head` derivation gives 160, silently wrong (not every real GQA layout keeps
-        # head_dim * head_count == n_embd - same real trap qwen3's own docstring already
-        # documents for a different architecture). Crashed every `.view(batch, seq_len, n_head,
-        # head_dim)` reshape downstream with a real shape-mismatch RuntimeError, not a crash at
-        # load time - only surfaced once a real forward pass actually ran. Falls back to the
-        # derived value for a real file with no such key (e.g. TinyLlama), matching
-        # `CommandRArchitecture`'s own identical fallback for the same metadata key.
+        # Gap: a a DictaLM model GGUF has `embedding_length=5120,
+        # head_count=32` but `attention.key_length=128`, so `n_embd // n_head` gives a wrong 160
+        # (head_dim * head_count need not equal n_embd; see qwen3) and the reshape crashed at the
+        # first forward. Falls back to the derived value when the key is absent (e.g. TinyLlama), as
+        # `CommandRArchitecture`.
         self.head_dim = metadata.get_u32(arch("attention.key_length"), self.n_embd // self.n_head)
         self.n_layer = metadata.get_u32(arch("block_count"))
         self.ffn_len = metadata.get_u32(arch("feed_forward_length"))
         self.rms_eps = metadata.get_f32(arch("attention.layer_norm_rms_epsilon"))
-        # Mixtral detection - see llama_moe.py's own module docstring for why there's no
-        # separate "mixtral" architecture string to dispatch on instead.
+        # Mixtral detection (why there's no separate "mixtral" architecture string: llama_moe.py).
         self.num_experts, self.num_experts_per_tok = detect_moe(metadata, metadata.architecture)
         self.is_moe = self.num_experts is not None
-        if self.is_moe:  # expert routing isn't batch-checked (test_batched_decode.py)
+        if self.is_moe:
             self.SUPPORTS_BATCHED_DECODE = False
-        # Real, confirmed gap (2026-09-21): a real LLaVA-v1.6-Vicuna GGUF pull has no
-        # `llama.vocab_size` metadata key at all - falls back to the real tokenizer vocab's own
-        # length, the same fallback `BertArchitecture`/`NomicBertArchitecture`/`Gemma4Architecture`/
-        # `Phi2Architecture` already established for exactly this situation, rather than crashing
-        # on `nn.Embedding(None, ...)`.
+        # Gap: a LLaVA-v1.6-Vicuna GGUF has no `llama.vocab_size` key; falls back to
+        # the tokenizer vocab's
+        # length, as
+        # `BertArchitecture`/`NomicBertArchitecture`/`Gemma4Architecture`/`Phi2Architecture`,
+        # instead of crashing on `nn.Embedding(None,...)`.
         vocab_size = metadata.get_u32(arch("vocab_size"))
         self.vocab_size = (
             vocab_size if vocab_size is not None else len(metadata.require("tokenizer.ggml.tokens"))
         )
 
-        # Plain floats (not tensors), so unaffected by _construct_without_init's meta-device
-        # trick - kept so _rebuild_derived_buffers can recreate self.rope for real afterward.
-        # See Mistral3TextArchitecture's identical _rope_kwargs for the full reasoning.
+        # Plain floats (not tensors), so unaffected by _construct_without_init's meta-device trick;
+        # kept so
+        # _rebuild_derived_buffers can recreate self.rope. See
+        # Mistral3TextArchitecture._rope_kwargs.
         self._rope_kwargs = dict(
             head_dim=self.head_dim, rope_theta=metadata.get_f32(arch("rope.freq_base"))
         )
@@ -142,17 +125,16 @@ class LlamaArchitecture(ModelArchitecture):
             self.lm_head = nn.Linear(self.n_embd, self.vocab_size, bias=False, dtype=dtype)
 
     def _rebuild_derived_buffers(self) -> None:
-        """self.rope.inv_freq is a real computed value, not a GGUF tensor from_gguf ever
-        `.copy_()`'s in - see ModelArchitecture._rebuild_derived_buffers's own docstring for why
-        this has to be recreated for real after _construct_without_init."""
+        """self.rope.inv_freq is a computed value, not a GGUF tensor from_gguf `.copy_`'s in;
+        recreated after
+        _construct_without_init (ModelArchitecture._rebuild_derived_buffers).
+        """
         self.rope = RotaryEmbedding(**self._rope_kwargs)
 
     @property
     def kv_cache_layer_shapes(self) -> list[tuple[int, int]]:
-        """Same `(n_head_kv, head_dim)` pair repeated per layer - see
-
-        `KVCache`'s own docstring for why this is a per-layer list at all.
-        """
+        """The same `(n_head_kv, head_dim)` pair per layer (`KVCache` says why it's a per-layer
+        list)."""
         return [(self.n_head_kv, self.head_dim)] * self.n_layer
 
     @classmethod
@@ -254,13 +236,13 @@ class LlamaArchitecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        """`image_embeddings` (see `ModelArchitecture.forward`'s own docstring for the full
-        contract): applied immediately after the normal token-embedding lookup, before any
-        decoder layer runs - each `(start, embeds)` pair overwrites
-        `x[:, start:start+embeds.shape[0], :]` in place with real projected image-patch
-        embeddings. The input ids at those positions are placeholder values only (see
-        `app.runtime.vision_fusion.build_prompt_with_images`) - their own looked-up embedding is
-        computed and then immediately discarded, never influencing anything downstream.
+        """`image_embeddings` (contract: `ModelArchitecture.forward`): applied right after the
+        token-embedding lookup,
+        before any decoder layer: each `(start, embeds)` pair overwrites `x[,
+        start:start+embeds.shape[0],:]` with
+        projected image-patch embeddings. The input ids there are placeholders
+        (`app.runtime.vision_fusion.build_prompt_with_images`);
+        their looked-up embedding is discarded.
         """
         _, seq_len = input_ids.shape
         logger.debug("forward start: seq_len=%d", seq_len)

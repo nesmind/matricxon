@@ -1,9 +1,11 @@
-"""Loading weights that stay packed (still quantized) for the model's whole lifetime - split out of
-app/architectures/base.py, which every architecture's `ModelArchitecture` inherits this from.
+"""Loading weights that stay packed (quantized) for the model's whole lifetime; split from base.py,
+from which every
+`ModelArchitecture` inherits this.
 
 `_load_projection` covers per-layer projections, including attn_q/attn_k with their
-`unpermute_rope_rows` row permutation (applied to the packed rows, see `PackedRows`), and
-`_load_token_embedding` covers the token-embedding table (see `QuantizedEmbedding`).
+`unpermute_rope_rows` row permutation
+(applied to the packed rows, `PackedRows`), and `_load_token_embedding` the token-embedding table
+(`QuantizedEmbedding`).
 """
 
 import torch
@@ -28,17 +30,18 @@ PACKED_EMBEDDINGS = (QuantizedEmbedding, DevicePackedEmbedding)
 
 class PackedWeightLoading:
     _quantized_loader: GGUFModelLoader | None
-    # From DevicePlacement: `_device_packed` is True with `gpu_weight_mode="packed"` - supported
+    # From DevicePlacement: `_device_packed` is True with `gpu_weight_mode="packed"`; supported
     # quant types are then uploaded still packed (`DevicePackedLinear`).
     _device_packed: bool
     device: torch.device
 
     def _mark_quantized_native_used(self, loader: GGUFModelLoader) -> None:
-        """Called once by `_materialize_weights` (idempotent - a real per-layer loop calls this
-        once per quantized projection, not once total) the first time it builds a real
-        `QuantizedLinear` from `loader` - tells `_ensure_materialized` to keep `loader`'s mmap
-        open past materialization instead of closing it, since a `QuantizedLinear`'s own forward
-        pass reads real raw bytes from it on every future call, not just this one."""
+        """Called by `_materialize_weights` (idempotent: the per-layer loop calls it per quantized
+        projection) the first time it
+        builds a `QuantizedLinear` from `loader`; tells `_ensure_materialized` to keep `loader`'s
+        mmap open past materialization,
+        since a `QuantizedLinear`'s forward reads raw bytes from it on every future call.
+        """
         self._quantized_loader = loader
 
     def _load_projection(
@@ -51,25 +54,19 @@ class PackedWeightLoading:
         bias_tensor_name: str | None = None,
         rope_heads: int | None = None,
     ) -> nn.Module:
-        """Shared by every architecture's `_materialize_weights` for a real per-layer projection
-        eligible for quantized-native compute (see `Settings.enable_quantized_native_compute`'s
-        own docstring) - moved here once `Mistral3TextArchitecture` (the reference implementation)
-        and later `llama`/`gemma4`/`phi2` all needed the identical real decision, rather than four
-        separate copies of it.
+        """Shared by every architecture's `_materialize_weights` for a projection eligible for
+        quantized-native compute (`Settings.enable_quantized_native_compute`).
 
-        When `enabled` and `tensor_name`'s real GGUF type has a fused kernel
-        (`quantized_gemv_registry.has_gemv_kernel`), returns a real `QuantizedLinear` built
-        straight from this loader's raw bytes - `target` (the placeholder `nn.Linear` built in
-        `__init__`) is discarded, never touched. Otherwise (disabled, or a real type with no fused
-        kernel - e.g. an F16/F32 file) falls straight through to today's exact `.copy_()` path,
-        returning `target` unchanged. `bias_tensor_name`, when given, loads a real bias either way
-        (a `QuantizedLinear`'s own bias is always a real, small, fully-dequantized tensor - see
-        that class's own docstring for why only the main weight stays packed).
+        When `enabled` and `tensor_name`'s GGUF type has a fused kernel
+        (`quantized_gemv_registry.has_gemv_kernel`), returns a `QuantizedLinear` built from the
+        loader's raw bytes and discards `target` (the placeholder `nn.Linear`). Otherwise (disabled,
+        or no kernel, e.g. F16/F32) it takes the `.copy_` path and returns `target`.
+        `bias_tensor_name` loads a bias either way (a `QuantizedLinear`'s bias is a small
+        dequantized tensor; only the weight stays packed).
 
-        `rope_heads`, when given, applies `unpermute_rope_rows(weight, rope_heads)` - attn_q/
-        attn_k of the architectures that need it. It's a pure row permutation, so on the packed
-        path it reorders whole packed rows (a copy of just that tensor, still quantized) instead
-        of forcing the tensor onto the float path, as it had to before.
+        `rope_heads` applies `unpermute_rope_rows(weight, rope_heads)` (attn_q/attn_k of
+        architectures needing it). It is a pure row permutation, so the packed path reorders whole
+        packed rows (a copy of just that tensor, still quantized).
         """
         if enabled and self._device_packed:
             raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
@@ -109,10 +106,11 @@ class PackedWeightLoading:
         enabled: bool,
         tensor_name: str = "token_embd.weight",
     ) -> nn.Module:
-        """A packed `QuantizedEmbedding` when `enabled` and the table's type has a quantized
-        kernel (the same rule `_load_projection` uses, so a tied lm_head built from it via
-        `QuantizedEmbedding.as_linear()` is always supported too); otherwise `target` with the
-        dequantized table copied in, exactly as before."""
+        """A packed `QuantizedEmbedding` when `enabled` and the table's type has a quantized kernel
+        (the rule `_load_projection`
+        uses, so a tied lm_head from `QuantizedEmbedding.as_linear` is supported too); otherwise
+        `target` with the dequantized table copied in, as before.
+        """
         if enabled and self._device_packed:
             raw, ggml_type, shape = loader.raw_tensor_bytes_and_type(tensor_name)
             if TorchDequantizer.supports(ggml_type):
@@ -128,8 +126,8 @@ class PackedWeightLoading:
         return target
 
     def _release_packed_modules(self) -> None:
-        """Releases every packed module's live view into the loader's mmap - must run before
-        that mmap is closed (see `ModelArchitecture.close`)."""
+        """Releases every packed module's live view into the loader's mmap; must run before that
+        mmap closes (`ModelArchitecture.close`)."""
         for module in self.modules():
             if isinstance(module, (QuantizedLinear, QuantizedEmbedding)):
                 module.release()

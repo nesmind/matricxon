@@ -1,13 +1,12 @@
 """Fused CPU ops for the decode hot path: RMSNorm, rotary embedding, causal attention over the KV
-cache, and the sampler's draw. Each is a few tiny torch dispatches (tens to hundreds of
-microseconds apiece, per layer, per token) or - the sampler - a full-vocabulary sort; here each is
-one native call. See app/native/src/mx_fused_ops.c, mx_attention.c, mx_sample.c (C) and
-fused_ops_numba.py (the Numba twin, used when `Settings.gemv_backend` is "numba" or the C library
-didn't build).
+cache and the sampler's draw. Each is a few tiny torch dispatches (tens to hundreds of microseconds
+per layer per token) or, for the sampler, a full-vocabulary sort; here each is one native call. C:
+app/native/src/mx_fused_ops.c, mx_attention.c, mx_sample.c; Numba twin: fused_ops_numba.py (used
+when `Settings.gemv_backend` is "numba" or the C library didn't build).
 
 Every method returns None when it can't handle the inputs (non-float32, a GPU tensor, a batched
-decode, a shape outside what the kernel covers) and the caller runs its original torch code - so
-this is purely an accelerator, never a behavior switch. Off with `MATRICXON_ENABLE_FUSED_OPS=false`.
+decode, an unsupported shape) and the caller runs its torch code: purely an accelerator. Off with
+`MATRICXON_ENABLE_FUSED_OPS=false`.
 """
 
 import ctypes
@@ -85,9 +84,9 @@ class _NativeBackend:
 
 class _NumbaBackend:
     """The Numba twins. Attention is off by default: its inner loops run over the cache's strided
-    views, which Numba can't vectorize, and it measured ~4x SLOWER than torch's SDPA at decode
-    sizes (1.9 ms vs 0.45 ms, 300 cached tokens) - so this backend leaves attention to torch. The
-    kernel stays (and is tested) in sync with the C one; `attention=True` turns it on."""
+    views, which Numba can't vectorize, and it measured ~4x SLOWER than torch's SDPA at decode sizes
+    (1.9 ms vs 0.45 ms, 300 cached tokens), so torch keeps attention. The kernel stays in sync with
+    the C one and tested; `attention=True` turns it on."""
 
     def __init__(self, attention: bool = False) -> None:
         self.supports_attention = attention
@@ -151,8 +150,8 @@ class FusedOps:
         return out.view(x.shape)
 
     def rope(self, q, k, cos, sin) -> tuple[torch.Tensor, torch.Tensor] | None:
-        """q (1, H, T, D), k (1, Hkv, T, D) - views of a projection, any strides - and cos/sin
-        (T, D). The result is new contiguous tensors, like the torch version's."""
+        """q (1, H, T, D), k (1, Hkv, T, D): views of a projection, any strides; cos/sin (T, D).
+        Returns new contiguous tensors, like the torch version."""
         if not _is_f32_cpu(q, k, cos, sin) or q.dim() != 4 or q.shape[0] != 1 or cos.dim() != 2:
             return None
         if k.shape[0] != 1 or q.shape[-1] % 2 or cos.shape != (q.shape[2], q.shape[3]):
@@ -171,8 +170,8 @@ class FusedOps:
     def attention(
         self, q, k, v, offset: object, scale: float, window: int = 0
     ) -> torch.Tensor | None:
-        """Causal attention of q (1, H, Tq, D) over the cache's k/v (1, Hkv, L, D) - query i is at
-        absolute position i + offset. Only for a few query tokens (decode)."""
+        """Causal attention of q (1, H, Tq, D) over the cache's k/v (1, Hkv, L, D); query i is at
+        absolute position i + offset. For a few query tokens (decode) only."""
         if not getattr(self._backend, "supports_attention", True):
             return None
         if not _is_f32_cpu(q, k, v) or not isinstance(offset, int):
@@ -193,14 +192,14 @@ class FusedOps:
     @staticmethod
     def can_sample(logits: torch.Tensor, sampling: object) -> bool:
         """Whether `sample` covers this request: temperature > 0, and top-k on or top-p off (top-p
-        over the whole vocabulary needs a full sort - torch keeps that case)."""
+        over the whole vocabulary needs a full sort: torch keeps that)."""
         if not _is_f32_cpu(logits) or logits.dim() != 1 or sampling.temperature <= 0.0:
             return False
         return sampling.top_k > 0 or sampling.top_p >= 1.0
 
     def sample(self, logits, generated_ids, sampling, u: float) -> int:
-        """The whole sampler - repetition penalty, temperature, top-k, top-p, softmax, draw - in one
-        pass (mx_sample.c). `u` is a uniform in [0, 1); only after `can_sample` said yes."""
+        """The whole sampler (repetition penalty, temperature, top-k, top-p, softmax, draw) in one
+        pass (mx_sample.c). `u` is a uniform in [0, 1); call only after `can_sample` said yes."""
         penalized = sampling.repeat_penalty != 1.0 and bool(generated_ids)
         ids = torch.tensor(
             [i for i in sorted(set(generated_ids)) if 0 <= i < logits.shape[0]]

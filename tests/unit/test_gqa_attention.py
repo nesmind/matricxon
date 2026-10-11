@@ -1,7 +1,6 @@
-"""GroupedQueryAttention leaves the k/v-head sharing to SDPA (`enable_gqa=True`) instead of
-copying the cached k/v with repeat_interleave every step. Checked here against that explicit
-repeat_interleave computation - full-sequence, and prefill + one-token decode through a KVCache.
-"""
+"""GroupedQueryAttention leaves k/v-head sharing to SDPA (`enable_gqa=True`) instead of copying the
+cached k/v with repeat_interleave every step. Checked against that explicit computation:
+full-sequence, and prefill + one-token decode through a KVCache."""
 
 import torch
 import torch.nn.functional as F

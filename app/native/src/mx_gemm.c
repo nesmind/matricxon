@@ -1,41 +1,23 @@
-/*
- * Public entry point: y = x @ W.T for a packed GGUF weight W, called from Python via ctypes
- * (app/native/gemm.py). One function covers both decode (n_tokens == 1, a GEMV) and prefill
- * (n_tokens > 1): every activation row is quantized to Q8_K once up front, then output rows are
- * split across OpenMP threads. For K-quants each weight row is unpacked once (mx_block_unpacked)
- * and that unpacked row is reused for every token while it's hot in cache - a 40-token prefill
- * used to re-unpack every row 40 times, which made it cost 40 decode steps.
- */
+/* Entry point: y = x @ W.T for a packed GGUF weight W, called via ctypes (app/native/gemm.py). Covers decode (n_tokens == 1) and prefill: every activation row is quantized to Q8_K once, then output rows are split across OpenMP threads. K-quant rows are unpacked once (mx_block_unpacked) and reused for every token while hot in cache. */
 #include <stdlib.h>
 
 #include "mx_common.h"
 
 typedef float (*mx_vec_dot_fn)(const uint8_t *row, const mx_block_q8_k *y, int nb);
 
-/* Up to this many tokens, a K-quant uses its fused per-token kernel (`fused`) instead of
- * unpacking each row once: unpacking only pays off once it's reused across tokens. Measured on
- * this project's i7-2640M (Qwen3.5-4B Q4_K/Q6_K tensors, 2 threads): fused is faster for 2-8
- * tokens (e.g. 4 tokens 4.5ms vs 6.0ms) and level at 16 - so a small batched decode step (a
- * few users' tokens in one pass) uses the fused kernel, not the unpack path built for prompts.
- * Per-token cost there is ~constant (1.1ms for a 9216x2560 Q4_K), i.e. compute-bound, so a batch
- * doesn't get cheaper per token on that CPU the way it does on a bandwidth-bound one. */
+/* Up to this many tokens a K-quant uses its fused per-token kernel (`fused`) instead of unpacking each row: unpacking pays off only when reused. Measured on a Sandy Bridge CPU (Qwen3.5-4B Q4_K/Q6_K, 2 threads): fused is faster for 2-8 tokens (4 tokens: 4.5ms vs 6.0ms) and level at 16, so a small batched decode uses the fused kernel. Per-token cost there is ~constant (1.1ms for 9216x2560 Q4_K): compute-bound. */
 #ifndef MX_FUSED_MAX_TOKENS
 #define MX_FUSED_MAX_TOKENS 8
 #endif
 
-/* Runtime copy of the threshold, so a benchmark can find the real crossover (see
- * mx_set_fused_max_tokens and scripts/benchmark_kernels.py) without a rebuild. */
+/* Runtime copy of the threshold, so a benchmark can find the crossover (mx_set_fused_max_tokens, tools/benchmark_kernels.py) without a rebuild. */
 static int mx_fused_max_tokens = MX_FUSED_MAX_TOKENS;
 
 void mx_set_fused_max_tokens(int n_tokens) {
     mx_fused_max_tokens = n_tokens;
 }
 
-/* How one GGML type is computed: K-quants set `unpack` (and `has_min` for Q4_K/Q5_K), plus
- * `fused` where SSSE3 is available; Q8_0 sets only `dot`. Every I-quant/T-quant (IQ4_NL/XS,
- * TQ1_0/TQ2_0, the IQ1/IQ2/IQ3 grid family) sets only `dot_f32` (see mx_common.h) -
- * `block_size` defaults to MX_QK_K (every K-quant/Q8_0 case below overrides it to whatever its
- * own real block size actually is; IQ4_NL's real block is 32, not 256). */
+/* How one GGML type is computed: K-quants set `unpack` (and `has_min` for Q4_K/Q5_K), plus `fused` with SSSE3; Q8_0 sets only `dot`; I-/T-quants set only `dot_f32` (see mx_common.h). `block_size` defaults to MX_QK_K; each case overrides it with its real size (IQ4_NL: 32). */
 typedef struct {
     size_t row_bytes;
     int block_size;
@@ -138,8 +120,7 @@ static int mx_kernel_for(int ggml_type, int in_features, mx_kernel *k) {
     }
 }
 
-/* 1 when mx_gemm can handle this (type, in_features) pair - Python checks this once per tensor
- * and keeps the Numba kernel otherwise. */
+/* 1 when mx_gemm handles this (type, in_features); otherwise Python keeps the Numba kernel. */
 int mx_supports(int ggml_type, int in_features) {
     mx_kernel k;
     if (!mx_kernel_for(ggml_type, in_features, &k)) {
@@ -158,8 +139,7 @@ int mx_gemm(int ggml_type, const uint8_t *w, const float *x, float *y, int n_tok
     }
     mx_kernel_for(ggml_type, in_features, &k);
 
-    /* IQ4_NL/IQ4_XS/TQ1_0/TQ2_0: no mx_block_q8_k involved at all - dot_f32 reads the raw
-     * activation row directly (see mx_common.h's own comment on why). */
+    /* IQ4_NL/IQ4_XS/TQ1_0/TQ2_0: no mx_block_q8_k; dot_f32 reads the raw activation row (see mx_common.h). */
     if (k.dot_f32 != NULL) {
         const int nb_f32 = in_features / k.block_size;
 #pragma omp parallel for schedule(static) num_threads(n_threads)
@@ -223,7 +203,7 @@ int mx_gemm(int ggml_type, const uint8_t *w, const float *x, float *y, int n_tok
     return status;
 }
 
-/* Build details for matricxon's startup log - which SIMD paths gcc could use for this CPU. */
+/* Build details for the startup log: which SIMD paths gcc could use. */
 const char *mx_build_info(void) {
     return "simd="
 #if defined(__AVX2__)

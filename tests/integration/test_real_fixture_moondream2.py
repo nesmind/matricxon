@@ -1,14 +1,12 @@
-"""Real-weight validation for the phi2 architecture (moondream2's text model) - same real-weight
-bar M4/M10 already set for mistral3/llama ("The capital of France is" -> a coherent, factually
-correct continuation), against the real moondream2 GGUF pulled via matricxon's own real
-`/api/pull` (see app/architectures/phi2.py's own docstring for the real metadata/tensor findings
-this architecture is built from). Skips automatically if this machine hasn't pulled it.
+"""Real-weight validation for phi2 (moondream2's text model): the bar M4/M10 set for mistral3/llama
+("The capital of France is" -> a coherent, correct continuation), against the moondream2 GGUF pulled
+via matricxon's `/api/pull` (metadata/tensor findings: app/architectures/phi2.py). Skips if not
+pulled.
 
-This is also where the one real open design question flagged in app/architectures/phi2_layers.py
-(whether the fused attn_qkv tensor's q/k thirds need the same row permutation
-`unpermute_rope_rows` already applies to every other rotate-half-style architecture here) gets
-resolved for real: if this test's assertion fails with incoherent output rather than an error,
-that permutation is the first thing to try in Phi2Architecture._materialize_weights.
+This resolves the open design question in app/architectures/phi2_layers.py (whether the fused
+attn_qkv's q/k thirds need the row permutation `unpermute_rope_rows` applies to other rotate-half
+architectures): if this fails with incoherent output instead of an error, try that permutation first
+in Phi2Architecture._materialize_weights.
 """
 
 import json
@@ -25,9 +23,9 @@ from app.models.manager import ModelManager
 from app.server.errors import UnknownModelError
 
 REAL_MOONDREAM2_TAG = "hf.co/moondream/moondream2-gguf:text"
-# moondream2's real text model is ~2.84GB f16 on disk -> ~3.1GB bf16-dequantized estimate * 1.5x
-# safety margin - comfortably small, but still skip cleanly rather than fail noisily under real
-# memory pressure, same policy test_real_fixture_llama.py already uses.
+# moondream2's text model is ~2.84GB f16 on disk -> ~3.1GB bf16 estimate * 1.5x safety margin:
+# small, but skip cleanly under memory pressure rather than fail noisily (as
+# test_real_fixture_llama.py).
 _MIN_AVAILABLE_BYTES = 4 * 1024**3
 
 

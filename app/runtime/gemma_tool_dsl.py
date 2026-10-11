@@ -1,5 +1,4 @@
 """Parser for Gemma 4's tool-call argument syntax: `{key:value,key:<|"|>text<|"|>,k:[..],k:{..}}`.
-
 Strings are wrapped in the literal `<|"|>` marker, keys are bare, everything else is JSON-like
 (numbers, true/false/null, nested `[...]` and `{...}`). Raises ValueError on anything malformed."""
 

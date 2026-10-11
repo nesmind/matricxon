@@ -6,26 +6,19 @@ from app.architectures.moe_experts import QuantizedMoEExperts
 
 
 class GraniteMoeFFN(nn.Module):
-    """GraniteMoE's real sparse Mixture-of-Experts FFN block, replacing dense Granite's
-    `SwiGLUMLP` inside a `GraniteDecoderLayer` (see that class's own docstring for how it's
-    injected) - confirmed against HF `transformers`' real `GraniteMoeTopKRouter`/expert dispatch
-    (`modeling_granitemoe.py`, 2026-09-22):
+    """GraniteMoE's sparse MoE FFN, replacing dense Granite's `SwiGLUMLP` in a
+    `GraniteDecoderLayer`. Checked against HF `GraniteMoeTopKRouter`/expert dispatch
+    (`modeling_granitemoe.py`).
 
-    Router: a plain, bias-free linear projection to `num_experts` logits
-    (`blk.N.ffn_gate_inp.weight`, real GGUF shape `(num_experts, hidden_size)`), then
-    **top-k THEN softmax** - `topk` selects the `num_experts_per_tok` highest logits *first*,
-    and softmax is applied only over those `k` selected logits (renormalizing weights among just
-    the selected experts). This is the opposite order from softmax-over-all-experts-then-select,
-    an easy, real mistake to make and get numerically wrong in a way that still "runs."
+    Router: a bias-free linear to `num_experts` logits (`blk.N.ffn_gate_inp.weight`), then top-k
+    THEN softmax: `topk` picks the `num_experts_per_tok` highest logits first and softmax runs over
+    only those `k`. Softmax-over-all-then-select would still run but be numerically wrong.
 
-    Experts: `QuantizedMoEExperts` (`app/architectures/moe_experts.py`) - a standard SwiGLU FFN
-    (`down(silu(gate(x)) * up(x))`), real 3D per-projection tensors (llama.cpp's Mixtral-style
-    MoE convention), quantized-native-aware. No shared/always-on expert - the real small
-    checkpoints this was built against (`granite-3.0-1b-a400m-instruct`,
-    `granite-3.0-3b-a800m-instruct`) both use the plain `GraniteMoeForCausalLM` HF class,
-    confirmed via live `config.json` to have no `shared_intermediate_size` field (that's a
-    separate `GraniteMoeSharedForCausalLM` HF class, out of scope here). Reused unchanged for
-    Mixtral (see `llama_moe.py`'s own docstring for the proven router-math equivalence).
+    Experts: `QuantizedMoEExperts` (`moe_experts.py`), a SwiGLU FFN (`down(silu(gate(x)) * up(x))`)
+    with 3D per-projection tensors (llama.cpp's Mixtral-style layout), quantized-native-aware. No
+    shared expert: the targeted checkpoints (`granite-3.0-1b-a400m-instruct`,
+    `granite-3.0-3b-a800m-instruct`) use plain `GraniteMoeForCausalLM` (the `GraniteMoeShared`
+    variant is out of scope). Reused unchanged for Mixtral (`llama_moe.py`).
     """
 
     def __init__(
@@ -47,8 +40,8 @@ class GraniteMoeFFN(nn.Module):
 
         router_logits = self.router(x_flat)
         top_k_logits, top_k_idx = router_logits.topk(self.num_experts_per_tok, dim=-1)
-        # float32 softmax for the same numerical-stability reason RMSNorm computes in float32
-        # regardless of the surrounding activation dtype.
+        # float32 softmax, for the same stability reason RMSNorm computes in float32 whatever the
+        # activation dtype.
         top_k_weights = F.softmax(top_k_logits.float(), dim=-1).to(x.dtype)
 
         out = self.experts(x_flat, top_k_weights, top_k_idx)

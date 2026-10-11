@@ -1,23 +1,19 @@
 /*
- * Fused K-quant dot products for decode (one token): the packed bits are unpacked straight into
- * SSSE3 registers and fed to pmaddubsw, with no mx_block_unpacked round trip through memory.
- * Unpacking into that buffer was ~2/3 of a decode step's kernel time (measured on this project's
- * Sandy Bridge laptop), while prefill amortizes it over every token and keeps using it.
- *
- * Same integer math as mx_block_unpacked + mx_dot_unpacked: unsigned values times q8 summed per
- * 16-value sub-block, times the sub-block's integer scale; Q3_K/Q6_K's signed offset (4 / 32)
- * comes back out through bsums, Q4_K/Q5_K's min through bsums as before. The integer sums are
- * identical and the float folds keep the same order, so results match the unpack path exactly.
- * int16 headroom: two pmaddubsw results are added before widening - at most 2 * 2*63*127 =
- * 32004 (Q6_K), below 32767.
- *
- * Scales stay in registers the whole way: decoded into a vector, sign/zero-extended to int16 and
- * broadcast per sub-block with one pshufb (the loops are unrolled, so its lane mask is a
- * constant). Decoding them into a byte array first and reading it back cost ~a third of the Q3_K
- * kernel - most likely store-forwarding stalls on the narrow-store / wide-load round trip.
- *
- * Only built with SSSE3 (every x86-64 CPU since 2006, including this project's); elsewhere
- * mx_gemm keeps the unpack path for decode too.
+ * Fused K-quant dot products for decode (one token): packed bits are unpacked straight into SSSE3
+ * registers for pmaddubsw, skipping the mx_block_unpacked memory round trip (about 2/3 of a decode
+ * step's kernel time on the Sandy Bridge machine; prefill amortizes it and keeps it).
+ * 
+ * Same integer math as mx_block_unpacked + mx_dot_unpacked: unsigned values times q8 per 16-value
+ * sub-block, times the integer scale; Q3_K/Q6_K's offset (4 / 32) and Q4_K/Q5_K's min come back via
+ * bsums. Float folds keep the same order, so results match the unpack path exactly.
+ * int16 headroom: two pmaddubsw results are added before widening: at most 2 * 2*63*127 = 32004
+ * (Q6_K) < 32767.
+ * 
+ * Scales stay in registers: decoded into a vector, extended to int16 and broadcast per sub-block
+ * with one pshufb (unrolled loops make its mask constant). A byte-array round trip cost ~1/3 of the
+ * Q3_K kernel (likely store-forwarding stalls).
+ * 
+ * Needs SSSE3 (any x86-64 CPU since 2006); elsewhere mx_gemm uses the unpack path for decode.
  */
 #include "mx_common.h"
 
@@ -27,9 +23,7 @@ static inline __m128i mx_load(const void *p) {
     return _mm_loadu_si128((const __m128i *)p);
 }
 
-/* `value` in every byte whose bit `mask` is set, 0 elsewhere - picks a bit out of each byte with
- * and/compare instead of shifts (Sandy Bridge runs vector shifts and multiplies on the same port,
- * and the multiplies already keep it busy). */
+/* `value` in every byte whose bit `mask` is set, else 0: and/compare instead of shifts (Sandy Bridge runs vector shifts and multiplies on one port, already busy). */
 static inline __m128i mx_bit_to(__m128i bytes, __m128i mask, __m128i value) {
     return _mm_and_si128(_mm_cmpeq_epi8(_mm_and_si128(bytes, mask), mask), value);
 }
@@ -56,7 +50,7 @@ static inline int32_t mx_dot_bsums(__m128i lo, __m128i hi, const int16_t *bsums)
                                        _mm_madd_epi16(hi, mx_load(bsums + 8))));
 }
 
-/* The 4 words as one vector - the compiler keeps them in registers, no memory round trip. */
+/* The 4 words as one vector, kept in registers. */
 static inline __m128i mx_words(const uint32_t *w) {
     return _mm_setr_epi32((int)w[0], (int)w[1], (int)w[2], (int)w[3]);
 }
@@ -111,7 +105,7 @@ float mx_vec_dot_q3_k(const uint8_t *row, const mx_block_q8_k *y, int nb) {
     return sumf;
 }
 
-/* Q4_K/Q5_K share everything but Q5_K's 5th bit (`has_qh`: its qh[32] after the scales). */
+/* Q4_K/Q5_K share everything but Q5_K's 5th bit (`has_qh`: qh[32] after the scales). */
 static inline float mx_vec_dot_q45_k(const uint8_t *row, const mx_block_q8_k *y, int nb,
                                      size_t block_bytes, int has_qh) {
     const __m128i m4 = _mm_set1_epi8(0x0F);
@@ -189,8 +183,7 @@ float mx_vec_dot_q6_k(const uint8_t *row, const mx_block_q8_k *y, int nb) {
                 const __m128i la = mx_load(ql + 16 * k);
                 const __m128i lb = mx_load(ql + 32 + 16 * k);
                 const __m128i h = mx_load(qh + 16 * k);
-                /* The four 32-lane groups of mx_unpack_q6_k, 16 lanes (k) at a time. Each qh
-                 * bit pair goes to bits 4-5 with one shift at most (bits 4-5 already are). */
+                /* The four 32-lane groups of mx_unpack_q6_k, 16 lanes (k) at a time. Each qh bit pair reaches bits 4-5 with at most one shift. */
                 const __m128i g0 = _mm_or_si128(_mm_and_si128(la, m4),
                                                 _mm_and_si128(_mm_slli_epi16(h, 4), m30));
                 const __m128i g1 = _mm_or_si128(_mm_and_si128(lb, m4),

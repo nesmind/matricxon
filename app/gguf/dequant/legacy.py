@@ -30,10 +30,8 @@ class Q8_0Strategy(QuantStrategy):
 
 
 class Q4_0Strategy(QuantStrategy):
-    """Block layout: {ggml_half d; uint8_t qs[16];} (2 nibbles/byte) ->
-
-    value[i] = (nibble - 8) * d, for i in [0, 32).
-    """
+    """Block layout: {ggml_half d; uint8_t qs[16];} (2 nibbles/byte) -> value[i] = (nibble - 8) * d,
+    for i in [0, 32)."""
 
     block_size = _QK4_0
     type_size = 2 + _QK4_0 // 2
@@ -58,10 +56,8 @@ class Q4_0Strategy(QuantStrategy):
 
 
 class Q4_1Strategy(QuantStrategy):
-    """Block layout: {ggml_half d; ggml_half m; uint8_t qs[16];} ->
-
-    value[i] = nibble * d + m, for i in [0, 32).
-    """
+    """Block layout: {ggml_half d; ggml_half m; uint8_t qs[16];} -> value[i] = nibble * d + m, for i
+    in [0, 32)."""
 
     block_size = _QK4_1
     type_size = 2 + 2 + _QK4_1 // 2
@@ -87,11 +83,8 @@ class Q4_1Strategy(QuantStrategy):
 
 
 class Q5_0Strategy(QuantStrategy):
-    """Block layout: {ggml_half d; uint8_t qh[4]; uint8_t qs[16];} ->
-
-    5-bit quant = 4-bit nibble (qs) + a 5th bit from qh's 32-bit mask,
-    value[i] = (quant - 16) * d, for i in [0, 32).
-    """
+    """Block layout: {ggml_half d; uint8_t qh[4]; uint8_t qs[16];} -> 5-bit quant = 4-bit nibble
+    (qs) + a 5th bit from qh's 32-bit mask, value[i] = (quant - 16) * d, for i in [0, 32)."""
 
     block_size = _QK5_0
     type_size = 2 + 4 + _QK5_0 // 2
@@ -121,11 +114,9 @@ class Q5_0Strategy(QuantStrategy):
 
 
 class Q5_1Strategy(QuantStrategy):
-    """Block layout: {ggml_half d; ggml_half m; uint8_t qh[4]; uint8_t qs[16];} ->
-
-    5-bit quant = 4-bit nibble (qs) + a 5th bit from qh's 32-bit mask,
-    value[i] = quant * d + m, for i in [0, 32).
-    """
+    """Block layout: {ggml_half d; ggml_half m; uint8_t qh[4]; uint8_t qs[16];} -> 5-bit quant =
+    4-bit nibble (qs) + a 5th bit from qh's 32-bit mask, value[i] = quant * d + m, for i in [0,
+    32)."""
 
     block_size = _QK5_1
     type_size = 2 + 2 + 4 + _QK5_1 // 2

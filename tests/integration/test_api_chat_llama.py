@@ -1,11 +1,8 @@
-"""M10: /api/chat against a tiny but real llama GGUF (see
-
-tests/tiny_gguf_llama.py) - the plain-`llama`-architecture equivalent of
-test_api_chat_real_pipeline.py. Real GGUFModelLoader/LlamaArchitecture/
-SentencePieceTokenizer/ChatEngine/NDJSON stack, not mocked. See
-scripts/oracle/validate_sentencepiece_tokenizer.py and the manual real-weight
-check (ROADMAP.md's M10 llama entry) for the full real-model proof.
-"""
+"""M10: /api/chat against a tiny llama GGUF (tests/tiny_gguf_llama.py), the plain-`llama` equivalent
+of test_api_chat_real_pipeline.py. Real
+GGUFModelLoader/LlamaArchitecture/SentencePieceTokenizer/ChatEngine/NDJSON stack, not mocked. Full
+real-model proof: tools/oracle/validate_sentencepiece_tokenizer.py and the manual real-weight
+check."""
 
 import json
 
@@ -75,10 +72,10 @@ class TestLlamaChatHappyPath:
 
 
 class TestLlamaChatTiedEmbeddings:
-    """Real bug (2026-09-22): a real `Llama-3.2-3B-Instruct-GGUF` pull has no separate
-    `output.weight` tensor (`tie_word_embeddings: true`) - `/api/chat` crashed mid-stream with
-    `UnknownModelError: GGUF file has no tensor named 'output.weight'`. See
-    `tiny_llama_tied_embeddings_model`/`LlamaArchitecture`'s own docstring for the fix."""
+    """Bug: a `Llama-3.2-3B-Instruct-GGUF` pull has no separate `output.weight`
+    (`tie_word_embeddings: true`), and `/api/chat` crashed mid-stream with `UnknownModelError: GGUF
+    file has no tensor named 'output.weight'`. Fix:
+    `tiny_llama_tied_embeddings_model`/`LlamaArchitecture`."""
 
     def test_streams_ndjson_chunks_ending_in_a_done_line(
         self, client: TestClient, tiny_llama_tied_embeddings_model: InstalledModel

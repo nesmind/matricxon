@@ -1,12 +1,11 @@
-"""Qwen3.5 / Qwen3-VL image fusion: the counterpart of `vision_fusion.build_prompt_with_images`
-for a `qwen3vl_merger` mmproj. Each `[IMG]` marker (see `ChatTemplatePromptBuilder`) becomes
+"""Qwen3.5 / Qwen3-VL image fusion: the counterpart of `vision_fusion.build_prompt_with_images` for
+a `qwen3vl_merger` mmproj. Each `[IMG]` marker (`ChatTemplatePromptBuilder`) becomes
 `<|vision_start|>` + one `<|image_pad|>` per merged image token + `<|vision_end|>`, the image goes
-through `Qwen3VLVisionEncoder`, and the prompt gets the model's 3-axis M-RoPE positions: text
-tokens advance all three axes together; an image's tokens share one temporal index and take
-row/column indices on the other two, after which text resumes at `start + max(rows, cols)` (HF
+through `Qwen3VLVisionEncoder`, and the prompt gets the model's 3-axis M-RoPE positions: text tokens
+advance all three axes together; an image's tokens share one temporal index and take row/column
+indices on the other two, after which text resumes at `start + max(rows, cols)` (HF
 `get_rope_index`; llama.cpp's mtmd does the same). `position_delta` is how far later decode
-positions sit below the cache length.
-"""
+positions sit below the cache length."""
 
 from dataclasses import dataclass
 
@@ -27,7 +26,7 @@ _encoder_cache: dict[tuple[str, str], Qwen3VLVisionEncoder] = {}
 class FusedPrompt:
     token_ids: list[int]
     image_embeddings: list[tuple[int, torch.Tensor]]
-    position_ids: torch.Tensor  # (3, len(token_ids))
+    position_ids: torch.Tensor
     position_delta: int
 
 
@@ -53,7 +52,7 @@ def build_qwen3vl_prompt(
     segments = prompt.split(IMAGE_MARKER)
 
     token_ids: list[int] = []
-    positions: list[torch.Tensor] = []  # each (3, n)
+    positions: list[torch.Tensor] = []
     embeddings: list[tuple[int, torch.Tensor]] = []
     next_pos = 0
 

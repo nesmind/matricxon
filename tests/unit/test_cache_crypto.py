@@ -1,11 +1,18 @@
 import json
+import os
 import stat
 from pathlib import Path
 
 import pytest
 
-from app.runtime.cache_crypto import CacheCipher, CacheDecryptError, CacheKeyStore
+from app.runtime.cache_crypto import (
+    CacheCipher,
+    CacheDecryptError,
+    CacheKeyMissingError,
+    CacheKeyStore,
+)
 from app.runtime.cache_policy import PersistencePolicy
+from app.runtime.policy_store import FilePolicyStore, PolicyStore
 
 KEY = bytes(range(32))
 
@@ -37,10 +44,10 @@ def test_prefix_fingerprints_match_exactly_on_shared_whole_blocks() -> None:
     cipher = CacheCipher(KEY)
     a = cipher.prefix_fingerprints(list(range(20)), 8)
     b = cipher.prefix_fingerprints(list(range(16)) + [999, 998, 997, 996], 8)
-    assert len(a) == 2 and len(b) == 2  # the trailing partial block is not hashed
+    assert len(a) == 2 and len(b) == 2
     assert a == b
     c = cipher.prefix_fingerprints([5] + list(range(1, 20)), 8)
-    assert c[0] != a[0] and c[1] != a[1]  # a different first block changes every later hash
+    assert c[0] != a[0] and c[1] != a[1]
     assert CacheCipher(bytes(32)).prefix_fingerprints(list(range(20)), 8) != a
 
 
@@ -48,7 +55,7 @@ def test_key_store_generates_a_private_key_file_once(tmp_path: Path) -> None:
     key_file = tmp_path / "sub" / "k.key"
     sealed = CacheKeyStore(key_file).load().seal(b"x")
     assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
-    assert CacheKeyStore(key_file).load().open(sealed) == b"x"  # same key on the next start
+    assert CacheKeyStore(key_file).load().open(sealed) == b"x"
 
 
 def test_key_store_env_passphrase_wins(tmp_path: Path) -> None:
@@ -73,3 +80,45 @@ def test_policy_ignores_a_corrupt_file_and_clamps(tmp_path: Path) -> None:
     path.write_text(json.dumps({"enabled": True, "budget_mb": -4, "ttl_hours": 0}))
     policy = PersistencePolicy.load(path, False, 5, 3)
     assert (policy.budget_mb, policy.ttl_hours) == (0, 1)
+
+
+def test_cluster_node_never_creates_a_key(tmp_path: Path) -> None:
+    key_file = tmp_path / "k.key"
+    with pytest.raises(CacheKeyMissingError):
+        CacheKeyStore(key_file, None, allow_create=False).load()
+    assert not key_file.exists()
+
+
+def test_cluster_node_uses_a_provisioned_key_file_or_env(tmp_path: Path) -> None:
+    sealed = CacheKeyStore(tmp_path / "k.key").load().seal(b"x")
+    assert CacheKeyStore(tmp_path / "k.key", None, False).load().open(sealed) == b"x"
+    env = CacheKeyStore(tmp_path / "none.key", "pass", False).load().seal(b"y")
+    assert CacheKeyStore(tmp_path / "x.key", "pass").load().open(env) == b"y"
+
+
+class _MemoryStore(PolicyStore):
+    def __init__(self, data: dict | None = None) -> None:
+        self.data = data
+
+    def read(self) -> dict | None:
+        return self.data
+
+    def write(self, data: dict) -> None:
+        self.data = data
+
+
+def test_policy_works_on_any_policy_store(tmp_path: Path) -> None:
+    store = _MemoryStore()
+    policy = PersistencePolicy.from_store(store, True, 100, 24)
+    policy.update(budget_mb=9)
+    assert store.data == {"enabled": True, "budget_mb": 9, "ttl_hours": 24}
+    assert PersistencePolicy.from_store(store, False, 1, 1).budget_mb == 9
+
+
+def test_file_policy_store_replaces_atomically_and_leaves_no_tmp(tmp_path: Path) -> None:
+    store = FilePolicyStore(tmp_path / "s" / "p.json")
+    assert store.read() is None
+    store.write({"a": 1})
+    store.write({"a": 2})
+    assert store.read() == {"a": 2}
+    assert os.listdir(tmp_path / "s") == ["p.json"]

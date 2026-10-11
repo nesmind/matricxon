@@ -26,17 +26,16 @@ logger = logging.getLogger(__name__)
 class Mistral3TextArchitecture(ModelArchitecture):
     """The text-decoder half of GGUF's "mistral3" arch.
 
-    Vision tower (`v.*`) and multimodal projector (`mm.*`) tensors are never
-    requested from the loader below, so they're never read or dequantized -
-    this is the mechanism behind matricxon's v1 "accept-and-ignore images"
-    decision, not a separate flag. See mistral3_layers.py for the decoder
-    layer/attention/MLP building blocks this assembles.
+    Vision tower (`v.*`) and multimodal projector (`mm.*`) tensors are never requested from the
+    loader, so never read or
+    dequantized: the mechanism behind matricxon's v1 "accept-and-ignore images" decision. Building
+    blocks: mistral3_layers.py.
     """
 
     NAME = "mistral3"
     supports_context_shift = True
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
+    SUPPORTS_BATCHED_DECODE = True
 
     def __init__(
         self,
@@ -47,16 +46,16 @@ class Mistral3TextArchitecture(ModelArchitecture):
     ) -> None:
         super().__init__()
         layer_dtypes = layer_dtypes or {}
-        # See Settings.enable_quantized_native_compute's own docstring - a real, permanent,
-        # user-selectable choice, not a temporary rollout flag. When on, all 7 per-layer
-        # projections go quantized-native - `q_proj`/`k_proj` with `unpermute_rope_rows` applied
-        # to their packed rows (see `PackedWeightLoading._load_projection`) - and so does the
-        # tied token_embd/lm_head table (`QuantizedEmbedding`).
+        # See Settings.enable_quantized_native_compute: a permanent user-selectable choice, not a
+        # rollout flag. When on, all 7
+        # per-layer projections go quantized-native (`q_proj`/`k_proj` with `unpermute_rope_rows` on
+        # their packed rows;
+        # `PackedWeightLoading._load_projection`), and so does the tied token_embd/lm_head table
+        # (`QuantizedEmbedding`).
         self._enable_quantized_native = enable_quantized_native
         self.n_embd = metadata.get_u32(metadata.arch_key("embedding_length"))
         self.n_head = metadata.get_u32(metadata.arch_key("attention.head_count"))
-        # Falls back to n_head when absent (no GQA) - see LlamaArchitecture's own docstring for
-        # the real file that confirmed this gap.
+        # Falls back to n_head when absent (no GQA); see LlamaArchitecture.
         self.n_head_kv = metadata.get_u32(metadata.arch_key("attention.head_count_kv"), self.n_head)
         self.head_dim = metadata.get_u32(metadata.arch_key("attention.key_length"))
         self.n_layer = metadata.get_u32(metadata.arch_key("block_count"))
@@ -64,12 +63,12 @@ class Mistral3TextArchitecture(ModelArchitecture):
         self.rms_eps = metadata.get_f32(metadata.arch_key("attention.layer_norm_rms_epsilon"))
         self.vocab_size = metadata.get_u32(metadata.arch_key("vocab_size"))
 
-        # beta_fast/beta_slow: real GGUFs write these as `yarn_beta_fast`/`yarn_beta_slow`
-        # (confirmed against a real Ministral-3 pull) - not the unprefixed `beta_fast`/
-        # `beta_slow` HF's own rope_scaling config dict uses, which this originally (wrongly)
-        # assumed carried over 1:1 into GGUF. Falls back to the unprefixed name in case some
-        # other real conversion omits the prefix, then to HF's own _compute_yarn_parameters
-        # defaults (32.0/1.0) if neither is present, rather than crashing on `None * int`.
+        # beta_fast/beta_slow: GGUFs write `yarn_beta_fast`/`yarn_beta_slow` (seen in a Ministral-3
+        # pull), not the unprefixed
+        # names of HF's rope_scaling dict, as this first assumed. Falls back to the unprefixed name
+        # in case another conversion
+        # omits the prefix, then to HF's `_compute_yarn_parameters` defaults (32.0/1.0), not
+        # crashing on `None * int`.
         beta_fast = metadata.get_f32(metadata.arch_key("rope.scaling.yarn_beta_fast"))
         if beta_fast is None:
             beta_fast = metadata.get_f32(metadata.arch_key("rope.scaling.beta_fast"), 32.0)
@@ -77,9 +76,10 @@ class Mistral3TextArchitecture(ModelArchitecture):
         if beta_slow is None:
             beta_slow = metadata.get_f32(metadata.arch_key("rope.scaling.beta_slow"), 1.0)
 
-        # Kept around (plain floats/ints, not tensors - unaffected by _construct_without_init's
-        # meta-device trick) so _rebuild_derived_buffers can recreate self.rope for real afterward,
-        # without re-parsing metadata or duplicating the beta_fast/beta_slow fallback logic above.
+        # Kept (plain floats/ints, unaffected by _construct_without_init's meta-device trick) so
+        # _rebuild_derived_buffers can
+        # recreate self.rope without re-parsing metadata or duplicating the beta_fast/beta_slow
+        # fallback.
         self._rope_kwargs = dict(
             head_dim=self.head_dim,
             rope_theta=metadata.get_f32(metadata.arch_key("rope.freq_base")),
@@ -94,12 +94,12 @@ class Mistral3TextArchitecture(ModelArchitecture):
         )
         self.rope = YarnRotaryEmbedding(**self._rope_kwargs)
 
-        # Per-layer/per-group dtype overrides (see ModelManager._load's mixed-precision branch,
-        # app.models.load_dtype.plan_layer_dtypes) - `layer_dtypes` empty (the default) means every
-        # group falls back to the uniform `dtype`, i.e. today's exact single-dtype behavior.
-        # `self._layer_dtypes` is kept (not re-derived from each layer's own live parameter dtype)
-        # so `_forward_impl` has an O(1) list lookup for its required inter-layer dtype casts (see
-        # that method's own docstring for why those casts are necessary, not optional).
+        # Per-layer/per-group dtype overrides (ModelManager._load's mixed-precision branch,
+        # app.models.load_dtype.plan_layer_dtypes); empty `layer_dtypes` means every group uses the
+        # uniform `dtype`.
+        # `self._layer_dtypes` is kept (not re-derived from each layer's parameter dtype) so
+        # `_forward_impl` has an O(1) lookup
+        # for its required inter-layer dtype casts (see its docstring).
         embed_dtype = layer_dtypes.get(NON_LAYER_GROUP, dtype)
         self._layer_dtypes = [layer_dtypes.get(f"blk.{i}", dtype) for i in range(self.n_layer)]
 
@@ -119,22 +119,20 @@ class Mistral3TextArchitecture(ModelArchitecture):
             ]
         )
         self.output_norm = RMSNorm(self.n_embd, self.rms_eps, dtype=embed_dtype)
-        # No separate "output.weight" tensor in GGUF for this model - lm_head
-        # is tied to token_embd (confirmed via HF config: tie_word_embeddings=true).
+        # No "output.weight" in the GGUF: lm_head is tied to token_embd (HF config:
+        # tie_word_embeddings=true).
 
     def _rebuild_derived_buffers(self) -> None:
-        """self.rope.inv_freq is a real computed value, not a GGUF tensor from_gguf ever
-        `.copy_()`'s in - see ModelArchitecture._rebuild_derived_buffers's own docstring for why
-        this has to be recreated for real after _construct_without_init."""
+        """self.rope.inv_freq is a computed value, not a GGUF tensor from_gguf `.copy_`'s in;
+        recreated after
+        _construct_without_init (ModelArchitecture._rebuild_derived_buffers).
+        """
         self.rope = YarnRotaryEmbedding(**self._rope_kwargs)
 
     @property
     def kv_cache_layer_shapes(self) -> list[tuple[int, int]]:
-        """Same `(n_head_kv, head_dim)` pair repeated per layer - see
-
-        `KVCache`'s own docstring for why this is a per-layer list at all
-        (Gemma4's real per-layer-type head dims need it; mistral3's don't).
-        """
+        """The same `(n_head_kv, head_dim)` pair per layer (`KVCache` says why it's per layer:
+        Gemma4's per-layer-type head dims need it; mistral3's don't)."""
         return [(self.n_head_kv, self.head_dim)] * self.n_layer
 
     @classmethod
@@ -149,23 +147,17 @@ class Mistral3TextArchitecture(ModelArchitecture):
         layer_dtypes: dict[str, torch.dtype] | None = None,
         enable_quantized_native: bool = False,
     ) -> "Mistral3TextArchitecture":
-        """`dtype` sizes the module's own real parameters (float32 by
-        default, matching the M3 oracle's validated numerics). It's
-        independent of `loader`'s own dequant dtype - `.copy_()` below casts
-        regardless - and is a plain constructor argument rather than a
-        `torch.set_default_dtype()` context, which would be a data race if
-        another model's `ModelWorker` thread is concurrently building
-        default-dtype-dependent tensors of its own during a forward pass.
+        """`dtype` sizes the module's parameters (float32 by default, the M3 oracle's validated
+        numerics). It is independent of `loader`'s dequant dtype (`.copy_` casts) and is an
+        argument, not a `torch.set_default_dtype` context, which would race if another model's
+        `ModelWorker` thread builds default-dtype tensors mid-forward.
 
-        `layer_dtypes` (see app.models.load_dtype.plan_layer_dtypes) lets ModelManager give
-        individual decoder layers - and the tied embedding/lm_head, keyed by
-        app.models.load_dtype.NON_LAYER_GROUP - a dtype different from the uniform `dtype`
-        fallback, so a model that doesn't fully fit float32 can still run as many of its layers at
-        float32 speed as actually fit, instead of the whole model falling back to bf16 (see
-        ModelManager._load's own docstring on why this exists and when it's actually used - not
-        every load computes or needs this).
+        `layer_dtypes` (app.models.load_dtype.plan_layer_dtypes) lets ModelManager give individual
+        decoder layers, and the tied embedding/lm_head (key NON_LAYER_GROUP), a dtype other than
+        `dtype`, so a model that doesn't fully fit float32 runs as many layers at float32 speed as
+        fit instead of all bf16 (see ModelManager._load).
 
-        `enable_quantized_native` - see Settings.enable_quantized_native_compute's own docstring.
+        `enable_quantized_native`: see Settings.enable_quantized_native_compute.
         """
         model = cls._construct_without_init(
             loader.metadata,
@@ -248,20 +240,13 @@ class Mistral3TextArchitecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        """Explicit `x.to(...)` casts before each layer and before the final tied lm_head matmul
-        are required, not defensive belt-and-suspenders: with uniform-dtype loading (`layer_dtypes`
-        unset) every one of these casts is a no-op (source and target dtype already match), but
-        under mixed per-layer dtypes, `RMSNorm.forward` (app/architectures/layers.py) casts its
-        output back to *its input's* dtype, not necessarily its own weight's dtype - so the
-        residual stream `x` can silently carry the previous layer's dtype into a layer built with a
-        different one. Elementwise ops (RMSNorm's own internal multiply) implicitly promote mixed
-        dtypes without erroring, but the matmul inside the next layer's nn.Linear does not - it
-        raises a real RuntimeError on a dtype mismatch, confirmed by reading both code paths (see
-        ModelManager._load's own docstring for the full reasoning behind mixed per-layer dtypes at
-        all). apply_rotary_pos_emb already defends against the equivalent cos/sin-vs-q/k case the
-        same way (casts to q.dtype) - these are that same pattern, applied at layer boundaries.
-        """
-        del image_embeddings  # real vision support is LlamaArchitecture-only - see base.py
+        """The `x.to(...)` casts before each layer and before the tied lm_head matmul are needed:
+        with uniform dtypes (`layer_dtypes` unset) they are no-ops, but with mixed per-layer dtypes
+        `RMSNorm.forward` casts its output to its input's dtype, so the residual stream can carry
+        the previous layer's dtype into a layer built with another. Elementwise ops promote, but the
+        next nn.Linear matmul raises RuntimeError on a mismatch (see ModelManager._load).
+        apply_rotary_pos_emb guards cos/sin vs q/k likewise."""
+        del image_embeddings
         _, seq_len = input_ids.shape
         logger.debug("forward start: seq_len=%d", seq_len)
         if position_ids is None:

@@ -6,11 +6,8 @@ from app.gguf.tensor_info import GGUFTensorInfo
 
 
 class GGUFMemoryMap:
-    """Zero-copy raw byte access into a GGUF file's tensor data section.
-
-    A multi-GB file is never read into RAM as a whole - callers slice out one
-    tensor's raw (still-quantized) bytes at a time via a memoryview.
-    """
+    """Zero-copy raw byte access into a GGUF file's tensor data section. A multi-GB file is never
+    read into RAM whole; callers slice one tensor's still-quantized bytes via a memoryview."""
 
     def __init__(self, path: Path) -> None:
         self._file = open(path, "rb")

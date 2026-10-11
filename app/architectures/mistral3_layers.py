@@ -16,11 +16,10 @@ logger = logging.getLogger(__name__)
 def _causal_mask(
     q_len: int, kv_len: int, cache_offset: int, device: torch.device | None = None
 ) -> torch.Tensor:
-    """query i (local index) may attend to key j iff j <= i + cache_offset -
-    i.e. its own absolute position and everything before it. `cache_offset=0`
-    and `q_len == kv_len` reduces to plain causal masking (prefill); a
-    one-token decode step (`q_len=1`) attends to the whole existing cache
-    plus itself.
+    """Query i (local index) may attend to key j iff j <= i + cache_offset: its own absolute
+    position and everything
+    before. `cache_offset=0` and `q_len == kv_len` is plain causal masking (prefill); a one-token
+    decode step (`q_len=1`) attends to the whole cache plus itself.
     """
     q_idx = torch.arange(q_len, device=device).unsqueeze(1)
     kv_idx = torch.arange(kv_len, device=device).unsqueeze(0)
@@ -64,22 +63,21 @@ class GroupedQueryAttention(nn.Module):
         if kv_cache is not None:
             cache_offset = kv_cache.length
             k, v = kv_cache.update(layer_idx, k, v)
-            # KVCache stores every layer in one fixed dtype decided by its own caller (see
-            # ChatEngine.stream) - usually not an issue when every layer shares one model-wide
-            # dtype, but under mixed per-layer dtypes (see ModelManager._load's own docstring)
-            # that fixed cache dtype can differ from *this* layer's own q/k/v dtype.
-            # scaled_dot_product_attention requires q/k/v to share one dtype (unlike RMSNorm's
-            # elementwise ops, it does not implicitly promote a mismatch) - cast to q's dtype here,
-            # the same defensive pattern apply_rotary_pos_emb already uses for cos/sin.
+            # KVCache stores every layer in one dtype decided by its caller (ChatEngine.stream):
+            # fine with one model-wide dtype, but
+            # under mixed per-layer dtypes (ModelManager._load) it can differ from *this* layer's
+            # q/k/v dtype.
+            # scaled_dot_product_attention needs one dtype for q/k/v (it doesn't promote like
+            # RMSNorm's elementwise ops): cast to q's, as apply_rotary_pos_emb does for cos/sin.
             k = k.to(q.dtype)
             v = v.to(q.dtype)
         else:
             cache_offset = 0
 
-        # enable_gqa: SDPA shares each k/v head across its query-head group itself - no
-        # repeat_interleave copy of the whole cached k/v per step (measured on this project's
-        # laptop: at a 200-token context that copy cost ~90 ms per generated token over 28
-        # layers, vs ~7 ms without it; the gap grows with the conversation).
+        # enable_gqa: SDPA shares each k/v head across its query-head group itself, with no
+        # repeat_interleave copy of the cached
+        # k/v per step (measured on the dev machine: at 200 tokens that copy cost ~90 ms per
+        # generated token over 28 layers vs ~7 ms without; the gap grows with the conversation).
         if kv_cache is not None:
             out = fused_cached_attention(q, k, v, cache_offset)
             if out is None:
@@ -92,18 +90,10 @@ class GroupedQueryAttention(nn.Module):
 
 
 class Mistral3DecoderLayer(nn.Module):
-    """Same pre-norm two-block layout `GraniteDecoderLayer` (`granite_layers.py`) shares - `mlp`
-
-    is built by the caller, not this class (dependency injection), for the identical real reason
-    that class's own docstring gives: dense `Mistral3TextArchitecture`/`LlamaArchitecture` inject
-    a plain `SwiGLUMLP`, a real Mixtral-style MoE `llama`-arch checkpoint (confirmed via
-    llama.cpp's own real converter, 2026-09-30: `MixtralForCausalLM` registers onto the exact
-    same `LlamaModel` conversion class as plain Llama, `general.architecture` stays `"llama"` -
-    there is no separate `mixtral` GGUF architecture string at all) injects a `GraniteMoeFFN`
-    instead (`llama.py`'s own docstring has the full real-source verification) - this class has
-    zero MoE-awareness either way, so the attention block is written and tested exactly once for
-    both.
-    """
+    """Same pre-norm two-block layout as `GraniteDecoderLayer` (`granite_layers.py`). `mlp` is
+    injected by the caller: dense `Mistral3TextArchitecture`/`LlamaArchitecture` inject a
+    `SwiGLUMLP`, and a Mixtral-style `llama`-arch MoE checkpoint injects a `GraniteMoeFFN`
+    (`llama.py`). The attention block is written and tested once for both."""
 
     def __init__(
         self,

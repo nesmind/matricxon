@@ -18,39 +18,26 @@ logger = logging.getLogger(__name__)
 
 
 class Qwen3Architecture(ModelArchitecture):
-    """Alibaba Qwen3 - `qwen2`'s shape (plain GQA/RoPE/SwiGLU) with no bias anywhere (confirmed:
-    real Qwen3 GGUFs have no `attn_*.bias` tensors at all, not just zeroed - `config.attention_bias
-    = False` on every real small checkpoint) plus one real structural addition confirmed against
-    HF `transformers`' own `modeling_qwen3.py` (2026-09-22): **QK-norm** - a per-head-dim `RMSNorm`
-    applied to both q and k right after the reshape-to-heads split, before RoPE (see
-    `QwenAttention`'s own docstring for the exact placement).
+    """Alibaba Qwen3: `qwen2`'s shape (plain GQA/RoPE/SwiGLU) with no bias anywhere (no
+    `attn_*.bias` tensors; `config.attention_bias = False`) plus QK-norm (HF `modeling_qwen3.py`):
+    a per-head-dim `RMSNorm` on q and k after the reshape to heads, before RoPE
+    (`QwenAttention`).
 
-    `head_dim` **must** be read from real GGUF metadata (`qwen3.attention.key_length`) rather than
-    derived from `n_embd // n_head` - real Qwen3-0.6B has `hidden_size=1024, num_attention_heads
-    =16` (naive division gives 64) but a real `head_dim=128`, confirmed via both HF's own
-    config.json and live GGUF metadata bytes range-read from a real downloaded file. This
-    architecture's own version of Granite's HF-vs-GGUF naming trap - the same defensive
-    `get_u32(..., default=...)` read this project already uses handles both this case (falls
-    through to the real value, present) and `qwen2`'s (falls back to the derived value, since the
-    key is typically absent there) with the identical code.
+    `head_dim` must come from GGUF metadata (`qwen3.attention.key_length`), not `n_embd // n_head`:
+    Qwen3-0.6B has `hidden_size=1024, num_attention_heads=16` (giving 64) but `head_dim=128`. The
+    `get_u32(..., default=...)` read handles this and `qwen2`'s usually-absent key with the same
+    code.
 
-    **None of `attn_q.weight`/`attn_k.weight`/`attn_q_norm.weight`/`attn_k_norm.weight` need
-    `unpermute_rope_rows`** - the reasoning that they would (llama.cpp's own C++ pipeline applies
-    `q_norm` and RoPE directly to the still-GGUF-native-ordered tensor, so matricxon undoing that
-    ordering would need `q_norm`'s weight undone identically) turned out to rest on a false
-    premise: real-weight oracle validation on `qwen2` (this architecture's sibling, same shared
-    `unpermute_rope_rows`-listing docstring claim) proved empirically that real Qwen weights don't
-    need this reordering at all - applying it silently turned a working model into one that only
-    ever generated garbage (confirmed live: never predicted "Paris" after "The capital of France
-    is", despite every other check - tokenizer round-trip, KV-cache self-consistency, rope_theta -
-    passing cleanly). `unpermute_rope_rows`'s own docstring listing Qwen as a model that needs it
-    was simply wrong for this architecture family. Fixed the same way here, verified against
-    `scripts/oracle/validate_qwen3.py`.
+    None of `attn_q.weight`/`attn_k.weight`/`attn_q_norm.weight`/`attn_k_norm.weight` needs
+    `unpermute_rope_rows`. The reasoning that they would (llama.cpp applies `q_norm` and RoPE to the
+    GGUF-native-ordered tensor) rested on a false premise: oracle validation on `qwen2` showed Qwen
+    weights need no reordering, and applying it produced garbage. Verified with
+    `tools/oracle/validate_qwen3.py`.
     """
 
     NAME = "qwen3"
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
+    SUPPORTS_BATCHED_DECODE = True
 
     def __init__(
         self,
@@ -66,8 +53,7 @@ class Qwen3Architecture(ModelArchitecture):
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
-        # Falls back to n_head when absent (no GQA) - see LlamaArchitecture's own docstring for
-        # the real file that confirmed this gap.
+        # Falls back to n_head when absent (no GQA); see LlamaArchitecture.
         self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
         self.head_dim = metadata.get_u32(arch("attention.key_length"), self.n_embd // self.n_head)
         self.n_layer = metadata.get_u32(arch("block_count"))
@@ -191,7 +177,7 @@ class Qwen3Architecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # no real vision-language Qwen3 checkpoint exists yet to fuse
+        del image_embeddings
         _, seq_len = input_ids.shape
         if position_ids is None:
             position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)

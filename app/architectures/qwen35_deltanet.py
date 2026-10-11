@@ -12,22 +12,21 @@ def _l2norm(x: torch.Tensor) -> torch.Tensor:
 
 
 class Qwen35GatedDeltaNet(nn.Module):
-    """Qwen3.5's linear-attention mixer (3 of every 4 layers) - a causal depthwise conv over a
-    fused [q | k | v] projection, then the gated delta rule (`gated_delta_rule`), then a per-head
-    RMSNorm gated by `silu(z)`. Confirmed against the real `qwen35` GGUF header (tensor names and
-    shapes of `Qwen3.5-9B`, 2026-10-01) and HF's `Qwen3NextGatedDeltaNet`.
+    """Qwen3.5's linear-attention mixer (3 of every 4 layers): a causal depthwise conv over a fused
+    [q | k | v] projection, the gated delta rule (`gated_delta_rule`), then a per-head RMSNorm gated
+    by `silu(z)`. Checked against the `qwen35` GGUF header and HF's `Qwen3NextGatedDeltaNet`.
 
-    GGUF tensor -> role: `attn_qkv` (fused q/k/v), `attn_gate` (z), `ssm_beta` (write strength,
-    through a sigmoid), `ssm_alpha` (decay input), `ssm_dt.bias`, `ssm_a`, `ssm_conv1d` (no bias),
-    `ssm_norm` (per value-head-dim weight, used as-is - no `1 +`), `ssm_out`.
+    GGUF tensor -> role: `attn_qkv` (fused q/k/v), `attn_gate` (z), `ssm_beta` (write strength, via
+    sigmoid), `ssm_alpha` (decay input), `ssm_dt.bias`, `ssm_a`, `ssm_conv1d` (no bias), `ssm_norm`
+    (per value-head-dim weight, used as is, no `1 +`), `ssm_out`.
 
-    `ssm_a` is used directly as `A` (llama.cpp's converter already bakes in HF's `-exp(A_log)`,
-    same as nemotron_h's `ssm_a`): `g = A * softplus(alpha + dt_bias)`.
+    `ssm_a` is used directly as `A` (llama.cpp bakes in HF's `-exp(A_log)`, as nemotron_h): `g = A *
+    softplus(alpha + dt_bias)`.
 
-    Key heads (`n_k_heads`) are fewer than value heads (`n_v_heads`); each is shared across
-    `n_v_heads // n_k_heads` value heads. `tiled_heads` picks the expansion order: True tiles
-    (value head j uses key head j % n_k_heads, llama.cpp's ggml_repeat layout), False interleaves
-    (j // ratio, HF's layout).
+    Key heads (`n_k_heads`) are fewer than value heads (`n_v_heads`); each is shared by `n_v_heads
+    // n_k_heads` value heads. `tiled_heads` picks the expansion: True tiles (value head j uses key
+    head j % n_k_heads, llama.cpp's ggml_repeat layout), False interleaves (j // ratio, HF's
+    layout).
     """
 
     def __init__(
@@ -80,12 +79,13 @@ class Qwen35GatedDeltaNet(nn.Module):
         return F.silu(out).transpose(1, 2), new_state
 
     def forward(self, x: torch.Tensor, hybrid_cache: object, layer_idx: int) -> torch.Tensor:
-        """`x` is `(1, T, hidden)` - one sequence, any number of tokens - or `(B, 1, hidden)` for a
-        batched decode step: one new token for each of `B` sequences (see runtime/batch_cache.py).
-        The projections and norms run over everything at once; the recurrence, which carries each
-        sequence's own state, runs per sequence."""
+        """`x` is `(1, T, hidden)` (one sequence, any tokens) or `(B, 1, hidden)` for a batched
+        decode step: one new token per `B`
+        sequences (runtime/batch_cache.py). Projections and norms run over everything at once; the
+        recurrence, carrying each sequence's own state, runs per sequence.
+        """
         batch, seq_len, _ = x.shape
-        conv_state, ssm_state = hybrid_cache.mamba_state(layer_idx)  # (B, k-1, C), (B, H, dk, dv)
+        conv_state, ssm_state = hybrid_cache.mamba_state(layer_idx)
         mixed, new_conv_state = self._causal_conv(self.qkv_proj(x), conv_state)
 
         q, k, v = mixed.split([self.key_dim, self.key_dim, self.value_dim], dim=-1)
@@ -101,10 +101,10 @@ class Qwen35GatedDeltaNet(nn.Module):
             gated_delta_rule(q[b], k[b], v[b], g[b], beta[b], ssm_state[b].float().clone())
             for b in range(batch)
         ]
-        out = torch.stack([r[0] for r in results])  # (B, T, H, d)
+        out = torch.stack([r[0] for r in results])
         state = torch.stack([r[1] for r in results])
 
-        # Per-head RMSNorm (weight as-is), then gate by silu(z).
+        # Per-head RMSNorm (weight as is), then gate by silu(z).
         out = out * torch.rsqrt(out.pow(2).mean(dim=-1, keepdim=True) + self.rms_eps)
         out = out * self.norm_weight.float()
         z = self.z_proj(x).float().view(batch, seq_len, self.n_v_heads, self.head_dim)

@@ -22,8 +22,8 @@ def _downloader(content: bytes = _CONTENT) -> HFDownloader:
 
 
 class _DroppedConnectionStream(httpx.SyncByteStream):
-    """A response body that yields a few real bytes, then fails the way
-    httpx does when a peer closes mid-chunked-transfer."""
+    """A response body that yields a few bytes, then fails as httpx does when a peer closes
+    mid-chunked-transfer."""
 
     def __iter__(self) -> Iterator[bytes]:
         yield b"partial bytes before the connection dropped"
@@ -114,9 +114,9 @@ class TestHFDownloaderConnectionDrop:
 
 
 class TestHFDownloaderCancellation:
-    """See app.pull.download_coordinator's own docstring for the real bug this - and the matching
-    DownloadCoordinator fix - closes: a client disconnecting mid-pull left the download running on
-    its own thread with no way to know its caller was gone."""
+    """See app.pull.download_coordinator for the bug this and the DownloadCoordinator fix close: a
+    client disconnecting mid-pull left the download running on its own thread, unaware its caller
+    was gone."""
 
     def test_raises_pull_cancelled_error_once_the_event_is_set(self, tmp_path: Path) -> None:
         dest = tmp_path / "model.gguf"

@@ -6,13 +6,9 @@ import torch
 
 @dataclass(frozen=True)
 class SamplingConfig:
-    """Field names/defaults match Ollama's `options` object.
-
-    `seed=None` must mean genuinely random every call, never a reused
-    default generator - pAIring's contract for an omitted seed.
-    `num_predict=-1` means "generate until EOS or num_ctx", also matching
-    Ollama's convention.
-    """
+    """Field names/defaults match Ollama's `options`. `seed=None` means genuinely random every call,
+    never a reused default generator (pAIring's contract for an omitted seed). `num_predict=-1`
+    means "generate until EOS or num_ctx", also Ollama's convention."""
 
     temperature: float = 0.8
     top_p: float = 0.9
@@ -25,21 +21,18 @@ class SamplingConfig:
 
 @dataclass(frozen=True)
 class GenerationRequest:
-    input_ids: torch.Tensor  # (1, prompt_len)
+    input_ids: torch.Tensor
     sampling: SamplingConfig
-    # Real LLaVA vision support (2026-09-21, LlamaArchitecture only - see
-    # ModelArchitecture.forward's own docstring): each (start, embeds) pair identifies a real
-    # image's projected patch embeddings and the prompt token-position span (in `input_ids`) they
-    # belong at. Only ever relevant to the prefill forward pass (see ChatEngine.stream) - the
-    # image's own tokens are part of the prompt, never regenerated during decode.
+    # LLaVA vision support (LlamaArchitecture only; ModelArchitecture.forward): each
+    # (start, embeds) pair is an image's projected patch embeddings and the prompt token span (in
+    # `input_ids`) they belong at. Relevant only to the prefill forward pass (ChatEngine.stream):
+    # the image's tokens are part of the prompt, never regenerated in decode.
     image_embeddings: list[tuple[int, torch.Tensor]] | None = None
     # Qwen3.5 vision (3-axis M-RoPE): per-token (3, prompt_len) positions, and how far decode
     # positions sit from the cache length afterwards (an image spans fewer positions than tokens).
     position_ids: torch.Tensor | None = None
     position_delta: int = 0
-    cache_tag: str = (
-        ""  # which conversation the prompt cache slot belongs to (see ChatRequest.cache_tag)
-    )
+    cache_tag: str = ""
 
 
 @dataclass(frozen=True)

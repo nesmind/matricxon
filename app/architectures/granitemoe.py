@@ -20,21 +20,17 @@ logger = logging.getLogger(__name__)
 
 
 class GraniteMoeArchitecture(ModelArchitecture):
-    """GraniteMoE - `GraniteArchitecture`'s attention block and four "Power"-scaling multipliers,
-    unchanged, with a sparse Mixture-of-Experts FFN (`GraniteMoeFFN`) in place of dense Granite's
-    `SwiGLUMLP` (confirmed against HF `transformers`' `modeling_granitemoe.py`, 2026-09-22: only
-    the FFN/MLP block differs from dense Granite - attention stays plain GQA).
+    """GraniteMoE: `GraniteArchitecture`'s attention and four "Power"-scaling multipliers, with a
+    sparse MoE FFN (`GraniteMoeFFN`) instead of `SwiGLUMLP` (HF `modeling_granitemoe.py`: only the
+    FFN differs).
 
-    Two extra real GGUF metadata keys beyond dense Granite's: `granitemoe.expert_count`
-    (`num_local_experts`) and `granitemoe.expert_used_count` (`num_experts_per_tok`) - llama.cpp's
-    standard generic MoE key pair, the same one Mixtral/DeepSeek-MoE/Qwen-MoE etc. all use.
+    Two extra GGUF keys: `granitemoe.expert_count` and `granitemoe.expert_used_count` (llama.cpp's
+    generic MoE pair, also used by Mixtral/DeepSeek-MoE/Qwen-MoE).
 
-    Expert tensors go through `QuantizedMoEExperts` (`app/architectures/moe_experts.py`,
-    2026-09-29) when quantized-native compute is on - real per-expert `QuantizedLinear`s over a
-    contiguous 2D slice of the bigger 3D tensor's own raw bytes, not a new kernel. The router
-    (`ffn_gate_inp.weight`, real 2D `(num_experts, hidden_size)`) still goes through a plain
-    `.copy_()` - it's small enough that packing it wouldn't meaningfully help, and every real MoE
-    router in this project (Gemma4's included) already treats its own router the same way.
+    With quantized-native compute on, expert tensors go through `QuantizedMoEExperts`
+    (`moe_experts.py`): per-expert `QuantizedLinear`s over a 2D slice of the 3D tensor's raw bytes,
+    no new kernel. The router (`ffn_gate_inp.weight`, `(num_experts, hidden_size)`) is a plain
+    `.copy_`, too small to pack (as every MoE router here).
     """
 
     NAME = "granitemoe"
@@ -55,8 +51,7 @@ class GraniteMoeArchitecture(ModelArchitecture):
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
-        # Falls back to n_head when absent (no GQA) - see LlamaArchitecture's own docstring for
-        # the real file that confirmed this gap.
+        # Falls back to n_head when absent (no GQA); see LlamaArchitecture.
         self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
         self.head_dim = self.n_embd // self.n_head
         self.n_layer = metadata.get_u32(arch("block_count"))
@@ -190,7 +185,7 @@ class GraniteMoeArchitecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # no real vision-language GraniteMoE checkpoint exists yet to fuse
+        del image_embeddings
         _, seq_len = input_ids.shape
         logger.debug("forward start: seq_len=%d", seq_len)
         if position_ids is None:

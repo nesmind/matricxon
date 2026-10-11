@@ -1,8 +1,7 @@
-"""`/api/chat` against a tiny but real `granite` GGUF (see tests/tiny_gguf_granite.py) - the
-dense-Granite equivalent of test_api_chat_llama.py. Real GGUFModelLoader/GraniteArchitecture/
-GGUFTokenizer/ChatEngine/NDJSON stack, not mocked. See scripts/oracle/validate_granite.py for the
-full real-weight numeric proof.
-"""
+"""`/api/chat` against a tiny `granite` GGUF (tests/tiny_gguf_granite.py), the dense-Granite
+equivalent of test_api_chat_llama.py. Real
+GGUFModelLoader/GraniteArchitecture/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked. Real-weight
+numeric proof: tools/oracle/validate_granite.py."""
 
 import json
 
@@ -72,10 +71,9 @@ class TestGraniteChatHappyPath:
 
 
 class TestGraniteChatTiedEmbeddings:
-    """Real Granite checkpoints ship `tie_word_embeddings: true` (confirmed via live config.json
-    fetches for granite-3.0-2b-instruct/granite-3.0-1b-a400m-instruct) - this is the expected
-    common case, not an edge case, unlike llama where it was a real crash-causing gap. Guarded
-    here from day one rather than discovered live."""
+    """Real Granite checkpoints ship `tie_word_embeddings: true` (live config.json for
+    granite-3.0-2b-instruct/granite-3.0-1b-a400m-instruct): the common case, not an edge, unlike
+    llama where it crashed. Guarded from day one."""
 
     def test_streams_ndjson_chunks_ending_in_a_done_line(
         self, client: TestClient, tiny_granite_tied_embeddings_model: InstalledModel

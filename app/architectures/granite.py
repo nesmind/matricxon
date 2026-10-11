@@ -18,37 +18,31 @@ logger = logging.getLogger(__name__)
 
 
 class GraniteArchitecture(ModelArchitecture):
-    """Dense IBM Granite decoder - a plain GQA transformer (RMSNorm, SwiGLU MLP, unscaled RoPE,
-    same shape as `llama`) plus IBM's real "Power"-scheduler scaling terms, confirmed against HF
-    `transformers`' own `modeling_granite.py` source (2026-09-22):
+    """Dense IBM Granite decoder: a plain GQA transformer (RMSNorm, SwiGLU MLP, unscaled RoPE, same
+    shape as `llama`) plus IBM's "Power"-scheduler scaling terms (checked against HF `transformers`'
+    `modeling_granite.py`):
 
-    - `attention_scale` (real GGUF key `granite.attention.scale`, HF config field
-      `attention_multiplier`) *replaces* `scaled_dot_product_attention`'s own default
-      `1/sqrt(head_dim)` scale entirely - see `GraniteAttention`'s own docstring.
-    - `embedding_multiplier` (`granite.embedding_scale`) multiplies the token embedding lookup
-      once, immediately after it, before any decoder layer runs.
-    - `residual_multiplier` (`granite.residual_scale`) multiplies each decoder layer's branch
-      output (attention and MLP alike) before it's added back to the residual stream - see
-      `GraniteDecoderLayer`'s own docstring.
-    - `logits_scaling` (`granite.logit_scale`) divides the final `lm_head` logits once - a plain
-      scalar divide, no softcapping/tanh involved (unlike gemma4's final-logit softcapping, a
-      different mechanism entirely).
+    - `attention_scale` (GGUF `granite.attention.scale`, HF `attention_multiplier`) replaces
+      `scaled_dot_product_attention`'s default `1/sqrt(head_dim)` entirely (`GraniteAttention`).
+    - `embedding_multiplier` (`granite.embedding_scale`) multiplies the token embedding once, right
+      after lookup.
+    - `residual_multiplier` (`granite.residual_scale`) multiplies each layer's branch output
+      (attention and MLP) before it is added to the residual (`GraniteDecoderLayer`).
+    - `logits_scaling` (`granite.logit_scale`) divides the final `lm_head` logits once: a plain
+      divide, not gemma4's tanh soft-capping.
 
-    Real checkpoints (`granite-3.0-2b-instruct`, `granite-3.0-1b-a400m-instruct`) both ship
-    non-1.0 values for all four (e.g. `embedding_multiplier=12.0`, `residual_multiplier=0.22`) -
-    ignoring any one of them diverges substantially from the real model's output, not just a
-    minor numerical nit.
+    `granite-3.0-2b-instruct` and `granite-3.0-1b-a400m-instruct` ship non-1.0 values for all four
+    (e.g. `embedding_multiplier=12.0`, `residual_multiplier=0.22`); ignoring any one diverges
+    substantially from the real model.
 
-    Real Granite checkpoints ship `tie_word_embeddings: true` (confirmed via live `config.json`
-    fetches), so `tied_embeddings` (detected the same way `llama`'s was, via
-    `loader.has_tensor("output.weight")` - see that architecture's own docstring for the real bug
-    this defensive detection already caught once) is expected to be the common case here, not the
-    exception.
+    Real checkpoints ship `tie_word_embeddings: true`, so `tied_embeddings` (detected like `llama`'s
+    via `loader.has_tensor("output.weight")`; see that docstring for the bug this caught) is the
+    common case.
     """
 
     NAME = "granite"
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
+    SUPPORTS_BATCHED_DECODE = True
 
     def __init__(
         self,
@@ -64,8 +58,7 @@ class GraniteArchitecture(ModelArchitecture):
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
-        # Falls back to n_head when absent (no GQA) - see LlamaArchitecture's own docstring for
-        # the real file that confirmed this gap.
+        # Falls back to n_head when absent (no GQA); see LlamaArchitecture.
         self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
         self.head_dim = self.n_embd // self.n_head
         self.n_layer = metadata.get_u32(arch("block_count"))
@@ -76,11 +69,11 @@ class GraniteArchitecture(ModelArchitecture):
             vocab_size if vocab_size is not None else len(metadata.require("tokenizer.ggml.tokens"))
         )
 
-        # The four real Granite multipliers. `attention_scale` stays `None` (not 1.0) when the
-        # key is absent - `None` is scaled_dot_product_attention's own "use the default
-        # 1/sqrt(head_dim)" sentinel, which is the *correct* fallback for a non-Granite-shaped
-        # file, whereas the other three are genuinely no-op multiplicative/divisive identities at
-        # 1.0.
+        # The four Granite multipliers. `attention_scale` stays `None` (not 1.0) when the key is
+        # absent: `None` is
+        # scaled_dot_product_attention's "use the default 1/sqrt(head_dim)" sentinel, the *correct*
+        # fallback for a
+        # non-Granite-shaped file, whereas the other three are no-op identities at 1.0.
         self.attention_scale = metadata.get_f32(arch("attention.scale"))
         self.embedding_multiplier = metadata.get_f32(arch("embedding_scale"), 1.0)
         self.residual_multiplier = metadata.get_f32(arch("residual_scale"), 1.0)
@@ -201,7 +194,7 @@ class GraniteArchitecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # no real vision-language Granite checkpoint exists yet to fuse
+        del image_embeddings
         _, seq_len = input_ids.shape
         logger.debug("forward start: seq_len=%d", seq_len)
         if position_ids is None:

@@ -4,12 +4,10 @@ import torch
 
 
 class QuantStrategy(ABC):
-    """Converts a GGUF tensor's raw on-disk bytes into a dequantized tensor.
-
-    Mirrors ggml's per-type block layout: `block_size` elements are packed
-    into `type_size` bytes. Implementations operate on whole tensors (all
-    blocks at once via vectorized tensor ops), never per-element Python loops
-    - these tensors run to millions of elements.
+    """Converts a GGUF tensor's raw bytes into a dequantized tensor. Mirrors ggml's per-type block
+    layout: `block_size` elements packed into
+    `type_size` bytes. Operates on whole tensors (all blocks at once, vectorized), never per-element
+    Python loops (millions of elements).
     """
 
     block_size: int

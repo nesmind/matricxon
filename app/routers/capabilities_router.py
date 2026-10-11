@@ -7,12 +7,10 @@ router = APIRouter()
 
 
 class InferCapabilitiesRequestHandler:
-    """A genuine matricxon-only extension, same category as /api/health (see health_router.py's
-    own docstring) - lets a caller (pAIring's own direct-from-Hugging-Face download path, added
-    2026-09-21 specifically for this) get a real capabilities verdict for a file it hasn't
-    installed here without reimplementing CapabilityInferer's own logic on its own side, which
-    would drift the moment this rule set changes. Pure computation, no I/O, no catalog
-    dependency - unlike /api/pull, this never touches the filesystem or the network."""
+    """A matricxon-only extension, like /api/health (health_router.py): lets a caller (pAIring's
+    direct-from-Hugging-Face download path, for this) get a capabilities verdict
+    for a file it hasn't installed here without reimplementing CapabilityInferer, which would drift
+    when the rules change. Pure computation: no I/O, no catalog, unlike /api/pull."""
 
     def __init__(self, inferer: CapabilityInferer) -> None:
         self._inferer = inferer

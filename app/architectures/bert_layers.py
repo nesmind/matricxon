@@ -9,10 +9,9 @@ logger = logging.getLogger(__name__)
 
 
 class BertSelfAttention(nn.Module):
-    """Non-causal multi-head self-attention with separate Q/K/V projections
-    and biases everywhere - classic BERT's attention block (confirmed
-    against the real `all-MiniLM-L6-v2` GGUF: separate `attn_q`/`attn_k`/
-    `attn_v` tensors, each with a bias).
+    """Non-causal multi-head self-attention with separate Q/K/V projections and biases everywhere
+    (checked against the
+    real `all-MiniLM-L6-v2` GGUF: separate `attn_q`/`attn_k`/`attn_v`, each with a bias).
     """
 
     def __init__(self, n_embd: int, n_head: int, dtype: torch.dtype = torch.float32) -> None:
@@ -30,18 +29,16 @@ class BertSelfAttention(nn.Module):
         k = self.k_proj(x).view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
 
-        # No causal mask, no padding mask - v1 encodes exactly one sequence
-        # per /api/embeddings call (see EmbeddingEngine), so there's no
-        # padding to mask out and every position may attend to every other.
+        # No causal or padding mask: v1 encodes one sequence per /api/embeddings call
+        # (EmbeddingEngine), so nothing to pad and every position may attend to every other.
         out = F.scaled_dot_product_attention(q, k, v)
         out = out.transpose(1, 2).reshape(batch, seq_len, self.n_head * self.head_dim)
         return self.o_proj(out)
 
 
 class BertFFN(nn.Module):
-    """Plain (non-gated) GELU feed-forward - the real `all-MiniLM-L6-v2`
-    config's `hidden_act: "gelu"` is HF's exact erf-based GELU, not the
-    tanh approximation some other configs mean by that name."""
+    """Plain (non-gated) GELU feed-forward; the real `all-MiniLM-L6-v2` config's `hidden_act:
+    "gelu"` is HF's exact erf-based GELU, not the tanh approximation."""
 
     def __init__(self, n_embd: int, ffn_len: int, dtype: torch.dtype = torch.float32) -> None:
         super().__init__()
@@ -53,9 +50,8 @@ class BertFFN(nn.Module):
 
 
 class BertEncoderLayer(nn.Module):
-    """Post-LN: `x = LayerNorm(x + Attention(x))`, then
-    `x = LayerNorm(x + FFN(x))` - classic BERT's layer structure, the
-    opposite order from mistral3's pre-LN decoder layer."""
+    """Post-LN: `x = LayerNorm(x + Attention(x))`, then `x = LayerNorm(x + FFN(x))`; the opposite
+    order from mistral3's pre-LN decoder layer."""
 
     def __init__(
         self,

@@ -10,9 +10,9 @@ def test_show_known_model(client: TestClient, model_factory: FakeInstalledModelF
 
     assert response.status_code == 200
     assert response.json()["capabilities"] == ["completion", "thinking", "tools"]
-    # The tiny synthetic fixture's real footprint rounds to 0.0GB at 2 decimals - this only proves
-    # the field is present and computed (not still-crashing on a real-but-unreadable file), not a
-    # meaningful real-world value; that's what the real Ministral-3B check elsewhere covers.
+    # The tiny fixture's footprint rounds to 0.0GB at 2 decimals: this proves only that the field is
+    # present and computed (not crashing on a real-but-unreadable file); the Ministral-3B check
+    # covers a meaningful value.
     assert response.json()["estimated_ram_gb"] >= 0
 
 

@@ -1,14 +1,12 @@
-"""Real LLaVA vision support (2026-09-21, `LlamaArchitecture` only - see
-`ModelArchitecture.forward`'s own docstring): decodes a real chat request's base64 images, runs
-each through the paired mmproj's `ClipVisionEncoder`, and expands the prompt's literal `[IMG]`
-markers (`Mistral3PromptBuilder`'s own existing output - see that class) into real per-patch
-placeholder token positions, so `LlamaArchitecture._forward_impl` knows exactly which spans to
-overwrite with real image embeddings.
+"""LLaVA vision support (`LlamaArchitecture` only; `ModelArchitecture.forward`): decodes a chat
+request's base64 images, runs each through the paired mmproj's `ClipVisionEncoder` and expands the
+prompt's literal `[IMG]` markers (`Mistral3PromptBuilder`'s output) into per-patch placeholder token
+positions, so `LlamaArchitecture._forward_impl` knows which spans to overwrite with image
+embeddings.
 
-Scoped to a single base-resolution view per image - LLaVA-1.6's real "AnyRes" multi-crop scheme
-(variable crop count per image aspect ratio, spatial reassembly, a learned row-separator token,
-confirmed via the real mmproj's own `clip.vision.image_aspect_ratio = anyres` metadata) is real,
-substantially complex, deliberately deferred follow-up work - not implemented here.
+Scoped to one base-resolution view per image: LLaVA-1.6's "AnyRes" multi-crop scheme (variable crops
+per aspect ratio, spatial reassembly, a learned row-separator token; the mmproj has
+`clip.vision.image_aspect_ratio = anyres`) is deliberately deferred.
 """
 
 import torch
@@ -21,10 +19,10 @@ from app.vision.image_preprocessing import ClipImagePreprocessor
 
 IMAGE_MARKER = "[IMG]"
 
-# Real weights (624MB for the real LLaVA mmproj) loaded once per real mmproj tag and kept for this
-# process's lifetime - re-loading+re-running eval() on every chat turn would be wasteful, and this
-# stays a plain module-level cache rather than joining ModelManager's own load/evict lifecycle,
-# same as ClipVisionEncoder itself deliberately isn't a ModelArchitecture (see its own docstring).
+# Weights (624MB for the LLaVA mmproj) loaded once per mmproj tag and kept for the process lifetime:
+# reloading+eval each chat turn would waste time. A plain module-level cache, not part of
+# ModelManager's load/evict lifecycle, as ClipVisionEncoder isn't a ModelArchitecture (its
+# docstring).
 _encoder_cache: dict[tuple[str, str], ClipVisionEncoder] = {}
 
 
@@ -43,18 +41,15 @@ def build_prompt_with_images(
     mmproj: InstalledModel,
     device: torch.device | None = None,
 ) -> tuple[list[int], list[tuple[int, torch.Tensor]]]:
-    """Splits `prompt` on the real literal `[IMG]` marker text `Mistral3PromptBuilder` already
-    emits (one per real image, in message order), tokenizes each real text segment independently
-    (so BOS still lands exactly once, at the very start - matching a plain `tokenizer.encode(
-    prompt, add_bos=True)` call's own real semantics), and inserts `encoder.num_patches`
-    placeholder token ids at each marker position. The placeholder ids' own value never matters -
-    see `LlamaArchitecture._forward_impl`'s own docstring: they're overwritten with real image
-    embeddings before ever being looked up for real - `0` is used here purely because it's always
-    a real, valid in-vocab id.
+    """Splits `prompt` on the literal `[IMG]` marker (one per image, in message order), tokenizes
+    each text segment independently (so BOS lands once at the start, as a plain
+    `tokenizer.encode(prompt, add_bos=True)` would) and inserts `encoder.num_patches` placeholder
+    token ids at each marker. The placeholder values never matter (`LlamaArchitecture._forward_impl`
+    overwrites them with image embeddings before any lookup); `0` is an always-valid in-vocab id.
 
-    Assumes exactly one `[IMG]` marker per real image, in the same order - true for every existing
-    caller today (see `chat_router.py`: only a request with both real images *and* a paired mmproj
-    routes through this function at all; everything else still calls plain `tokenizer.encode()`).
+    Assumes one `[IMG]` marker per image, in order: true for every caller (chat_router.py uses this
+    only for a request with both images and a paired mmproj; everything else uses plain
+    `tokenizer.encode`).
     """
     encoder = _get_encoder(mmproj, device or torch.device("cpu"))
     preprocessor = ClipImagePreprocessor(encoder.image_size, encoder.image_mean, encoder.image_std)
@@ -67,9 +62,7 @@ def build_prompt_with_images(
             token_ids.extend(tokenizer.encode(segment, add_bos=(i == 0)))
             if i < len(images_b64):
                 pixel_values = preprocessor.preprocess(images_b64[i])
-                patch_embeds = VisionDevice.encode(encoder, pixel_values)[
-                    0
-                ]  # drop the batch dim: (num_patches, n_embd)
+                patch_embeds = VisionDevice.encode(encoder, pixel_values)[0]
                 start = len(token_ids)
                 token_ids.extend([0] * encoder.num_patches)
                 image_embeddings.append((start, patch_embeds))

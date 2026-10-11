@@ -7,8 +7,8 @@ from app.runtime.kv_cache import KVCache
 
 @dataclass(frozen=True)
 class HybridSnapshot:
-    """The recurrent half of a `NemotronHHybridCache` at one sequence position, plus that
-    position. (The attention half is just a KV prefix - restoring it is a truncate.)"""
+    """The recurrent half of a `NemotronHHybridCache` at one sequence position, plus that position.
+    (The attention half is a KV prefix: restoring it is a truncate.)"""
 
     length: int
     conv_state: list[torch.Tensor]
@@ -19,19 +19,16 @@ class HybridSnapshot:
 
 
 class NemotronHHybridCache:
-    """Composes two independent, orthogonal sub-caches - one real `KVCache` restricted to this
-    model's real attention-layer indices, plus a fixed-size (never grows with sequence length)
-    conv-state + ssm-state pair per real Mamba-2 layer index - mirrors llama.cpp's own real
-    `llama_memory_hybrid` shape (two independently-typed caches, dispatched per layer index via a
-    predicate computed once at load time), reimplemented here rather than copied. Plain-MLP layer
-    indices touch neither sub-structure - they carry no persistent state at all.
+    """Composes two orthogonal sub-caches: a `KVCache` restricted to this model's attention-layer
+    indices, plus a fixed-size (not growing with sequence length) conv-state + ssm-state pair per
+    Mamba-2 layer index. Mirrors llama.cpp's `llama_memory_hybrid` (two independently typed caches
+    dispatched per layer index by a predicate computed at load time), reimplemented, not copied.
+    Plain-MLP layers touch neither.
 
-    Lifetime is a single `ChatEngine.stream()` call, same as plain `KVCache` (see that class's own
-    docstring) - no cross-request reuse. `ChatEngine` itself only ever touches `.length`/
-    `.advance()` (both delegate to the inner `KVCache`, since both layer kinds process the same
-    shared sequence position) - `update_attention`/`mamba_state`/`set_mamba_state` are called only
-    by `NemotronHArchitecture`'s own layer classes, so there's no need for this to satisfy any
-    generic/polymorphic cache interface beyond what `ChatEngine` itself needs.
+    Lifetime is one `ChatEngine.stream` call, like plain `KVCache`. `ChatEngine` touches only
+    `.length`/`.advance` (both delegate to the inner `KVCache`, as both layer kinds process the same
+    position); `update_attention`/`mamba_state`/`set_mamba_state` are called only by
+    `NemotronHArchitecture`'s layers, so no generic cache interface is needed beyond `ChatEngine`'s.
     """
 
     def __init__(
@@ -100,8 +97,8 @@ class NemotronHHybridCache:
         self.ssm_state[slot] = ssm_state
 
     def snapshot(self) -> HybridSnapshot:
-        """Copies the recurrent state at the current length - the one thing a recurrent layer
-        can't be rolled back to otherwise, which is what `PromptCache` needs to reuse a prefix."""
+        """Copies the recurrent state at the current length: the one thing a recurrent layer can't
+        be rolled back to otherwise, which `PromptCache` needs to reuse a prefix."""
         return HybridSnapshot(
             self.length,
             [t.clone() for t in self.conv_state],
@@ -109,7 +106,7 @@ class NemotronHHybridCache:
         )
 
     def restore(self, snapshot: HybridSnapshot) -> None:
-        """Rolls back to `snapshot` (taken at a length <= the current one): the attention KV is
+        """Rolls back to `snapshot` (taken at a length <= the current): the attention KV is
         truncated, the recurrent state replaced by a copy (the snapshot stays reusable)."""
         self._kv_cache.truncate(snapshot.length)
         self.conv_state = [t.clone() for t in snapshot.conv_state]
@@ -119,8 +116,8 @@ class NemotronHHybridCache:
         self, snapshot: HybridSnapshot, max_seq_len: int | None = None
     ) -> "NemotronHHybridCache":
         """A new cache at `snapshot.length`: a copy of this one's attention KV up to there plus the
-        snapshot's recurrent state; this cache is left untouched (see `KVCache.fork`, which also
-        explains `max_seq_len`)."""
+        snapshot's recurrent state; this cache is untouched (`KVCache.fork`, which also explains
+        `max_seq_len`)."""
         spec = list(self._spec)
         spec[4] = max_seq_len or spec[4]
         forked = NemotronHHybridCache(*spec)
@@ -135,11 +132,11 @@ class NemotronHHybridCache:
         return self._kv_cache.nbytes() + sum(t.numel() * t.element_size() for t in states)
 
     def export(self, length: int) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-        """The attention KV's first `length` positions (see `KVCache.export`). The recurrent state
-        is not part of this: it is only meaningful as a `HybridSnapshot`."""
+        """The attention KV's first `length` positions (`KVCache.export`). The recurrent state isn't
+        included: it is meaningful only as a `HybridSnapshot`."""
         return self._kv_cache.export(length)
 
     def load(self, keys: list[torch.Tensor], values: list[torch.Tensor]) -> None:
-        """Fills the attention KV from `export()` output; the recurrent state stays zero until a
-        snapshot is restored into it (`restore`), which is the only way a saved cache is used."""
+        """Fills the attention KV from `export` output; the recurrent state stays zero until a
+        snapshot is restored into it (`restore`), the only way a saved cache is used."""
         self._kv_cache.load(keys, values)

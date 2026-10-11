@@ -1,11 +1,9 @@
-"""`/api/chat` against a tiny but real `nemotron_h` GGUF (see tests/tiny_gguf_nemotron_h.py) -
-the hybrid Mamba-2/attention/MLP equivalent of test_api_chat_granitemoe.py. Real GGUFModelLoader/
-NemotronHArchitecture/NemotronHHybridCache/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked - the
-real Mamba-2 recurrence math is independently unit-tested in
-tests/unit/test_nemotron_h_mamba2_mixer.py. This is the one test proving the full hybrid-cache
-per-layer-type dispatch end to end: multi-token prefill *and* single-token decode against real
-interleaved Mamba/attention/MLP layers together.
-"""
+"""`/api/chat` against a tiny `nemotron_h` GGUF (tests/tiny_gguf_nemotron_h.py), the hybrid
+Mamba-2/attention/MLP equivalent of test_api_chat_granitemoe.py. Real
+GGUFModelLoader/NemotronHArchitecture/NemotronHHybridCache/GGUFTokenizer/ChatEngine/NDJSON stack,
+not mocked; the Mamba-2 recurrence is unit-tested in tests/unit/test_nemotron_h_mamba2_mixer.py. The
+one test proving hybrid-cache per-layer-type dispatch end to end: multi-token prefill *and*
+single-token decode through interleaved Mamba/attention/MLP layers."""
 
 import json
 

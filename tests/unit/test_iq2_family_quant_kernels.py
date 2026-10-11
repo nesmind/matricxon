@@ -1,11 +1,8 @@
-"""Cross-checks IQ2_XXS/IQ2_XS/IQ2_S (app/gguf/dequant/iq2_family.py) against slow, scalar,
-line-by-line ports of ggml's real reference dequantize_row_iq2_xxs/iq2_xs/iq2_s functions
-(ggml/src/ggml-quants.c, llama.cpp `master`) - not code reuse from the shipped strategies, just
-a test oracle written independently here, matching test_extended_quant_kernels.py's established
-methodology. IQ2_XXS's reference here uses the corrected 8-byte (not 4-byte) per-sub-block
-stride - see IQ2_XXSStrategy's own docstring for why the first version of both this file and
-the shipped strategy shared the same wrong assumption.
-"""
+"""Cross-checks IQ2_XXS/IQ2_XS/IQ2_S (app/gguf/dequant/iq2_family.py) against slow scalar
+line-by-line ports of ggml's dequantize_row_iq2_xxs/iq2_xs/iq2_s (ggml/src/ggml-quants.c, llama.cpp
+`master`): an oracle written independently, as test_extended_quant_kernels.py. IQ2_XXS's reference
+uses the corrected 8-byte (not 4) per-sub-block stride; see IQ2_XXSStrategy for why the first
+versions shared the wrong assumption."""
 
 import random
 import struct
@@ -146,13 +143,13 @@ class TestByteLength:
 
 
 class TestGridTables:
-    """Independent of the dequant math above - catches a grid/sign-table *extraction* bug even
-    if the dequant algorithm itself is otherwise correct. Values below are copy-pasted directly
-    from ggml/src/ggml-common.h, not derived from this project's own extraction script."""
+    """Independent of the dequant math: catches a grid/sign-table *extraction* bug even if the
+    algorithm is right. Values are copy-pasted from ggml/src/ggml-common.h, not derived from this
+    project's extraction script."""
 
     def test_iq2xxs_grid_matches_known_entries(self) -> None:
         assert _GRID_XXS.shape == (256, 8)
-        assert list(_GRID_XXS[0]) == [8, 8, 8, 8, 8, 8, 8, 8]  # 0x0808080808080808
+        assert list(_GRID_XXS[0]) == [8, 8, 8, 8, 8, 8, 8, 8]
 
     def test_iq2xs_grid_has_expected_shape(self) -> None:
         assert iq2xs_grid_i8().shape == (512, 8)

@@ -7,13 +7,11 @@ from app.runtime.kv_cache import KVCache
 
 
 class Starcoder2MLP(nn.Module):
-    """`down(gelu_tanh(up(x)))` - a plain, non-gated MLP with a real bias on both projections
-
-    (`config.use_bias`, real default `True` on every released checkpoint - confirmed via HF's own
-    `modeling_starcoder2.py`'s `Starcoder2MLP`), using the **tanh approximation** of GELU
-    (`hidden_act = "gelu_pytorch_tanh"`), not the exact/erf-based GELU `Phi2MLP` uses - a real,
-    confirmed difference between the two plain-GELU-MLP architectures in this repo, not
-    interchangeable.
+    """`down(gelu_tanh(up(x)))`: a plain non-gated MLP with a bias on both projections
+    (`config.use_bias`, default `True` on every released
+    checkpoint; HF's `Starcoder2MLP`), using the **tanh approximation** of GELU (`hidden_act =
+    "gelu_pytorch_tanh"`), not the exact/erf GELU of
+    `Phi2MLP`: the two plain-GELU-MLP architectures here are not interchangeable.
     """
 
     def __init__(self, n_embd: int, ffn_len: int, dtype: torch.dtype = torch.float32) -> None:
@@ -26,18 +24,12 @@ class Starcoder2MLP(nn.Module):
 
 
 class Starcoder2DecoderLayer(nn.Module):
-    """Same sequential pre-norm two-block layout as `QwenDecoderLayer` (real bias-free `RMSNorm`
-
-    reused everywhere else in this repo) - but StarCoder2's real norm is a plain, biased
-    `nn.LayerNorm` instead (confirmed: HF's own `modeling_starcoder2.py` constructs
-    `nn.LayerNorm(config.hidden_size, eps=config.norm_epsilon)` with no `bias=False` override,
-    and the real GGUF metadata key itself signals this - `attention.layer_norm_epsilon`, the same
-    key `command_r.py` uses for its own bias-free `LayerNorm`, not the `...rms_epsilon` key every
-    RMSNorm architecture here uses). `self_attn` reuses `QwenAttention` with `o_proj_bias=True`
-    (see that class's own docstring) rather than a new attention class - StarCoder2's real shape
-    (GQA, full RoPE, bias on every one of q/k/v/o, no QK-norm) is exactly what `qkv_bias=True,
-    qk_norm_eps=None, o_proj_bias=True` already produces.
-    """
+    """Same sequential pre-norm two-block layout as `QwenDecoderLayer`, but with a plain biased
+    `nn.LayerNorm` (HF `modeling_starcoder2.py`: `nn.LayerNorm(config.hidden_size,
+    eps=config.norm_epsilon)`; GGUF key `attention.layer_norm_epsilon`, as `command_r.py`, not the
+    `...rms_epsilon` of RMSNorm architectures). `self_attn` reuses `QwenAttention` with
+    `qkv_bias=True, qk_norm_eps=None, o_proj_bias=True`: StarCoder2's attention (GQA, full RoPE,
+    bias on q/k/v/o, no QK-norm)."""
 
     def __init__(
         self,

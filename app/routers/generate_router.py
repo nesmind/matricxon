@@ -16,21 +16,17 @@ from app.runtime.tokenizer import IncrementalTextDecoder
 from app.schemas.generate import GenerateChunk, GenerateDoneChunk, GenerateRequest
 from app.server.errors import PromptTooLongError
 from app.server.ndjson import NDJSONResponse
+from app.server.node_kind import require_compute
 
 router = APIRouter()
 
 
 class GenerateRequestHandler:
-    """Handles `POST /api/generate` - a single raw-prompt completion, not a
-
-    chat message list. Reuses ChatEngine/GenerationRequest unchanged (both
-    are already prompt-agnostic, working purely in already-tokenized
-    `input_ids`) and skips Mistral3PromptBuilder entirely: the caller's
-    `prompt` string is tokenized as-is, with no `[INST]`/`[SYSTEM_PROMPT]`
-    wrapping - matching real Ollama's `/api/generate` in "raw" mode, the
-    simpler of its two real behaviors and the only one with no caller-facing
-    ambiguity about which chat template got applied.
-    """
+    """Handles `POST /api/generate`: a single raw-prompt completion, not a chat message list. Reuses
+    ChatEngine/GenerationRequest (both prompt-agnostic, working in tokenized `input_ids`) and skips
+    Mistral3PromptBuilder: the `prompt` is tokenized as is, with no `[INST]`/`[SYSTEM_PROMPT]`
+    wrapping, matching Ollama's "raw" `/api/generate`, the simpler of its two behaviors and the only
+    one with no ambiguity about which chat template applied."""
 
     def __init__(self, model_manager: ModelManager) -> None:
         self._model_manager = model_manager
@@ -128,7 +124,7 @@ def _seconds_to_ns(seconds: float) -> int:
     return int(seconds * 1_000_000_000)
 
 
-@router.post("/api/generate", response_model=None)
+@router.post("/api/generate", dependencies=[Depends(require_compute)], response_model=None)
 async def post_generate(
     request: GenerateRequest, model_manager: ModelManager = Depends(get_model_manager)
 ) -> JSONResponse | NDJSONResponse:

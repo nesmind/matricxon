@@ -1,8 +1,7 @@
-"""`/api/chat` against a tiny but real `qwen3` GGUF (see tests/tiny_gguf_qwen3.py) - exercises
-QK-norm end to end. Real GGUFModelLoader/Qwen3Architecture/GGUFTokenizer/ChatEngine/NDJSON stack,
-not mocked. See scripts/oracle/validate_qwen3.py for the real-weight numeric proof, including the
-QK-norm-permutation reasoning `Qwen3Architecture`'s own docstring calls out.
-"""
+"""`/api/chat` against a tiny `qwen3` GGUF (tests/tiny_gguf_qwen3.py), exercising QK-norm end to
+end. Real GGUFModelLoader/Qwen3Architecture/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked.
+Real-weight proof, including the QK-norm-permutation reasoning `Qwen3Architecture`'s docstring
+explains: tools/oracle/validate_qwen3.py."""
 
 import json
 

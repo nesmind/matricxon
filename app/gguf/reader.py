@@ -36,11 +36,9 @@ class ParsedGGUF:
 
 
 class GGUFReader:
-    """Parses a GGUF file's header, metadata, and tensor-info table.
-
-    Only reads these (KB-scale) eagerly; tensor data bytes are never touched
-    here - see GGUFMemoryMap for zero-copy access to those.
-    """
+    """Parses a GGUF file's header, metadata and tensor-info table. Reads only these (KB-scale)
+    eagerly; tensor data bytes are never touched here (GGUFMemoryMap gives zero-copy access to
+    those)."""
 
     def __init__(self, path: Path) -> None:
         self._path = path

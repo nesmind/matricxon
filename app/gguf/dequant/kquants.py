@@ -8,11 +8,9 @@ _K_SCALE_SIZE = 12
 
 
 def _get_scale_min_k4(scales: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """scales: (n_blocks, 12) uint8 -> (sc, m), each (n_blocks, 8) uint8.
-
-    Ports ggml's get_scale_min_k4: 8 sub-block (6-bit scale, 6-bit min) pairs
-    packed into 12 bytes, used by both Q4_K and Q5_K.
-    """
+    """scales: (n_blocks, 12) uint8 -> (sc, m), each (n_blocks, 8) uint8. Ports ggml's
+    get_scale_min_k4: 8 sub-block (6-bit scale, 6-bit min) pairs packed into 12 bytes, used by Q4_K
+    and Q5_K."""
     n_blocks = scales.shape[0]
     sc = np.empty((n_blocks, 8), dtype=np.uint8)
     m = np.empty((n_blocks, 8), dtype=np.uint8)
@@ -26,11 +24,9 @@ def _get_scale_min_k4(scales: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 class Q4_KStrategy(QuantStrategy):
-    """256-element super-block: {d, dmin: f16; scales[12]; qs[128] (4-bit)}.
-
-    8 sub-blocks of 32 elements, each with its own 6-bit-packed scale/min
-    (see _get_scale_min_k4): value = d*sc[sub]*nibble - dmin*m[sub].
-    """
+    """256-element super-block: {d, dmin: f16; scales[12]; qs[128] (4-bit)}. 8 sub-blocks of 32
+    elements, each with a 6-bit-packed scale/min (_get_scale_min_k4): value = d*sc[sub]*nibble -
+    dmin*m[sub]."""
 
     block_size = _QK_K
     type_size = 2 + 2 + _K_SCALE_SIZE + _QK_K // 2
@@ -64,16 +60,14 @@ class Q4_KStrategy(QuantStrategy):
         value_low = d3 * sc_low * low - dmin3 * m_low
         value_high = d3 * sc_high * high - dmin3 * m_high
 
-        combined = np.stack([value_low, value_high], axis=2)  # (n_blocks, 4, 2, 32)
+        combined = np.stack([value_low, value_high], axis=2)
         return torch.from_numpy(combined.reshape(-1))
 
 
 class Q5_KStrategy(QuantStrategy):
-    """256-element super-block: {d, dmin; scales[12]; qh[32]; qs[128]}.
-
-    Like Q4_K but each 4-bit nibble gets a 5th bit from qh (adds 16 when set),
-    and qh's 32 bytes are reused across all 4 chunks with different bit pairs.
-    """
+    """256-element super-block: {d, dmin; scales[12]; qh[32]; qs[128]}. Like Q4_K but each 4-bit
+    nibble gets a 5th bit from qh (adds 16 when set); qh's 32 bytes are reused across all 4 chunks
+    with different bit pairs."""
 
     block_size = _QK_K
     type_size = 2 + 2 + _K_SCALE_SIZE + _QK_K // 8 + _QK_K // 2
@@ -119,11 +113,9 @@ class Q5_KStrategy(QuantStrategy):
 
 
 class Q6_KStrategy(QuantStrategy):
-    """256-element super-block: {ql[128]; qh[64]; scales[16] (int8); d: f16}.
-
-    16 sub-blocks of 16 elements, each with its own signed int8 scale;
-    each 6-bit quant is 4 low bits from ql + 2 high bits from qh, minus 32.
-    """
+    """256-element super-block: {ql[128]; qh[64]; scales[16] (int8); d: f16}. 16 sub-blocks of 16
+    elements, each with a signed int8 scale; each 6-bit quant is 4 low bits from ql + 2 high bits
+    from qh, minus 32."""
 
     block_size = _QK_K
     type_size = _QK_K // 2 + _QK_K // 4 + _QK_K // 16 + 2
@@ -164,7 +156,7 @@ class Q6_KStrategy(QuantStrategy):
                     axis=1,
                 )
                 values.append(d * scale * q)
-            halves.append(np.concatenate(values, axis=1))  # (n_blocks, 128)
+            halves.append(np.concatenate(values, axis=1))
 
-        combined = np.concatenate(halves, axis=1)  # (n_blocks, 256)
+        combined = np.concatenate(halves, axis=1)
         return torch.from_numpy(combined.reshape(-1))

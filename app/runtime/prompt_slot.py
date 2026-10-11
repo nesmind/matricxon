@@ -8,27 +8,27 @@ from app.runtime.mamba_cache import HybridSnapshot, NemotronHHybridCache
 
 @dataclass
 class CacheSlot:
-    """One cached conversation: its cache, the exact token ids that cache holds (positions
-    0..len-1), and - for a hybrid cache - the recurrent-state snapshots it can be rewound to."""
+    """One cached conversation: its cache, the exact token ids it holds (positions 0..len-1) and,
+    for a hybrid cache, the recurrent-state snapshots it can be rewound to."""
 
     cache: KVCache | NemotronHHybridCache
     key: tuple[int, torch.dtype]
     token_ids: list[int] = field(default_factory=list)
     snapshots: dict[int, HybridSnapshot] = field(default_factory=dict)
     last_used: int = 0
-    prompt_len: int = 0  # length of the prompt this slot was last prefilled for
-    in_use: bool = False  # a reply is running on this slot's cache right now
-    tag: str = ""  # the conversation it belongs to (opaque; lets a deleted chat's cache be dropped)
+    prompt_len: int = 0
+    in_use: bool = False
+    tag: str = ""
 
     @property
     def hybrid(self) -> bool:
         return isinstance(self.cache, NemotronHHybridCache)
 
     def match(self, prompt_ids: list[int]) -> tuple[int, int]:
-        """(common, reusable): how many leading prompt tokens equal this slot's tokens, and how
-        many of them it can supply without recomputing. At least the prompt's last token is always
-        recomputed (its logits start the reply). A plain KV cache can be cut back to any length; a
-        hybrid one only to a recurrent-state snapshot."""
+        """(common, reusable): how many leading prompt tokens equal this slot's tokens, and how many
+        it can supply without recomputing. At least the prompt's last token is always recomputed
+        (its logits start the reply). A plain KV cache can be cut back to any length; a hybrid one
+        only to a recurrent-state snapshot."""
         common = 0
         for cached, new in zip(self.token_ids, prompt_ids, strict=False):
             if cached != new:
@@ -39,16 +39,13 @@ class CacheSlot:
             return common, common
         return common, max((pos for pos in self.snapshots if pos <= common), default=0)
 
-    # : A gap must be followed by at least this many tokens that line up again, else it is not
-    # trusted.
+    # A gap must be followed by at least this many tokens that line up again, else it isn't trusted.
     MIN_RUN_AFTER_GAP = 32
 
     def find_gap(self, prompt_ids: list[int]) -> tuple[int, int, int] | None:
         """`(keep, gap, run)` when `prompt_ids` is this slot's tokens with `gap` tokens removed
-        right
-        after the first `keep` (the chat's oldest messages were trimmed away) and the next `run`
-        tokens
-        then line up again; else None. Plain caches only - a recurrent state can't be cut."""
+        right after the first `keep` (the chat's oldest messages were trimmed) and the next `run`
+        tokens line up again; else None. Plain caches only: a recurrent state can't be cut."""
         old = self.token_ids
         if self.hybrid or not old:
             return None
@@ -75,7 +72,7 @@ class CacheSlot:
                 best = (keep, start - keep, run)
 
     def shift_out(self, keep: int, gap: int, rotations: list) -> None:
-        """Drops `gap` tokens after the first `keep`, in place (see `KVCache.drop_range`)."""
+        """Drops `gap` tokens after the first `keep`, in place (`KVCache.drop_range`)."""
         self.cache.drop_range(keep, gap, rotations)
         del self.token_ids[keep : keep + gap]
         self.prompt_len = max(self.prompt_len - gap, 0)
@@ -93,8 +90,8 @@ class CacheSlot:
         del self.token_ids[n:]
 
     def fork(self, n: int, num_ctx: int | None = None) -> "CacheSlot":
-        """A new slot holding a copy of the first `n` tokens; this slot is left untouched. `num_ctx`
-        gives the copy a different capacity."""
+        """A new slot holding a copy of the first `n` tokens; this one is untouched. `num_ctx` gives
+        the copy a different capacity."""
         if self.hybrid:
             cache = self.cache.fork_from(self.snapshots[n], num_ctx)
         else:

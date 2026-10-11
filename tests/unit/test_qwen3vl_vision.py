@@ -26,7 +26,7 @@ def test_mrope_axis_layout_is_interleaved() -> None:
 
 
 def test_mrope_uses_the_axis_a_frequency_belongs_to() -> None:
-    rope = InterleavedMRopeEmbedding(8, 10000.0, [1, 1, 1, 0])  # 4 freqs: axes 0,1,2,0
+    rope = InterleavedMRopeEmbedding(8, 10000.0, [1, 1, 1, 0])
     pos = torch.tensor([[5], [7], [9]])
     cos, _ = rope(pos)
     angles = torch.tensor([5.0, 7.0, 9.0, 5.0]) * rope.inv_freq
@@ -69,6 +69,6 @@ def test_tiny_vision_tower_merges_2x2_into_text_width() -> None:
     )
     torch.manual_seed(0)
     tower = Qwen3VLVisionEncoder(meta, out_dim=24, mlp_hidden=48).eval()
-    out = tower(torch.randn(1, 3, 24, 40))  # 6 x 10 patches -> 3 x 5 merged tokens
+    out = tower(torch.randn(1, 3, 24, 40))
     assert out.shape == (15, 24) and torch.isfinite(out).all()
     assert tower.merged_grid(24, 40) == (3, 5)

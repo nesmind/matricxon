@@ -1,6 +1,6 @@
-"""Hybrid (recurrent) models on a GPU, checked without one: the recurrence falls back to the torch
-reference loop on non-CPU tensors, caches follow their device, and a full forward through
-placement (packed mode on the CPU device) equals the plain model."""
+"""Hybrid (recurrent) models on a GPU without one: the recurrence falls back to the torch reference
+loop on non-CPU tensors, caches follow their device, and a full forward through placement (packed
+mode on the CPU device) equals the plain model."""
 
 from pathlib import Path
 

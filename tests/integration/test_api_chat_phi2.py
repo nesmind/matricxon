@@ -1,9 +1,7 @@
-"""/api/chat against a tiny but real phi2 GGUF (see tests/tiny_gguf_phi2.py) - the
-phi2-architecture equivalent of test_api_chat_llama.py. Real GGUFModelLoader/Phi2Architecture/
-GGUFTokenizer/ChatEngine/NDJSON stack, not mocked - proves the wiring (including the real
-fused-qkv split and partial-rotary shapes), not numerical correctness against the real
-(much larger, see tests/integration/test_real_fixture_moondream2.py) moondream2 model.
-"""
+"""/api/chat against a tiny phi2 GGUF (tests/tiny_gguf_phi2.py), the phi2 equivalent of
+test_api_chat_llama.py. Real GGUFModelLoader/Phi2Architecture/GGUFTokenizer/ChatEngine/NDJSON stack,
+not mocked: proves the wiring (fused-qkv split, partial-rotary shapes), not numerical correctness
+against the real, much larger moondream2 (tests/integration/test_real_fixture_moondream2.py)."""
 
 import json
 

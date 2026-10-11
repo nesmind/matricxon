@@ -10,10 +10,8 @@ logger = logging.getLogger(__name__)
 
 
 class RepetitionPenaltyFilter:
-    """Divides (or, for negative logits, multiplies) already-generated
-    tokens' scores by `penalty`, per Ollama/llama.cpp's `repeat_penalty`
-    convention - suppresses repeats without ever fully forbidding a token.
-    """
+    """Divides (or, for negative logits, multiplies) already-generated tokens' scores by `penalty`,
+    per Ollama/llama.cpp's `repeat_penalty`: suppresses repeats without fully forbidding a token."""
 
     def __init__(self, penalty: float) -> None:
         self._penalty = penalty
@@ -29,9 +27,8 @@ class RepetitionPenaltyFilter:
 
 
 class TemperatureScaler:
-    """`temperature <= 0` is a short-circuit to greedy argmax, matching
-    Ollama's convention - the rest of the pipeline never runs in that case.
-    """
+    """`temperature <= 0` short-circuits to greedy argmax (Ollama's convention); the rest of the
+    pipeline never runs."""
 
     def __init__(self, temperature: float) -> None:
         self._temperature = temperature
@@ -56,9 +53,8 @@ class TopKFilter:
 
 
 class TopPFilter:
-    """Nucleus sampling: keeps the smallest prefix of sorted probabilities
-    whose cumulative mass reaches `p`, always keeping at least the top token.
-    """
+    """Nucleus sampling: keeps the smallest prefix of sorted probabilities whose cumulative mass
+    reaches `p`, always keeping at least the top token."""
 
     def __init__(self, p: float) -> None:
         self._p = p
@@ -78,10 +74,8 @@ class TopPFilter:
 
 
 class Sampler:
-    """Ollama-option-shaped sampling pipeline: repeat-penalty -> temperature
-    -> top-k -> top-p -> multinomial, run once per generated token against
-    that step's vocab-sized logit vector.
-    """
+    """Ollama-option-shaped sampling pipeline: repeat-penalty -> temperature -> top-k -> top-p ->
+    multinomial, run once per generated token on that step's vocab-sized logits."""
 
     def __init__(self, sampling: SamplingConfig) -> None:
         self._sampling = sampling

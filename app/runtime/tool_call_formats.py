@@ -1,14 +1,14 @@
-"""How each model family writes a tool call in its generated text, and how to read it back.
-
-The formats come from the real chat templates (what the model saw in training):
-  - Qwen / Hermes: `<tool_call>{"name":..,"arguments":{..}}</tool_call>` (Qwen3, Qwen2.5) or the
-    XML form `<tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>`
-    (Qwen3.5) - both live inside the same tags, so one format handles both.
+"""How each model family writes a tool call in its generated text, and how to read it back. Formats
+come from the real chat templates:
+  - Qwen / Hermes: `<tool_call>{"name":..,"arguments":{..}}</tool_call>` (Qwen3, Qwen2.5) or the XML
+    form `<tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>`
+    (Qwen3.5): both use the same tags, so one format handles both.
   - Mistral: `[TOOL_CALLS]name[ARGS]{json}` (repeatable) or
     `[TOOL_CALLS][{"name":..,"arguments":..}]`.
   - Llama 3.x: the whole reply is `{"name":..,"parameters":{..}}`.
-  - Gemma 4: `<|tool_call>call:NAME{key:<|"|>text<|"|>,n:1}<tool_call|>` (see gemma_tool_dsl).
-`parse` returns [] when the text is not really a call, so the caller can show it as plain text."""
+  - Gemma 4: `<|tool_call>call:NAME{key:<|"|>text<|"|>,n:1}<tool_call|>` (gemma_tool_dsl).
+`parse` returns [] when the text isn't a call, so the caller shows it as plain text.
+"""
 
 import json
 import re
@@ -19,7 +19,7 @@ from app.schemas.chat import ToolCall, ToolFunctionCall
 
 
 class ToolSchemas:
-    """The request's tool definitions - used to keep a `string` parameter a string."""
+    """The request's tool definitions, used to keep a `string` parameter a string."""
 
     def __init__(self, tools: list[dict] | None) -> None:
         self._properties: dict[str, dict] = {}
@@ -39,7 +39,7 @@ class ToolSchemas:
 
 
 def _loads_prefix(text: str) -> object | None:
-    """The JSON value at the start of `text`, ignoring whatever follows it."""
+    """The JSON value at the start of `text`, ignoring what follows it."""
     try:
         return json.JSONDecoder().raw_decode(text.strip())[0]
     except ValueError:
@@ -114,8 +114,8 @@ class MistralFormat(ToolCallFormat):
 
 
 class LlamaJsonFormat(ToolCallFormat):
-    """Llama 3.x answers with bare JSON, so any reply that starts with `{` or `[` is held back
-    until the end and only counts as a call if all of it is one."""
+    """Llama 3.x answers with bare JSON, so a reply starting with `{` or `[` is held back until the
+    end and counts as a call only if all of it is one."""
 
     def parse(self, text: str, schemas: ToolSchemas) -> list[ToolCall]:
         try:
@@ -145,7 +145,7 @@ class GemmaFormat(ToolCallFormat):
 
 
 class ToolCallFormats:
-    """Picks a model's format from its chat template source (None: the model has no known one)."""
+    """Picks a model's format from its chat template source (None: no known one)."""
 
     @staticmethod
     def for_template(template: str | None, architecture: str = "") -> ToolCallFormat | None:

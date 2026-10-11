@@ -1,22 +1,17 @@
-"""Builds a tiny, complete, valid Mixtral-style `llama` GGUF file - mirrors `tiny_gguf_llama.py`'s
-
-structure plus real MoE metadata (`llama.expert_count`/`expert_used_count`) and the real
-llama.cpp Mixtral tensor convention (`ffn_gate_inp`/`ffn_gate_exps`/`ffn_up_exps`/
-`ffn_down_exps`, one 3D tensor per projection type) instead of plain `ffn_gate`/`ffn_up`/
-`ffn_down` - confirmed real (2026-09-30): llama.cpp has no separate `mixtral` architecture string
-at all, `general.architecture` stays `"llama"` for a real Mixtral pull too (see
-`app/architectures/llama_moe.py`'s own module docstring). `N_EXPERTS=4`/`EXPERTS_PER_TOK=2` with
-a multi-token prompt in tests exercises both "not every expert selected" and "multiple tokens
-pick overlapping experts" real code paths, same reasoning `tiny_gguf_granitemoe.py` already
-established.
-"""
+"""Builds a tiny, complete, valid Mixtral-style `llama` GGUF, mirroring `tiny_gguf_llama.py`, plus
+MoE metadata (`llama.expert_count`/`expert_used_count`) and llama.cpp's Mixtral tensor convention
+(`ffn_gate_inp`/`ffn_gate_exps`/`ffn_up_exps`/`ffn_down_exps`, one 3D tensor per projection) instead
+of `ffn_gate`/`ffn_up`/`ffn_down`. Confirmed: llama.cpp has no `mixtral` architecture
+string; `general.architecture` stays `"llama"` for a Mixtral pull (app/architectures/llama_moe.py).
+`N_EXPERTS=4`/`EXPERTS_PER_TOK=2` with a multi-token prompt exercises "not every expert selected"
+and "multiple tokens pick overlapping experts" (as `tiny_gguf_granitemoe.py`)."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2

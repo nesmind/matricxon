@@ -6,7 +6,7 @@ from app.gguf.reader import GGUFReader
 from app.runtime.tool_call_formats import ToolCallFormats
 
 # Keyed by (path, mtime, size): read on every GET /api/tags, and a file's header never changes
-# without the file itself changing (same pattern as has_confirmed_chat_format).
+# without the file (like has_confirmed_chat_format).
 _cache: dict[tuple[str, int, int], bool] = {}
 
 

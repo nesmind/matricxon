@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Reports whether matricxon is running and whether it actually answers
-# GET /api/tags (pAIring's own liveness probe - see the plan for why that
-# endpoint specifically matters).
+# Reports whether matricxon is running and answers GET /api/tags (pAIring's liveness probe).
 set -euo pipefail
 
-# Colored like uvicorn's own "INFO:" lines (plain text when not a terminal).
+# Colored like uvicorn's "INFO:" lines (plain when not a terminal).
 if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; N=$'\033[0m'; else G=""; R=""; N=""; fi
 info() { printf '%sINFO:%s %s\n' "$G" "$N" "$*"; }
 err() { printf '%sERROR:%s %s\n' "$R" "$N" "$*"; }

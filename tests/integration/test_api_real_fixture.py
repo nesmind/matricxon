@@ -1,8 +1,6 @@
-"""M5: the read-mostly endpoints against a real (symlinked) local GGUF file,
-not just the synthetic 0-byte files FakeInstalledModelFactory uses elsewhere.
-Skips automatically on a machine without pAIring's local blob store - see
-`real_ministral_model` in conftest.py.
-"""
+"""M5: the read-mostly endpoints against a real (symlinked) local GGUF, not just the 0-byte files
+FakeInstalledModelFactory uses elsewhere. Skips without pAIring's blob store (`real_ministral_model`
+in conftest.py)."""
 
 from pathlib import Path
 

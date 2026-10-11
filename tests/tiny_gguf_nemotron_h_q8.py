@@ -1,20 +1,18 @@
-"""A tiny `nemotron_h` GGUF whose attention/MLP/lm_head/Mamba-in-out-projection 2-D weights are
-Q8_0-quantized (norms, attn_q/attn_k, and every other SSM tensor stay F32 - none of those go
-through `_load_projection` either way, see `NemotronHArchitecture`'s own docstring) - big enough
-(n_embd 32, mamba_d_inner 32) for Q8_0's 32-value blocks, so the packed path (`attn_v`/
-`attn_output`/`ffn_up`/`ffn_down`/`output.weight`/`ssm_in`/`ssm_out` becoming `QuantizedLinear`)
-can be checked end to end against the float path on the exact same quantized values, same
-precedent as tests/tiny_gguf_llama_q8.py. Mirrors tests/tiny_gguf_nemotron_h.py's layer-type
-structure (Mamba/attention/MLP/Mamba/MLP/Mamba) exactly, just with bigger, block-aligned dims.
-"""
+"""A tiny `nemotron_h` GGUF with Q8_0 attention/MLP/lm_head/Mamba in-out projection 2-D weights
+(norms, attn_q/attn_k and the other SSM tensors stay F32: none go through `_load_projection`;
+`NemotronHArchitecture`), big enough (n_embd 32, mamba_d_inner 32) for Q8_0's 32-value blocks, so
+the packed path (`attn_v`/`attn_output`/`ffn_up`/`ffn_down`/`output.weight`/`ssm_in`/`ssm_out` as
+`QuantizedLinear`) can be checked end to end against the float path on the same quantized values,
+like tests/tiny_gguf_llama_q8.py. Mirrors tests/tiny_gguf_nemotron_h.py's layer structure
+(Mamba/attention/MLP/Mamba/MLP/Mamba) with bigger block-aligned dims."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
 from tests.tiny_gguf_llama_q8 import _q8_0_bytes
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 32
 N_HEAD = 2
@@ -23,7 +21,7 @@ N_HEAD_KV = 2
 FFN_LEN = 32
 MAMBA_NUM_HEADS = 2
 MAMBA_HEAD_DIM = 16
-MAMBA_D_INNER = MAMBA_NUM_HEADS * MAMBA_HEAD_DIM  # 32 - a multiple of 32 for ssm_out's Q8_0 block
+MAMBA_D_INNER = MAMBA_NUM_HEADS * MAMBA_HEAD_DIM
 D_STATE = 4
 N_GROUP = 2
 CONV_KERNEL = 4

@@ -1,8 +1,7 @@
-"""`/api/chat` against a tiny but real `command-r` GGUF (see tests/tiny_gguf_command_r.py). Real
-GGUFModelLoader/CommandRArchitecture/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked - exercises
-the real parallel attention+FFN block, bias-free LayerNorm, and logit_scale multiply. See
-scripts/oracle/validate_command_r.py for the real-weight numeric proof.
-"""
+"""`/api/chat` against a tiny `command-r` GGUF (tests/tiny_gguf_command_r.py). Real
+GGUFModelLoader/CommandRArchitecture/GGUFTokenizer/ChatEngine/NDJSON stack, not mocked: the parallel
+attention+FFN block, bias-free LayerNorm and logit_scale multiply. Real-weight numeric proof:
+tools/oracle/validate_command_r.py."""
 
 import json
 

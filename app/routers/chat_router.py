@@ -21,6 +21,7 @@ from app.runtime.vision_fusion import build_prompt_with_images
 from app.schemas.chat import ChatChunk, ChatDoneChunk, ChatRequest, ChatStreamMessage, ToolCall
 from app.server.errors import PromptTooLongError
 from app.server.ndjson import NDJSONResponse
+from app.server.node_kind import require_compute
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -29,12 +30,11 @@ logger = logging.getLogger(__name__)
 class ChatRequestHandler:
     """Handles `POST /api/chat`.
 
-    All fallible work (model load, prompt building, tokenization, num_ctx
-    validation) happens synchronously in `handle()`, before any
-    `NDJSONResponse` is constructed - Starlette sends status/headers before
-    pulling a streaming response's first item, so a validation error raised
-    here surfaces as a clean pre-stream HTTP error (via the `MatricxonError`
-    -> `JSONResponse` exception handler) instead of a broken in-stream one.
+    All fallible work (model load, prompt building, tokenization, num_ctx validation) happens
+    synchronously in `handle`, before any `NDJSONResponse` exists: Starlette sends status/headers
+    before pulling a streaming response's first item, so a validation error raised here becomes a
+    clean pre-stream HTTP error (via the `MatricxonError` -> `JSONResponse` handler), not a broken
+    in-stream one.
     """
 
     def __init__(self, model_manager: ModelManager, catalog: ModelCatalog) -> None:
@@ -58,12 +58,10 @@ class ChatRequestHandler:
         load_duration = time.monotonic() - load_started
         logger.info("model %r ready in %.2fs (get_or_load)", request.model, load_duration)
 
-        # A stop (unload) call for this exact model arrived while it had no handle yet - i.e.
-        # while the get_or_load() call just above was still stuck inside loading/dequantization,
-        # which alone can take longer than a caller waits before giving up. See
-        # ModelManager.pop_cancelled_load's own docstring: without this check, that stop request
-        # would otherwise be silently lost the instant loading finished, and generation would
-        # start anyway - completely unaware anyone had already asked to stop.
+        # A stop (unload) for this model arrived while it had no handle, i.e. while the
+        # get_or_load above was still in loading/dequantization, which alone can outlast a
+        # caller's patience. See ModelManager.pop_cancelled_load: without this check the stop would
+        # be lost when loading finished and generation would start anyway.
         if self._model_manager.pop_cancelled_load(request.model):
             return JSONResponse(status_code=200, content={})
         if request.request_id is not None and self._model_manager.pop_cancelled_request(
@@ -72,8 +70,8 @@ class ChatRequestHandler:
             return JSONResponse(status_code=200, content={})
 
         stage_started = time.monotonic()
-        # The model's own chat template (see app.runtime.chat_template) - Mistral3PromptBuilder
-        # only for mistral3 itself or a model with no template at all.
+        # The model's chat template (app.runtime.chat_template): Mistral3PromptBuilder only for
+        # mistral3 itself or a model with no template.
         prompt_builder = handle.prompt_builder or self._prompt_builder
         prompt = prompt_builder.build(request.messages, request.tools)
         logger.info(
@@ -85,11 +83,10 @@ class ChatRequestHandler:
 
         self._log_tools_offered(request, handle)
 
-        # Real vision support (LlamaArchitecture only, e.g. LLaVA) - see
-        # app.runtime.vision_fusion's own module docstring. A request with real images but no
-        # paired mmproj (see ModelCatalog.find_paired_mmproj) falls through to the plain
-        # tokenizer.encode() path below unchanged - matricxon's original "count and ignore" v1
-        # stance for every architecture that isn't wired up for real fusion yet.
+        # Vision support (LlamaArchitecture only, e.g. LLaVA): app.runtime.vision_fusion. A request
+        # with images but no paired mmproj (ModelCatalog.find_paired_mmproj) falls through to the
+        # plain tokenizer.encode path: matricxon's original "count and ignore" v1 stance for
+        # architectures not wired for fusion.
         all_images = [img for message in request.messages for img in (message.images or [])]
         mmproj = self._catalog.find_paired_mmproj(request.model) if all_images else None
 
@@ -164,7 +161,7 @@ class ChatRequestHandler:
 
     @staticmethod
     def _log_tool_result(request: ChatRequest, tail: str, tool_calls: list[ToolCall]) -> None:
-        """What the reply turned into: tool calls, or plain text (no call was made)."""
+        """What the reply turned into: tool calls, or plain text (no call made)."""
         if not request.tools:
             return
         if tool_calls:
@@ -219,7 +216,7 @@ class ChatRequestHandler:
             prompt_cache=handle.prompt_cache,
         )
         reply = ReplyTextStream(handle.tokenizer, handle.tool_call_format, request.tools)
-        # Cancelled in the gap between handle() and this stream starting: nothing to run.
+        # Cancelled in the gap between handle and this stream starting: nothing to run.
         if request_id is not None and self._model_manager.pop_cancelled_request(request_id):
             return
         stop_check = handle.worker.stop_check_for(request_id)
@@ -241,10 +238,9 @@ class ChatRequestHandler:
             now = time.monotonic()
             logger.info("token %d: id=%d elapsed=%.3fs", eval_count, item, now - last_token_at)
             last_token_at = now
-            # The EOS token itself is a real, counted generation step (matches
-            # ChatEngine's own token_ids/eval_count accounting) but its decoded
-            # text (e.g. literal "</s>") is never meant to reach the visible
-            # message - `done: true` is how a client learns generation ended.
+            # The EOS token is a counted generation step (as ChatEngine's token_ids/eval_count) but
+            # its decoded text (e.g. "</s>") must not reach the visible message; `done: true` tells
+            # a client generation ended.
             if item in eos_token_ids:
                 self._log_stop(item, handle, request)
                 continue
@@ -287,15 +283,14 @@ def _seconds_to_ns(seconds: float) -> int:
     return int(seconds * 1_000_000_000)
 
 
-@router.post("/api/chat", response_model=None)
+@router.post("/api/chat", dependencies=[Depends(require_compute)], response_model=None)
 async def post_chat(
     request: ChatRequest,
     model_manager: ModelManager = Depends(get_model_manager),
     catalog: ModelCatalog = Depends(get_model_catalog),
 ) -> JSONResponse | NDJSONResponse:
-    # Offloaded to a thread: model loading (potentially seconds of blocking
-    # disk/dequant work) and everything else ChatRequestHandler.handle() does
-    # synchronously must never block the event loop - it also has to keep
-    # answering /api/tags health probes while a chat call is in flight.
+    # Offloaded to a thread: model loading (seconds of blocking disk/dequant work) and the rest of
+    # ChatRequestHandler.handle must not block the event loop, which keeps answering /api/tags
+    # health probes during a chat.
     handler = ChatRequestHandler(model_manager, catalog)
     return await asyncio.to_thread(handler.handle, request)

@@ -1,8 +1,4 @@
-/* Small per-layer ops that cost far more in PyTorch's per-op dispatch than in arithmetic during a
- * one-token decode step: RMSNorm and rotary embedding. float32, contiguous unless a stride says
- * otherwise. Numba twins: app/native/fused_ops_numba.py (kept in sync, see CLAUDE.md); the exact
- * PyTorch formulas they replace: app/architectures/layers.py RMSNorm, rope.py apply_rotary_pos_emb.
- * Single-threaded on purpose - a few thousand floats is far below what an OpenMP fork/join costs. */
+/* Small per-layer ops (RMSNorm, rotary embedding) that cost more in PyTorch dispatch than arithmetic during a one-token decode. float32, contiguous unless a stride says otherwise. Numba twins: app/native/fused_ops_numba.py (keep in sync); the PyTorch originals: layers.py RMSNorm, rope.py apply_rotary_pos_emb. Single-threaded: OpenMP fork/join would cost more than a few thousand floats. */
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -20,9 +16,7 @@ void mx_rms_norm(const float *x, const float *w, float *out, int rows, int dim, 
     }
 }
 
-/* Rotate-half RoPE, x * cos + rotate_half(x) * sin, for x laid out (heads, tokens, dim) with
- * element strides s_head / s_tok (the last dim contiguous - a q/k projection viewed and
- * transposed). cos/sin are (tokens, dim); out is contiguous (heads, tokens, dim). */
+/* Rotate-half RoPE, x * cos + rotate_half(x) * sin, for x laid out (heads, tokens, dim) with strides s_head / s_tok (last dim contiguous). cos/sin are (tokens, dim); out is contiguous. */
 void mx_rope(const float *x, float *out, const float *cos, const float *sin, int n_heads,
              int n_tokens, int dim, int64_t s_head, int64_t s_tok) {
     int half = dim / 2;

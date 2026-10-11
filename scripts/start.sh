@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Starts matricxon detached (works on Linux and macOS). See scripts/stop.sh /
-# scripts/status.sh. For Debian/Ubuntu, prefer scripts/matricxon.service instead.
+# Starts matricxon detached (Linux and macOS); see stop.sh / status.sh. On Debian/Ubuntu prefer
+# scripts/matricxon.service.
 set -euo pipefail
 
-# Colored like uvicorn's own "INFO:" lines (plain text when not a terminal).
+# Colored like uvicorn's "INFO:" lines (plain when not a terminal).
 if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; N=$'\033[0m'; else G=""; R=""; N=""; fi
 info() { printf '%sINFO:%s %s\n' "$G" "$N" "$*"; }
 err() { printf '%sERROR:%s %s\n' "$R" "$N" "$*"; }
@@ -18,12 +18,23 @@ LOG_FILE="logs/matricxon.log"
 
 mkdir -p run logs
 
+# Rotate on start: keep MATRICXON_LOG_KEEP old logs once the file passes MATRICXON_LOG_MAX_MB.
+rotate_log() {
+    local max=$(( ${MATRICXON_LOG_MAX_MB:-50} * 1024 * 1024 )) keep="${MATRICXON_LOG_KEEP:-5}" i
+    [[ -f "$LOG_FILE" && "$(stat -c %s "$LOG_FILE" 2>/dev/null || stat -f %z "$LOG_FILE")" -gt $max ]] || return 0
+    for ((i = keep - 1; i >= 1; i--)); do
+        [[ -f "$LOG_FILE.$i" ]] && mv -f "$LOG_FILE.$i" "$LOG_FILE.$((i + 1))"
+    done
+    mv -f "$LOG_FILE" "$LOG_FILE.1"
+}
+
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     info "matricxon is already running (pid $(cat "$PID_FILE"))"
     exit 1
 fi
 
 rm -f "$PID_FILE"
+rotate_log
 
 if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
     err "port $PORT is already in use - is another matricxon running (e.g. pAIring's external/matricxon)?"
@@ -43,7 +54,7 @@ disown
 
 for _ in $(seq 1 40); do
     [[ -f "$PID_FILE" ]] && break
-    # Died during startup (bad config, port taken after all, import error...) - stop waiting.
+    # Died during startup (bad config, port taken, import error...): stop waiting.
     kill -0 "$SERVER_PID" 2>/dev/null || break
     sleep 0.25
 done

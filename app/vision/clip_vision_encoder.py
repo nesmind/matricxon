@@ -17,28 +17,20 @@ _PROJECTOR_IDEFICS3 = "idefics3"
 
 
 class ClipVisionEncoder(nn.Module):
-    """The real `clip`-architecture vision tower + projector llama.cpp's
+    """The `clip`-architecture vision tower + projector packaged by llama.cpp's `clip.cpp`/mmproj
+    GGUF format. Validated against three mmproj pulls, each path conditional on tensor presence so
+    earlier ones are unchanged:
+    - `moondream/moondream2-gguf`: SigLIP-shaped (no CLS token, no pre_ln, a post_ln) + a 2-layer
+      MLP projector (`mm.0`/`mm.2`, `clip.projector_type = "mlp"`).
+    - `second-state/Llava-v1.6-Vicuna-7B-GGUF`: OpenAI-CLIP-shaped towers add a CLS token
+      (`v.class_embd`, dropped before the projector), a pre-transformer LayerNorm (`v.pre_ln`), and
+      may omit `post_ln` (skipped when absent).
+    - `ggml-org/SmolVLM-256M-Instruct-GGUF`: Idefics3's `idefics3` projector (pixel-shuffle merge +
+      a single bias-free linear); see `app.vision.idefics3_projector.pixel_shuffle`.
 
-    `clip.cpp`/mmproj GGUF format packages. Validated against three real
-    mmproj pulls, each conditional on real tensor presence so earlier paths
-    stay unchanged:
-    - `moondream/moondream2-gguf`: SigLIP-shaped (no CLS token, no pre_ln, a
-      real post_ln) + a 2-layer MLP projector (`mm.0`/`mm.2`,
-      `clip.projector_type = "mlp"`).
-    - `second-state/Llava-v1.6-Vicuna-7B-GGUF` (2026-09-21): OpenAI-CLIP-
-      shaped towers add a CLS token (`v.class_embd`, dropped again before
-      the projector), a pre-transformer LayerNorm (`v.pre_ln`), and may omit
-      `post_ln` entirely (skipped when the tensor is absent).
-    - `ggml-org/SmolVLM-256M-Instruct-GGUF` (2026-09-28): Idefics3's
-      `idefics3` projector (pixel-shuffle merge + a single bias-free linear)
-      - see `app.vision.idefics3_projector.pixel_shuffle`'s own docstring
-      for the full history and real-file verification detail.
-
-    Still deliberately **not** a `ModelArchitecture` subclass / not
-    registered in `ArchitectureRegistry` - this stays a standalone component
-    `chat_router.py` invokes directly for a paired mmproj (see
-    `ModelCatalog.find_paired_mmproj`), not part of `ModelManager`'s own
-    load/evict lifecycle.
+    Not a `ModelArchitecture` subclass or registered in `ArchitectureRegistry`: a standalone
+    component `chat_router.py` invokes for a paired mmproj (`ModelCatalog.find_paired_mmproj`),
+    outside `ModelManager`'s load/evict lifecycle.
     """
 
     def __init__(
@@ -98,9 +90,7 @@ class ClipVisionEncoder(nn.Module):
                 for _ in range(self.n_layer)
             ]
         )
-        self.post_ln = (
-            nn.LayerNorm(self.n_embd, eps=self.eps, dtype=dtype) if has_post_ln else None
-        )
+        self.post_ln = nn.LayerNorm(self.n_embd, eps=self.eps, dtype=dtype) if has_post_ln else None
 
         self.projector_up: nn.Linear | None = None
         self.projector_down: nn.Linear | None = None
@@ -125,11 +115,8 @@ class ClipVisionEncoder(nn.Module):
     def from_gguf(
         cls, loader: GGUFModelLoader, dtype: torch.dtype = torch.float32
     ) -> "ClipVisionEncoder":
-        """Eager loading - unlike the text decoders' on-the-fly dequant, this
-
-        component isn't part of `ModelManager`'s load/evict lifecycle, so
-        there's no latency/memory motivation to defer it.
-        """
+        """Eager loading, unlike the text decoders' on-the-fly dequant: this component isn't in
+        `ModelManager`'s load/evict lifecycle, so no latency/memory reason to defer."""
         projector_type = loader.metadata.get_str("clip.projector_type", _PROJECTOR_MLP)
         has_class_embd = loader.has_tensor("v.class_embd")
         has_pre_ln = loader.has_tensor("v.pre_ln.weight")
@@ -143,10 +130,10 @@ class ClipVisionEncoder(nn.Module):
         if projector_type == _PROJECTOR_IDEFICS3:
             idefics3_fc_weight, projection_dim, scale_factor = load_projector_weights(loader)
         else:
-            # mm.0/mm.2's real shapes win over metadata: the MLP hidden width has no `clip.*`
-            # metadata key at all, and `clip.vision.projection_dim` is confirmed *wrong* on the
-            # real LLaVA mmproj file (768 = CLIP's native contrastive-projection width, not this
-            # file's real mm-projector output of 4096) - trusting it would crash on `.copy_()`.
+            # mm.0/mm.2's shapes win over metadata: the MLP hidden width has no `clip.*` key, and
+            # `clip.vision.projection_dim` is wrong on the LLaVA mmproj (768 = CLIP's
+            # contrastive-projection width, not the file's mm-projector output of 4096); trusting it
+            # would crash on `.copy_`.
             projector_up_weight = loader.load_tensor("mm.0.weight")
             projector_hidden = projector_up_weight.shape[0]
             projection_dim = loader.load_tensor("mm.2.weight").shape[0]
@@ -190,9 +177,9 @@ class ClipVisionEncoder(nn.Module):
                 layer.out_proj.bias.copy_(loader.load_tensor(prefix + "attn_out.bias"))
                 layer.ln2.weight.copy_(loader.load_tensor(prefix + "ln2.weight"))
                 layer.ln2.bias.copy_(loader.load_tensor(prefix + "ln2.bias"))
-                # Real, confirmed-by-bias-length naming swap (see ClipVisionEncoderLayer's own
-                # docstring): the tensor named "ffn_down" is actually the expanding projection
-                # (fc1, n_embd -> ffn_len) and "ffn_up" is the contracting one (fc2).
+                # Naming swap confirmed by bias length (ClipVisionEncoderLayer): the tensor named
+                # "ffn_down" is the expanding projection (fc1, n_embd -> ffn_len) and "ffn_up" the
+                # contracting one (fc2).
                 layer.fc1.weight.copy_(loader.load_tensor(prefix + "ffn_down.weight"))
                 layer.fc1.bias.copy_(loader.load_tensor(prefix + "ffn_down.bias"))
                 layer.fc2.weight.copy_(loader.load_tensor(prefix + "ffn_up.weight"))
@@ -210,19 +197,16 @@ class ClipVisionEncoder(nn.Module):
         return model.eval()
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """pixel_values (batch, 3, image_size, image_size) -> projected
-
-        embeddings (batch, num_patches, projection_dim), one soft token per
-        real image patch (see `ChatRequestHandler` for the splice into a
-        chat request's input embeddings). A CLS token, when present, is used
-        internally but dropped before the projector.
-        """
-        x = self.patch_embd(pixel_values)  # (batch, n_embd, grid, grid)
-        x = x.flatten(2).transpose(1, 2)  # (batch, num_patches, n_embd)
+        """pixel_values (batch, 3, image_size, image_size) -> projected embeddings (batch,
+        num_patches, projection_dim), one soft token per image patch (`ChatRequestHandler` splices
+        them into a chat request's input embeddings). A CLS token, when present, is used internally
+        and dropped before the projector."""
+        x = self.patch_embd(pixel_values)
+        x = x.flatten(2).transpose(1, 2)
         if self.class_embd is not None:
             batch = x.shape[0]
             cls = self.class_embd.expand(batch, 1, self.n_embd)
-            x = torch.cat([cls, x], dim=1)  # (batch, 1 + num_patches, n_embd)
+            x = torch.cat([cls, x], dim=1)
         x = x + self.position_embd
 
         if self.pre_ln is not None:
@@ -234,7 +218,7 @@ class ClipVisionEncoder(nn.Module):
             x = self.post_ln(x)
 
         if self.class_embd is not None:
-            x = x[:, 1:, :]  # drop the CLS position - see this method's own docstring
+            x = x[:, 1:, :]
 
         if self.mm_fc is not None:
             x = pixel_shuffle(x, self.scale_factor)

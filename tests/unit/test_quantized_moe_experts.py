@@ -1,10 +1,6 @@
-"""QuantizedMoEExperts (app/architectures/moe_experts.py) - the shared, quantized-native-aware
-MoE expert FFN every real MoE architecture in this project now composes. Exercised through
-GraniteMoeArchitecture (the simplest real MoE architecture - no shared dense branch, no PLE/
-cross-layer-KV complexity) on a real, tiny Q8_0-quantized GGUF - the same "packed vs dense, same
-weights, same output" precedent tests/unit/test_packed_weights.py already established for the
-plain 2D case, now proven for a real 3D per-expert tensor too.
-"""
+"""QuantizedMoEExperts (app/architectures/moe_experts.py), the shared quantized-aware MoE expert
+FFN. Exercised through GraniteMoeArchitecture on a tiny Q8_0 GGUF: packed vs dense must give the
+same output, now for 3D per-expert tensors."""
 
 import pytest
 import torch
@@ -63,8 +59,7 @@ def test_packed_model_builds_a_quantized_linear_per_expert(tmp_path):
     assert len(experts.down_packed) == N_EXPERTS
     for expert_id in range(N_EXPERTS):
         assert isinstance(experts.gate_packed[str(expert_id)], QuantizedLinear)
-    # The big dense placeholder is freed once every expert packs - see _materialize_one's own
-    # docstring for why this differs from the plain 2D placeholder-then-replace precedent.
+    # The big dense placeholder is freed once every expert packs (see _materialize_one).
     assert experts.gate_exps.numel() == 0
     assert experts.up_exps.numel() == 0
     assert experts.down_exps.numel() == 0
@@ -84,8 +79,7 @@ def test_dense_model_never_builds_any_packed_linear(tmp_path):
 
 
 def test_router_stays_a_plain_dense_tensor_either_way(tmp_path):
-    """The router is small and always a plain `.copy_()` - see QuantizedMoEExperts's own
-    docstring for why packing it wouldn't meaningfully help."""
+    """The router is small and always a plain `.copy_` (see QuantizedMoEExperts)."""
     path = build_tiny_granitemoe_q8_gguf(tmp_path / "tiny-granitemoe-q8.gguf")
     model = _load(path, packed=True)
     with torch.no_grad():
@@ -113,21 +107,19 @@ def test_ram_estimate_counts_packed_expert_tensors_for_granitemoe(tmp_path):
 
 
 def test_release_lets_the_mmap_close_cleanly(tmp_path):
-    """Every real per-expert QuantizedLinear must be a discoverable submodule (see
-    QuantizedMoEExperts's own docstring) - otherwise ModelArchitecture.close()'s own
-    _release_packed_modules walk would miss it, and mmap.close() would raise a real
-    BufferError instead of this test just passing."""
+    """Every per-expert QuantizedLinear must be a discoverable submodule, else
+    `_release_packed_modules` misses it and mmap.close raises BufferError."""
     path = build_tiny_granitemoe_q8_gguf(tmp_path / "tiny-granitemoe-q8.gguf")
     model = _load(path, packed=True)
     with torch.no_grad():
         model.forward(INPUT_IDS)
 
-    model.close()  # must not raise
+    model.close()
 
 
 def test_expert_per_tok_selection_still_works_when_packed(tmp_path):
-    """Real sparse dispatch (only EXPERTS_PER_TOK of N_EXPERTS ever computed per token) - proves
-    the packed path is exercised for a genuinely selective, not-every-expert case too."""
+    """Sparse dispatch (only EXPERTS_PER_TOK of N_EXPERTS computed per token) works on the packed
+    path."""
     assert EXPERTS_PER_TOK < N_EXPERTS
     path = build_tiny_granitemoe_q8_gguf(tmp_path / "tiny-granitemoe-q8.gguf")
     model = _load(path, packed=True)
@@ -147,13 +139,9 @@ def native_gemm(tmp_path_factory: pytest.TempPathFactory) -> NativeGemm:
 def test_packed_model_matches_the_dense_model_via_the_native_c_backend(
     tmp_path, monkeypatch: pytest.MonkeyPatch, native_gemm: NativeGemm
 ) -> None:
-    """The module-level `numba_backend` fixture forces every other test in this file onto the
-    Numba path - this one explicitly re-activates a real native C backend afterward (Q8_0 has
-    had native coverage since before this session, see ROADMAP.md) to prove
-    `QuantizedMoEExperts` gets that backend "for free" too: it reuses `QuantizedLinear` per
-    expert unchanged, and that class's own native-vs-Numba-vs-dequant dispatch already doesn't
-    care whether the tensor it's given is a whole dense weight or one expert's own slice of a
-    bigger 3D one."""
+    """The module's `numba_backend` fixture forces Numba; this test re-activates the native C
+    backend to prove QuantizedMoEExperts gets it too, since it reuses `QuantizedLinear` per
+    expert."""
     monkeypatch.setattr(NativeGemm, "_active", native_gemm)
     path = build_tiny_granitemoe_q8_gguf(tmp_path / "tiny-granitemoe-q8.gguf")
     dense = _load(path, packed=False)
@@ -162,11 +150,8 @@ def test_packed_model_matches_the_dense_model_via_the_native_c_backend(
         expected = dense.forward(INPUT_IDS)
         result = packed.forward(INPUT_IDS)
 
-    # Looser than test_native_gemm.py's own 1e-2 bound for a single quantized matmul - here the
-    # activations pass through 3 chained native-C quantized matmuls per expert (gate, up, down),
-    # each independently contributing its own int8-activation-quantization rounding, so the
-    # compounded error is expected to be larger. Confirmed stable at ~1.5-2% across 5 random
-    # seeds (not a data-dependent slicing bug, which would show wildly varying/much larger error).
+    # Looser than test_native_gemm.py's 1e-2: three chained native matmuls per expert (gate, up,
+    # down) compound int8 activation rounding. Stable at ~1.5-2% across 5 seeds.
     rel_err = torch.linalg.norm(result - expected) / torch.linalg.norm(expected)
     assert rel_err < 3e-2
     for expert_id in range(N_EXPERTS):

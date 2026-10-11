@@ -176,9 +176,9 @@ class TestQuantStrategyRegistry:
             assert registry.get(quant_type) is not None
 
     def test_unsupported_known_type_raises(self) -> None:
-        # Q8_1: a real ggml_type with no QuantStrategy - unlike IQ2_XXS/IQ2_XS/IQ2_S/IQ3_XXS/
-        # IQ3_S/IQ1_S/IQ1_M/IQ4_NL/IQ4_XS/TQ1_0/TQ2_0 (all real now), this legacy type is
-        # genuinely still unimplemented.
+        # Q8_1: a ggml_type with no QuantStrategy; unlike
+        # IQ2_XXS/IQ2_XS/IQ2_S/IQ3_XXS/IQ3_S/IQ1_S/IQ1_M/IQ4_NL/IQ4_XS/TQ1_0/TQ2_0 (all implemented
+        # now), this legacy type is still unimplemented.
         with pytest.raises(UnsupportedQuantTypeError):
             QuantStrategyRegistry().get(GGMLQuantizationType.Q8_1)
 
@@ -191,6 +191,6 @@ class TestQuantStrategyRegistry:
 
         assert "F32" in names
         assert "Q4_K" in names
-        assert "IQ2_XXS" in names  # grid-based I-quant, implemented 2026-09-28
-        assert "Q8_1" not in names  # a real but genuinely unsupported type
+        assert "IQ2_XXS" in names
+        assert "Q8_1" not in names
         assert len(names) == len(QuantStrategyRegistry._STRATEGIES)

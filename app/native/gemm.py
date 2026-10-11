@@ -1,10 +1,9 @@
 """Python face of the native quantized matmul (`mx_gemm` in app/native/src/mx_gemm.c): y = x @ W.T
-for a packed GGUF weight `W`, straight from its raw mmap'd bytes - no copy, no dequantized tensor.
+for a packed GGUF weight `W`, straight from its raw mmap'd bytes: no copy, no dequantized tensor.
 
-`QuantizedLinear` asks `NativeGemm.active()` once per tensor at construction; it's None unless
-`Settings.gemv_backend == "native"` and the library actually built, so the Numba kernels stay the
-fallback for every case this doesn't cover (unsupported type, `in_features` not a multiple of
-256, no C compiler).
+`QuantizedLinear` asks `NativeGemm.active` once per tensor at construction; None unless
+`Settings.gemv_backend == "native"` and the library built, so the Numba kernels stay the fallback
+for what this doesn't cover (unsupported type, `in_features` not a multiple of 256, no C compiler).
 """
 
 import ctypes
@@ -64,7 +63,7 @@ class NativeGemm:
     @classmethod
     def configure(cls, backend: str, n_threads: int | None = None) -> None:
         """Called once at startup (app.main.MatricxonApp). A failed build is logged and leaves the
-        Numba kernels in charge - never a startup failure."""
+        Numba kernels in charge, never a startup failure."""
         cls._active = None
         if backend != "native":
             return
@@ -104,18 +103,17 @@ class NativeGemm:
         return supported
 
     def supports_dequant_rows(self, ggml_type: int, row_width: int) -> bool:
-        """Whether `dequant_rows` can handle this (type, row_width) pair - only the K-quant family
-        with an `mx_unpack_*` function (Q3_K/Q4_K/Q5_K/Q6_K), block-aligned. `QuantizedEmbedding`
-        keeps the Python `QuantStrategy.dequantize` fallback (already correct, already used before
-        this existed) for everything this returns False for."""
+        """Whether `dequant_rows` handles this (type, row_width): only the K-quant family with an
+        `mx_unpack_*` function (Q3_K/Q4_K/Q5_K/Q6_K), block-aligned. `QuantizedEmbedding` keeps the
+        Python `QuantStrategy.dequantize` fallback for everything else."""
         return bool(self._lib.mx_supports_dequant_rows(int(ggml_type), row_width))
 
     def dequant_rows(
         self, ggml_type: int, raw: memoryview, row_indices: torch.Tensor, row_width: int
     ) -> torch.Tensor:
-        """Dequantizes `row_indices` (1D, real row numbers into `raw`) straight to float32,
-        `(len(row_indices), row_width)` - never the full table. `raw` must hold whichever total
-        row count the caller's own tensor really has; only the requested rows are ever read."""
+        """Dequantizes `row_indices` (1D row numbers into `raw`) straight to float32,
+        `(len(row_indices), row_width)`, never the full table. `raw` must hold the caller's total
+        row count; only the requested rows are read."""
         indices32 = row_indices.detach().to(torch.int32).contiguous()
         n_rows = indices32.shape[0]
         out = torch.empty((n_rows, row_width), dtype=torch.float32)
@@ -143,8 +141,8 @@ class NativeGemm:
         state: torch.Tensor,
         out: torch.Tensor,
     ) -> None:
-        """Qwen3.5's Gated DeltaNet recurrence (see qwen35_delta_kernels.py): all float32 and
-        contiguous - q/k (T,H,dk), v/out (T,H,dv), g/beta (T,H); `state` (H,dk,dv) is updated in
+        """Qwen3.5's Gated DeltaNet recurrence (qwen35_delta_kernels.py): all float32 and
+        contiguous: q/k (T,H,dk), v/out (T,H,dv), g/beta (T,H); `state` (H,dk,dv) is updated in
         place."""
         n_tokens, n_heads, dk = q.shape
         status = self._lib.mx_gated_delta_rule(
@@ -157,12 +155,12 @@ class NativeGemm:
 
     def set_fused_max_tokens(self, n_tokens: int) -> None:
         """Up to this many tokens per call a K-quant matmul uses its per-token fused kernel instead
-        of unpacking each weight row once (see mx_gemm.c) - what a small decode batch should use."""
+        of unpacking each weight row once (mx_gemm.c): what a small decode batch should use."""
         self._lib.mx_set_fused_max_tokens(n_tokens)
 
     def take_stats(self) -> tuple[int, float]:
-        """(calls, seconds) spent in native kernels since the last call - chat_router logs it per
-        reply. Only ever read/reset from the one generating worker thread per model."""
+        """(calls, seconds) in native kernels since the last call; chat_router logs it per reply.
+        Read/reset only from the one generating worker thread per model."""
         stats = (self._calls, self._seconds)
         self._calls, self._seconds = 0, 0.0
         return stats
@@ -176,11 +174,11 @@ class NativeGemm:
         in_features: int,
     ) -> torch.Tensor:
         """`x`: `(n_tokens, in_features)`, any float dtype. Returns `(n_tokens, out_features)`
-        float32. `raw` must hold `out_features` packed rows (GGUF's own row-major order)."""
+        float32. `raw` must hold `out_features` packed rows (GGUF's row-major order)."""
         x32 = x.detach().to(torch.float32).contiguous()
         n_tokens = x32.shape[0]
         y = torch.empty((n_tokens, out_features), dtype=torch.float32)
-        # np.frombuffer only wraps the (read-only) mmap view to get its address - no copy.
+        # np.frombuffer wraps the (read-only) mmap view only to get its address: no copy.
         weight_ptr = np.frombuffer(raw, dtype=np.uint8).ctypes.data
         started = time.perf_counter()
         status = self._lib.mx_gemm(

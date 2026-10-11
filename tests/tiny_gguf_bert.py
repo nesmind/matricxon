@@ -1,12 +1,8 @@
-"""Builds a tiny, complete, valid `bert` GGUF file - the WordPiece/encoder
-equivalent of tiny_gguf.py's `build_tiny_mistral3_gguf`. Real architecture,
-real (if minimal) WordPiece-shaped tokenizer metadata, all F32, so
-integration tests can run the entire real embeddings pipeline
-(GGUFReader -> GGUFModelLoader -> BertArchitecture -> WordPieceTokenizer ->
-EmbeddingEngine) end to end, fast and memory-safely. ROADMAP.md's M8 oracle
-scripts already validated the real forward-pass math against real weights -
-this is for exercising the wiring, not model quality.
-"""
+"""Builds a tiny, complete, valid `bert` GGUF: the WordPiece/encoder equivalent of tiny_gguf.py's
+`build_tiny_mistral3_gguf`. Real architecture, minimal WordPiece-shaped tokenizer metadata, all F32,
+so integration tests run the entire embeddings pipeline (GGUFReader -> GGUFModelLoader ->
+BertArchitecture -> WordPieceTokenizer -> EmbeddingEngine) fast and memory-safely. The M8 oracle
+scripts validated the math on real weights; this exercises the wiring."""
 
 import string
 from pathlib import Path
@@ -14,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 8
 N_HEAD = 2
@@ -29,9 +25,8 @@ SEP_TOKEN_ID = 3
 
 
 def _wordpiece_vocab() -> list[str]:
-    # A word-initial ("▁"-prefixed) and a bare (continuation) entry for
-    # every lowercase ASCII letter - enough to encode any short lowercase
-    # test word one character at a time without ever hitting [UNK].
+    # A word-initial ("▁"-prefixed) and a bare (continuation) entry for every lowercase ASCII
+    # letter: enough to encode a short lowercase word one character at a time without [UNK].
     letters = list(string.ascii_lowercase)
     return _SPECIAL_TOKENS + [f"▁{c}" for c in letters] + letters
 

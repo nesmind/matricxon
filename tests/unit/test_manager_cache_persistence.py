@@ -60,7 +60,7 @@ def test_a_retired_models_conversation_resumes_on_a_fresh_manager(
     elif how == "shutdown":
         first.shutdown()
     else:
-        first.get_or_load("model-b:latest")  # max_loaded=1: model A is evicted
+        first.get_or_load("model-b:latest")
     store.flush()
     assert store.usage()[0] == 1
 

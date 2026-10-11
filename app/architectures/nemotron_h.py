@@ -22,40 +22,28 @@ logger = logging.getLogger(__name__)
 
 
 class NemotronHArchitecture(ModelArchitecture):
-    """NVIDIA Nemotron-H - a real hybrid decoder with THREE interleaved per-layer types (not a
-    uniform stack, unlike every other architecture in this repo): Mamba-2 (SSM), plain GQA
-    attention (no RoPE at all), and plain non-gated squared-ReLU MLP. Confirmed against HF
-    `transformers`' real `modeling_nemotron_h.py`, llama.cpp's real shipped `nemotron_h` GGUF
-    support, and a real downloaded `nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF` file's own header
-    (range-fetched directly, 2026-09-22 - no full multi-GB download needed).
+    """NVIDIA Nemotron-H: a hybrid decoder with three interleaved per-layer types: Mamba-2 (SSM),
+    plain GQA attention (no RoPE) and a plain non-gated squared-ReLU MLP. Checked against HF
+    `modeling_nemotron_h.py`, llama.cpp's `nemotron_h` and a range-fetched header of
+    `nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF`.
 
-    Layer type is derived per real layer index from two existing GGUF **per-layer arrays**
-    (`attention.head_count_kv`/`feed_forward_length` - confirmed real on the target checkpoint,
-    42 entries each), not a dedicated "layer type" key - `mamba` iff both are 0, `attention` iff
-    `head_count_kv != 0`, `mlp` otherwise (llama.cpp's own real C++ loader logic, replicated here
-    in Python). Real target checkpoint: 21 Mamba-2 / 4 attention / 17 MLP layers. Per-layer
-    construction/materialization is dispatched to `build_nemotron_h_layer`/`materialize_*_layer`
-    (`app/architectures/nemotron_h_layers.py`), kept next to the layer classes themselves so this
-    file stays focused on metadata parsing and orchestration.
+    Layer type comes from two GGUF per-layer arrays
+    (`attention.head_count_kv`/`feed_forward_length`): `mamba` iff both are 0, `attention` iff
+    `head_count_kv != 0`, else `mlp` (llama.cpp's loader logic). The target checkpoint has 21
+    Mamba-2 / 4 attention / 17 MLP layers. Construction/materialization is in
+    `build_nemotron_h_layer`/`materialize_*_layer` (`nemotron_h_layers.py`).
 
-    Uses its own hybrid cache (`NemotronHHybridCache`, `app/runtime/mamba_cache.py`) rather than
-    the plain per-attention-layer `KVCache` every other architecture uses - see
-    `ModelArchitecture.build_cache`'s own docstring for why this is a clean override rather than a
-    special case, and why `kv_cache_layer_shapes` is simply never defined here (it was never
-    ABC-enforced to begin with).
+    Uses its own hybrid cache (`NemotronHHybridCache`, `app/runtime/mamba_cache.py`), not `KVCache`
+    (see `ModelArchitecture.build_cache`).
 
-    Quantized-native compute (`app/models/load_dtype.py`'s `QUANTIZED_NATIVE_WIRED_ARCHITECTURES`/
-    `_QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH`) covers `attn_v`/`attn_output`/`ffn_up`/`ffn_down`/
-    `output.weight`, plus the Mamba mixer's own `ssm_in`/`ssm_out` (2026-09-29) - real, non-marginal
-    savings confirmed on an installed 12B checkpoint (MLP tensors are 47.7% of real total elements
-    there, and `ssm_in`/`ssm_out` alone are 99.9% of the SSM bucket's own elements - together this
-    now covers nearly the whole model; estimated RAM for that file dropped ~29.5GB -> ~18.6GB).
-    Every other SSM tensor genuinely isn't 2D `nn.Linear`-shaped (`ssm_a`/`ssm_d`/`ssm_dt.bias` are
-    1D, `ssm_conv1d` is a depthwise conv kernel, `ssm_norm` a grouped-norm weight) and stays a
-    plain `.copy_()` into its raw `nn.Parameter`, same as `token_embd` and `attn_q`/`attn_k` (this
-    architecture has no RoPE, so there's no packed-row permutation reason to route those two
-    through `_load_projection` the way llama/gemma4 do) - a real, separate follow-up, not
-    attempted here.
+    Quantized-native compute (`app/models/load_dtype.py`
+    `QUANTIZED_NATIVE_WIRED_ARCHITECTURES`/`_QUANTIZED_NATIVE_TENSOR_SUFFIXES_BY_ARCH`) covers
+    `attn_v`/`attn_output`/`ffn_up`/`ffn_down`/`output.weight` plus the Mamba mixer's
+    `ssm_in`/`ssm_out`: on an installed 12B, MLP tensors are 47.7% of elements and
+    `ssm_in`/`ssm_out` 99.9% of the SSM bucket (est. RAM ~29.5GB -> ~18.6GB). Other SSM tensors
+    aren't 2D Linear-shaped (`ssm_a`/`ssm_d`/`ssm_dt.bias` 1D, `ssm_conv1d` depthwise, `ssm_norm`
+    grouped) and, like `token_embd` and `attn_q`/`attn_k` (no RoPE, so no packed-row permutation),
+    use a plain `.copy_`.
     """
 
     NAME = "nemotron_h"
@@ -87,9 +75,8 @@ class NemotronHArchitecture(ModelArchitecture):
             vocab_size if vocab_size is not None else len(metadata.require("tokenizer.ggml.tokens"))
         )
 
-        # The one genuinely new kind of metadata read this architecture needs: real per-layer
-        # arrays (not scalars) that llama.cpp's own converter uses to encode which of the three
-        # real layer types each real layer index actually is.
+        # The new kind of metadata read here: per-layer arrays (not scalars) llama.cpp's converter
+        # uses to encode each layer's type.
         head_count_kv_arr = metadata.get_array(arch("attention.head_count_kv"))
         ffn_len_arr = metadata.get_array(arch("feed_forward_length"))
         self.layer_types: list[str] = []
@@ -105,16 +92,16 @@ class NemotronHArchitecture(ModelArchitecture):
                 self.layer_types.append("mlp")
             self.n_head_kv_per_layer.append(hkv)
             self.ffn_len_per_layer.append(ffn)
-        # Real attention layers in this checkpoint share one n_head_kv value - kept for
-        # NemotronHHybridCache's uniform attention_layer_shape.
+        # Attention layers in this checkpoint share one n_head_kv; kept for NemotronHHybridCache's
+        # uniform attention_layer_shape.
         self.n_head_kv = next(h for h in self.n_head_kv_per_layer if h != 0)
 
-        # ssm.* namespace - generic, shared with Mamba/Mamba2/Jamba, not nemotron_h-specific.
+        # ssm.* namespace: generic, shared with Mamba/Mamba2/Jamba, not nemotron_h-specific.
         self.conv_kernel = metadata.get_u32(arch("ssm.conv_kernel"))
         self.mamba_d_inner = metadata.get_u32(arch("ssm.inner_size"))
         self.d_state = metadata.get_u32(arch("ssm.state_size"))
-        # Repurposed key: holds the real Mamba-2 head COUNT, not a "rank" (llama.cpp naming
-        # quirk carried over from Mamba-1) - confirmed against the real target checkpoint.
+        # Repurposed key: holds the Mamba-2 head COUNT, not a "rank" (llama.cpp naming quirk from
+        # Mamba-1); confirmed on the target checkpoint.
         self.mamba_num_heads = metadata.get_u32(arch("ssm.time_step_rank"))
         self.n_group = metadata.get_u32(arch("ssm.group_count"))
         self.mamba_head_dim = self.mamba_d_inner // self.mamba_num_heads
@@ -176,7 +163,7 @@ class NemotronHArchitecture(ModelArchitecture):
             enable_quantized_native=enable_quantized_native,
             tied_embeddings=not loader.has_tensor("output.weight"),
         )
-        # No _rebuild_derived_buffers override needed - no RoPE, no derived buffer to recreate.
+        # No _rebuild_derived_buffers override: no RoPE, no derived buffer to recreate.
         model._defer_materialization(loader)
         return model
 
@@ -228,18 +215,18 @@ class NemotronHArchitecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # no real vision-language Nemotron-H checkpoint exists yet to fuse
-        del position_ids  # no RoPE anywhere in this architecture - nothing needs a position id
+        del image_embeddings
+        del position_ids
 
         _, seq_len = input_ids.shape
         x = self.token_embd(input_ids)
         for i, layer in enumerate(self.layers):
             layer_started = time.monotonic()
             x = layer(x, kv_cache, i)
-            # Real per-layer-type timing (mamba/attention/mlp) - a real gap this closes
-            # (2026-09-29): _forward_impl logged nothing here before, unlike gemma4's own
-            # "attention"/"ffn" lines. Each real layer here is only ever one stage, so one line
-            # with its type carries what gemma4 needs two nested lines for.
+            # Per-layer-type timing (mamba/attention/mlp), closing a gap: _forward_impl
+            # logged nothing here, unlike gemma4's
+            # "attention"/"ffn" lines. Each layer is one stage, so one line with its type does what
+            # gemma4 needs two nested lines for.
             logger.debug(
                 "layer %d/%d (%s): %.1fms (seq_len=%d)",
                 i + 1,

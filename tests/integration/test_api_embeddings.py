@@ -1,9 +1,7 @@
-"""M8: /api/embeddings against a tiny but real bert GGUF (see
-tests/tiny_gguf_bert.py) - the embeddings equivalent of
-test_api_chat_real_pipeline.py. Real GGUFModelLoader/BertArchitecture/
-WordPieceTokenizer/EmbeddingEngine, not mocked. See
-scripts/manual_embed_check.py for the full real-model proof.
-"""
+"""M8: /api/embeddings against a tiny bert GGUF (tests/tiny_gguf_bert.py), the embeddings equivalent
+of test_api_chat_real_pipeline.py. Real
+GGUFModelLoader/BertArchitecture/WordPieceTokenizer/EmbeddingEngine, not mocked. Full real-model
+proof: tools/manual_embed_check.py."""
 
 from fastapi.testclient import TestClient
 
@@ -20,9 +18,9 @@ class TestEmbeddingsHappyPath:
 
         assert response.status_code == 200
         embedding = response.json()["embedding"]
-        assert len(embedding) == 8  # N_EMBD in tiny_gguf_bert.py
+        assert len(embedding) == 8
         norm = sum(x * x for x in embedding) ** 0.5
-        assert abs(norm - 1.0) < 1e-2  # ModelManager loads in bf16, not exactly 1.0
+        assert abs(norm - 1.0) < 1e-2
 
     def test_same_prompt_is_deterministic(
         self, client: TestClient, tiny_bert_model: InstalledModel

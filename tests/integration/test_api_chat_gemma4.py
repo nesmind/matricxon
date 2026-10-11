@@ -1,15 +1,9 @@
-"""M10: /api/chat against a tiny but real gemma4 GGUF (see
-
-tests/tiny_gguf_gemma4.py) - the dense-Gemma4-architecture equivalent of
+"""M10: /api/chat against a tiny gemma4 GGUF (tests/tiny_gguf_gemma4.py), the gemma4 equivalent of
 test_api_chat_real_pipeline.py/test_api_chat_llama.py. Real
-GGUFModelLoader/Gemma4Architecture/Gemma4Tokenizer/ChatEngine/NDJSON stack,
-not mocked - and, unlike those two, generation here runs long enough
-(num_predict=10 against sliding_window=4) to cross the sliding-window
-boundary on the model's local/sliding layers, not just its single global
-one. Proves the wiring end to end; the real `google/gemma-4-12b-it` model
-is too large for this project's target hardware to validate numerically
-(see ROADMAP.md's M10 gemma4 entry for that accepted gap).
-"""
+GGUFModelLoader/Gemma4Architecture/Gemma4Tokenizer/ChatEngine/NDJSON stack, not mocked; generation
+runs long enough (num_predict=10 vs sliding_window=4) to cross the sliding-window boundary on the
+local layers, not just the one global layer. Proves the wiring; the real `google/gemma-4-12b-it` is
+too large to validate numerically here."""
 
 import json
 
@@ -49,12 +43,9 @@ class TestGemma4ChatHappyPath:
     def test_output_has_no_nan_or_inf_artifacts(
         self, client: TestClient, tiny_gemma4_model: InstalledModel
     ) -> None:
-        """A real, not hypothetical, risk given this model's extra moving
-
-        parts (sandwich norms, softcapping, the rope_freqs division) -
-        garbage propagating from a shape/masking bug would typically show
-        up as NaN/replacement-character decode noise well before 10 tokens.
-        """
+        """A real risk given this model's extra parts (sandwich norms, softcapping, the rope_freqs
+        division): garbage from a shape/masking bug would show as NaN/replacement-character noise
+        well before 10 tokens."""
         response = client.post(
             "/api/chat",
             json={

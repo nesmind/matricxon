@@ -1,10 +1,8 @@
-"""GEMV kernels for IQ1_S, IQ1_M - same real, honest performance profile as
-`quantized_gemv_extended.py` (register-only accumulators, no heap scratch buffer). Correctness
-cross-checked against each type's own already-oracle-validated `QuantStrategy.dequantize()` in
-`iq1_family.py`. As much of each block's own per-sub-block bit-unpacking as possible is
-precomputed once outside the njit hot loop, only the final per-lane grid lookup + accumulate
-happens inside numba - same split as quantized_gemv_iq2.py/iq3.py.
-"""
+"""GEMV kernels for IQ1_S, IQ1_M, with the performance profile of `quantized_gemv_extended.py`
+(register-only accumulators, no heap scratch). Correctness cross-checked against each type's
+oracle-validated `QuantStrategy.dequantize` in `iq1_family.py`. As much of each block's
+per-sub-block bit-unpacking as possible is precomputed outside the njit hot loop; only the final
+per-lane grid lookup + accumulate happens in numba (same split as quantized_gemv_iq2.py/iq3.py)."""
 
 import numba
 import numpy as np
@@ -15,8 +13,8 @@ from app.gguf.dequant.iq_grids import iq1s_grid_i8
 _QK_K = 256
 _IQ1S_DELTA = 0.125
 _IQ1M_DELTA = 0.125
-IQ1_S_TYPE_SIZE = 2 + 32 + 16  # 50
-IQ1_M_TYPE_SIZE = 32 + 16 + 8  # 56
+IQ1_S_TYPE_SIZE = 2 + 32 + 16
+IQ1_M_TYPE_SIZE = 32 + 16 + 8
 
 
 def _require_divisible(in_features: int, block_size: int) -> int:
@@ -59,7 +57,7 @@ def qgemv_iq1_s(
     qs = np.ascontiguousarray(blocks[:, :, 2:34])
     qh = np.ascontiguousarray(blocks[:, :, 34:50]).view("<u2").reshape(out_features, n_super, 8)
 
-    dl = d[:, :, None] * (2 * ((qh >> 12) & 7).astype(np.float32) + 1)  # (of, ns, 8)
+    dl = d[:, :, None] * (2 * ((qh >> 12) & 7).astype(np.float32) + 1)
     delta = np.where((qh & 0x8000) != 0, -_IQ1S_DELTA, _IQ1S_DELTA).astype(np.float32)
 
     x_np = np.ascontiguousarray(x.detach().numpy(), dtype=np.float32)
@@ -119,9 +117,9 @@ def qgemv_iq1_m(
         | ((sc[:, :, 2] >> 4) & 0xF00)
         | (sc[:, :, 3] & 0xF000)
     ).astype("<u2")
-    d = scale_u16.view("<f2").astype(np.float32)  # (of, ns)
+    d = scale_u16.view("<f2").astype(np.float32)
 
-    # (of, ns, 4, 2): [.., i2, ib%2] - dl1/dl2 for the 2 "ib"s sharing sc[i2].
+    # (of, ns, 4, 2): [.., i2, ib%2]: dl1/dl2 for the 2 "ib"s sharing sc[i2].
     dl1 = np.empty((out_features, n_super, 4, 2), dtype=np.float32)
     dl2 = np.empty((out_features, n_super, 4, 2), dtype=np.float32)
     for parity in range(2):

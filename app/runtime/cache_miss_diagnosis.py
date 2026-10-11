@@ -1,4 +1,4 @@
-"""Why a prompt reused no cached tokens - the reason in the "re-reading the entire chat" log."""
+"""Why a prompt reused no cached tokens: the reason in the "re-reading the entire chat" log."""
 
 import torch
 

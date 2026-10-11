@@ -1,5 +1,5 @@
-"""A conversation evicted from RAM, or still cached when the server stops, comes back from the
-encrypted disk tier - and what it reuses must generate exactly what a cold run would."""
+"""A conversation evicted from RAM, or cached at shutdown, comes back from the encrypted disk tier
+and generates what a cold run would."""
 
 from collections.abc import Iterator
 from pathlib import Path
@@ -76,11 +76,11 @@ def test_a_conversation_survives_a_restart(
     store = _store(tmp_path)
     before = _pool(store)
     reply = _generate(model, before, TURN1)
-    before.persist_all()  # what ModelManager.shutdown does
+    before.persist_all()
     store.flush()
     assert store.usage()[0] == 1
 
-    after = _pool(_store(tmp_path))  # a fresh process: new store on the same directory, empty RAM
+    after = _pool(_store(tmp_path))
     turn2 = TURN1 + reply + [55, 66, 77]
     result = _generate(model, after, turn2)
 
@@ -94,7 +94,7 @@ def test_an_evicted_conversation_is_spilled_and_restored(
     store = _store(tmp_path)
     pool = _pool(store, slots=1)
     reply = _generate(llama, pool, TURN1)
-    _generate(llama, pool, OTHER)  # one slot only: TURN1's conversation is evicted
+    _generate(llama, pool, OTHER)
     store.flush()
     assert store.usage()[0] == 1
 
@@ -103,7 +103,7 @@ def test_an_evicted_conversation_is_spilled_and_restored(
 
     assert pool.reused_tokens >= 24
     assert result == _generate(llama, PromptCache(), turn2)
-    assert store.usage()[0] == 1  # the restore consumed TURN1's file; OTHER got evicted in turn
+    assert store.usage()[0] == 1
 
 
 def test_another_model_never_restores_it(llama: LlamaArchitecture, tmp_path: Path) -> None:
@@ -149,4 +149,4 @@ def test_admin_endpoint_reads_updates_and_clears(llama: LlamaArchitecture, tmp_p
     assert client.put("/api/cache/persistence", json={"ttl_hours": 0}).status_code == 422
 
     off = client.put("/api/cache/persistence", json={"enabled": False}).json()
-    assert off["enabled"] is False and off["files"] == 0  # disabling also wipes the files
+    assert off["enabled"] is False and off["files"] == 0

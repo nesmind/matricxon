@@ -1,17 +1,14 @@
 /*
- * Q4_K and Q5_K rows unpacked into mx_block_unpacked (see mx_common.h).
- *
- * Both share one layout family: 256 values per block as 8 sub-blocks of 32, each with its own
- * 6-bit (scale, min) pair packed into 12 bytes, value = d*scale*q - dmin*min. So per block:
- *   dot = y.d * (d * sum_s sc_s * sum(q*q8)_s  -  dmin * sum_s m_s * bsums_s)
- * with each 32-value (scale, min) spread over its two 16-value slots - the min term costs one
- * multiply per sub-block, never one per value.
- * Element order mirrors Q4_KStrategy/Q5_KStrategy.dequantize in app/gguf/dequant/kquants.py.
+ * Q4_K and Q5_K rows unpacked into mx_block_unpacked (see mx_common.h). 256 values per block as 8
+ * sub-blocks of 32, each with a 6-bit (scale, min) pair packed in 12 bytes: value = d*scale*q -
+ * dmin*min. Per block:
+ * dot = y.d * (d * sum_s sc_s * sum(q*q8)_s  -  dmin * sum_s m_s * bsums_s)
+ * each 32-value pair spread over two 16-value slots, so the min costs one multiply per sub-block.
+ * Order mirrors Q4_KStrategy/Q5_KStrategy.dequantize (app/gguf/dequant/kquants.py).
  */
 #include "mx_common.h"
 
-/* Header shared by Q4_K/Q5_K: {f16 d; f16 dmin; u8 scales[12]} - fills d, dmin and the per-16
- * scale and min (each 32-value pair spread over its two 16-value slots). */
+/* Header shared by Q4_K/Q5_K: {f16 d; f16 dmin; u8 scales[12]}; fills d, dmin and per-16 scale and min. */
 static inline void mx_k4_header(const uint8_t *b, mx_block_unpacked *out) {
     uint32_t words[4];
     uint8_t sm[16];
@@ -41,8 +38,7 @@ void mx_unpack_q4_k(const uint8_t *restrict row, mx_block_unpacked *restrict out
     }
 }
 
-/* Q5_K block: {f16 d; f16 dmin; u8 scales[12]; u8 qh[32]; u8 qs[128]} - 176 bytes. Each
- * nibble gets a 5th bit from qh, a different bit pair of the same 32 qh bytes per chunk. */
+/* Q5_K block: {f16 d; f16 dmin; u8 scales[12]; u8 qh[32]; u8 qs[128]} - 176 bytes. Each nibble gets a 5th bit from qh (a different bit pair of the same 32 bytes per chunk). */
 void mx_unpack_q5_k(const uint8_t *restrict row, mx_block_unpacked *restrict out, int nb) {
     for (int i = 0; i < nb; ++i) {
         const uint8_t *b = row + (size_t)i * MX_Q5_K_BYTES;

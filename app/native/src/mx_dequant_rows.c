@@ -1,18 +1,12 @@
 /*
- * Dequantizes specific rows of a packed 2D K-quant tensor (Q3_K/Q4_K/Q5_K/Q6_K) straight to
- * float32 - no activation vector, no dot product, just the real per-element value each weight
- * byte already represents. Used for a real embedding-table lookup
- * (app/architectures/quantized_embedding.py): a forward pass only ever needs a handful of rows
- * (one per input token), so this never has to touch - let alone dequantize - the rest of a real
- * 256K-vocab table.
- *
- * Reuses each type's own existing mx_unpack_* function (mx_unpack_q36k.c/mx_unpack_q45k.c) - the
- * exact same one mx_gemm.c's own prefill path already calls - then reconstructs the real float
- * value per element instead of folding it into a dot product with a quantized activation row.
- * Same per-element math mx_dot_unpacked (mx_common.h) already documents, just never summed:
- * value = d*sc[s]*u - (has_min ? dmin : d)*m[s]. A small, deliberate duplicate of mx_gemm.c's own
- * 4-case K-quant table (row_bytes/unpack/has_min) rather than sharing its private mx_kernel type -
- * mirror any new K-quant case added there here too.
+ * Dequantizes chosen rows of a packed 2D K-quant tensor (Q3_K/Q4_K/Q5_K/Q6_K) straight to float32,
+ * for embedding-table lookups (app/architectures/quantized_embedding.py): a forward pass needs only
+ * a few rows, so the rest of a large vocab table is never touched.
+ * 
+ * Reuses each type's mx_unpack_* (as mx_gemm.c's prefill), then rebuilds the float per element:
+ * value = d*sc[s]*u - (has_min ? dmin: d)*m[s] (the math mx_dot_unpacked documents, unsummed).
+ * Duplicates mx_gemm.c's 4-case K-quant table (row_bytes/unpack/has_min); mirror any new K-quant
+ * case there.
  */
 #include <stdlib.h>
 
@@ -52,8 +46,7 @@ static int mx_row_kernel_for(int ggml_type, int row_width, mx_row_kernel *k) {
     }
 }
 
-/* 1 when mx_dequant_rows can handle this (type, row_width) pair - Python checks this once per
- * tensor and keeps the Python-side per-row dequantize (QuantStrategy.dequantize) otherwise. */
+/* 1 when mx_dequant_rows handles this (type, row_width); otherwise Python keeps its per-row QuantStrategy.dequantize. */
 int mx_supports_dequant_rows(int ggml_type, int row_width) {
     mx_row_kernel k;
     if (!mx_row_kernel_for(ggml_type, row_width, &k)) {
@@ -76,9 +69,11 @@ static void mx_dequant_unpacked_to_f32(const mx_block_unpacked *w, int nb, int h
     }
 }
 
-/* w: however many total rows the caller's tensor really has (only row_indices[*] are ever
- * read); row_indices: n_rows indices into it; out: n_rows*row_width contiguous floats, row-major.
- * Returns 0 on success, -1 unsupported type/shape, -2 out of memory. */
+/*
+ * w: the tensor's rows (only row_indices[*] are read); row_indices: n_rows indices; out:
+ * n_rows*row_width floats, row-major.
+ * Returns 0 on success, -1 unsupported type/shape, -2 out of memory.
+ */
 int mx_dequant_rows(int ggml_type, const uint8_t *w, const int32_t *row_indices, int n_rows,
                     int row_width, float *out, int n_threads) {
     mx_row_kernel k;

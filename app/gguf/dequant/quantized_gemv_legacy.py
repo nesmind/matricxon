@@ -1,13 +1,9 @@
-"""GEMV kernels for the 5 "legacy" (non-K) quant types - Phase 2 of the quantized-native compute
-plan, extending `quantized_gemv.py`'s Q4_K/Q6_K design to full coverage. Same real, honest
-performance profile as those two (see that module's own docstring): a register-only accumulator
-design, no heap-allocated scratch buffer (proven not to help - see the plan behind this work),
-correctness cross-checked against each type's own already-oracle-validated `QuantStrategy.
-dequantize()` in `legacy.py`.
+"""GEMV kernels for the 5 legacy (non-K) quant types, extending `quantized_gemv.py`'s design with
+the same profile (register-only accumulators, no heap scratch). Cross-checked against each type's
+`QuantStrategy.dequantize` in `legacy.py`.
 
-Each block here is much smaller (32 elements, one scale - or scale+min for Q4_1/Q5_1) than a
-K-quant superblock (256 elements, 8 sub-block scales) - no sub-block bookkeeping needed, so these
-kernels are simpler than qgemv_q4_k/qgemv_q6_k despite covering 5 distinct formats.
+Blocks are small (32 elements, one scale, or scale+min for Q4_1/Q5_1), so there is no sub-block
+bookkeeping: simpler than qgemv_q4_k/qgemv_q6_k despite 5 formats.
 """
 
 import numba
@@ -15,11 +11,11 @@ import numpy as np
 import torch
 
 _BLOCK = 32
-Q4_0_TYPE_SIZE = 2 + _BLOCK // 2  # 18
-Q4_1_TYPE_SIZE = 2 + 2 + _BLOCK // 2  # 20
-Q5_0_TYPE_SIZE = 2 + 4 + _BLOCK // 2  # 22
-Q5_1_TYPE_SIZE = 2 + 2 + 4 + _BLOCK // 2  # 24
-Q8_0_TYPE_SIZE = 2 + _BLOCK  # 34
+Q4_0_TYPE_SIZE = 2 + _BLOCK // 2
+Q4_1_TYPE_SIZE = 2 + 2 + _BLOCK // 2
+Q5_0_TYPE_SIZE = 2 + 4 + _BLOCK // 2
+Q5_1_TYPE_SIZE = 2 + 2 + 4 + _BLOCK // 2
+Q8_0_TYPE_SIZE = 2 + _BLOCK
 
 
 def _require_divisible(in_features: int) -> int:

@@ -1,11 +1,4 @@
-/*
- * IQ4_NL, IQ4_XS, TQ1_0, TQ2_0 - ported directly from their own already-oracle-validated Numba
- * kernels (app/gguf/dequant/quantized_gemv_iq_ternary.py) - see mx_common.h's own comment on
- * why these compute against the raw float activation row directly instead of mx_block_q8_k.
- * Plain portable C (no SIMD) - these types are new here, and getting the real bit-unpacking
- * right matters more than a first speed pass; a vectorized version is real, separate follow-up
- * work once correctness is proven the same way every other kernel here already was.
- */
+/* IQ4_NL, IQ4_XS, TQ1_0, TQ2_0, ported from the Numba kernels (app/gguf/dequant/quantized_gemv_iq_ternary.py); they work on the raw float activation row (see mx_common.h). Plain portable C: correctness first, vectorizing later. */
 #include "mx_common.h"
 
 static const float MX_KVALUES_IQ4NL[16] = {-127.0f, -104.0f, -83.0f, -65.0f, -49.0f, -35.0f,
@@ -13,8 +6,7 @@ static const float MX_KVALUES_IQ4NL[16] = {-127.0f, -104.0f, -83.0f, -65.0f, -49
                                             53.0f,   69.0f,   89.0f,  113.0f};
 static const uint8_t MX_POW3[6] = {1, 3, 9, 27, 81, 243};
 
-/* Mirrors ggml's `((uint16_t)(byte*p) * 3) >> 8` base-3-digit-extraction trick - the uint8_t
- * multiply wraps mod 256 exactly like Numba's own np.uint8 port. Returns a digit in {0, 1, 2}. */
+/* Mirrors ggml's `((uint16_t)(byte*p) * 3) >> 8` base-3 digit trick; the uint8_t multiply wraps mod 256 like Numba's np.uint8. Returns 0, 1 or 2. */
 static inline int mx_tq_digit(uint8_t byte, uint8_t power) {
     uint8_t q = (uint8_t)(byte * power);
     return (int)(((uint16_t)q * 3u) >> 8);

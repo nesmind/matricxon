@@ -1,5 +1,5 @@
-"""Cancelling one reply must not touch another user's reply on the same model, and must never
-unload the model (see ModelWorker.cancel_job / ModelManager.cancel_request)."""
+"""Cancelling one reply must not touch another user's reply on the same model, nor unload it
+(ModelWorker.cancel_job / ModelManager.cancel_request)."""
 
 import asyncio
 import threading
@@ -24,7 +24,7 @@ async def test_cancelling_a_running_reply_leaves_the_queued_one_untouched() -> N
     def long_job():
         started.set()
         yield 0
-        release.wait(5)  # still "generating" until the test lets it continue
+        release.wait(5)
         yield from range(1, 1000)
 
     first = worker.stream(long_job, request_id="a")
@@ -34,7 +34,7 @@ async def test_cancelling_a_running_reply_leaves_the_queued_one_untouched() -> N
     assert worker.cancel_job("a") is True
     release.set()
 
-    assert len(await _drain(first)) <= 2  # halted right after the cancel
+    assert len(await _drain(first)) <= 2
     assert await _drain(second) == [0, 1, 2, 3, 4]
 
 
@@ -54,7 +54,7 @@ async def test_a_reply_cancelled_while_queued_is_skipped_and_the_running_one_fin
     release.set()
 
     assert await _drain(running) == [0, 1, 2]
-    assert await _drain(queued) == []  # never ran
+    assert await _drain(queued) == []
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,4 @@
-/*
- * IQ1_S, IQ1_M - ported directly from their own already-oracle-validated Numba kernels
- * (app/gguf/dequant/quantized_gemv_iq1.py). No per-lane sign flip like IQ2/IQ3: each grid value
- * gets one shared additive delta per group instead. IQ1_M has no `d` field at all - its scale is
- * a synthetic fp16 word reassembled from 4 fragments of `sc` (see mx_fp16 reuse below).
- */
+/* IQ1_S, IQ1_M, ported from the Numba kernels (app/gguf/dequant/quantized_gemv_iq1.py). Unlike IQ2/IQ3 there is no per-lane sign flip: each grid value gets one shared additive delta per group. IQ1_M has no `d`; its scale is an fp16 word rebuilt from 4 fragments of `sc`. */
 #include "mx_common.h"
 #include "mx_iq_grids.h"
 

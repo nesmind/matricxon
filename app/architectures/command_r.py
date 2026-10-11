@@ -17,45 +17,32 @@ logger = logging.getLogger(__name__)
 
 
 class CommandRArchitecture(ModelArchitecture):
-    """Cohere Command-R - a plain GQA/RoPE decoder with a real parallel attention+FFN block
-    (confirmed against HF `transformers`' own `modeling_cohere.py`, 2026-09-22 - see
-    `CommandRDecoderLayer`'s own docstring for the exact formula and reuse story).
+    """Cohere Command-R: a plain GQA/RoPE decoder with a parallel attention+FFN block (checked
+    against HF `transformers`' `modeling_cohere.py`,; see `CommandRDecoderLayer`).
 
-    Real, confirmed deltas from every other architecture in this repo:
-    - `attn_norm`/`output_norm` are real, bias-free `nn.LayerNorm` (mean-centered), not `RMSNorm` -
-      the real GGUF metadata key itself signals this (`attention.layer_norm_epsilon`, not the
-      `...layer_norm_rms_epsilon` every RMSNorm-based architecture here uses).
-    - No bias anywhere, no QK-norm (QK-norm only exists on the 104B Command-R+, out of scope - see
-      `command_r_layers.py`'s own docstring).
-    - **No `unpermute_rope_rows` needed** - confirmed via real source evidence, not assumed:
-      llama.cpp's real `conversion/command_r.py` has zero permute calls, and HF's own
-      `modeling_cohere.py` explicitly comments its `rotate_half` as *"different from e.g. Llama"* -
-      Cohere's rotate-half is already consecutive-pair/interleaved, matching ggml's native layout
-      directly. Same real finding as `qwen2`/`qwen3` (also confirmed to need no permutation) - a
-      second, independent case proving RoPE-family resemblance alone is never a valid signal for
-      whether this reordering applies (`qwen2`'s own docstring has the full story of what
-      happened when that assumption was trusted without verification).
-    - **Logit scaling multiplies, not divides**: `logits = lm_head(x) * logit_scale` (unlike
-      Granite's `logits_scaling`, which divides) - real GGUF key `logit_scale`, real default
-      `0.0625`.
-    - **Every real file ships tied embeddings** - llama.cpp's real GGUF writer never emits a
-      separate `output.weight` tensor for this architecture at all. The existing dynamic
-      `loader.has_tensor("output.weight")` detection (same as every other architecture here)
-      needs no special-casing to get this right - it naturally resolves tied for any real file.
+    Deltas from other architectures here (confirmed):
+    - `attn_norm`/`output_norm` are bias-free `nn.LayerNorm` (mean-centered), not `RMSNorm`; the
+      GGUF key `attention.layer_norm_epsilon` (not `...layer_norm_rms_epsilon`) signals it.
+    - No bias, no QK-norm (only on the 104B Command-R+, out of scope; see `command_r_layers.py`).
+    - **No `unpermute_rope_rows`**: llama.cpp's `conversion/command_r.py` has no permute calls and
+      HF's `modeling_cohere.py` says its `rotate_half` is "different from e.g. Llama" (interleaved,
+      matching ggml's layout). As `qwen2`/`qwen3`: RoPE-family resemblance never signals whether
+      this reordering applies (see `qwen2` for what happened when that was trusted unverified).
+    - **Logit scaling multiplies**: `logits = lm_head(x) * logit_scale` (Granite's `logits_scaling`
+      divides); GGUF key `logit_scale`, default `0.0625`.
+    - **Every real file ships tied embeddings**: llama.cpp's writer never emits `output.weight`
+      here; the usual `loader.has_tensor("output.weight")` detection resolves tied.
 
-    Real `rope.freq_base` for a real deployed checkpoint is `10000.0`, not HF's config-class
-    default of `500000.0` - as always, read from real GGUF metadata, never hardcode a class
-    default.
+    A deployed checkpoint's `rope.freq_base` is `10000.0`, not HF's class default `500000.0`: always
+    read GGUF metadata, never hardcode a class default.
 
-    `cohere2` (Command-R7B - a real, distinct GGUF architecture string with a genuinely different
-    sliding-window/full-attention hybrid structure) and Command-R+ (104B, needs QK-norm, no real
-    checkpoint small enough for this project's target hardware) are both deliberately out of
-    scope for this pass - tracked as separate future work, not folded in here.
+    Out of scope (future work): `cohere2` (Command-R7B, a sliding-window/full-attention hybrid) and
+    Command-R+ (104B, needs QK-norm, no checkpoint small enough for the target hardware).
     """
 
     NAME = "command-r"
     SUPPORTS_GPU = True
-    SUPPORTS_BATCHED_DECODE = True  # see tests/unit/test_batched_decode.py
+    SUPPORTS_BATCHED_DECODE = True
 
     def __init__(
         self,
@@ -71,8 +58,7 @@ class CommandRArchitecture(ModelArchitecture):
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
-        # Falls back to n_head when absent (no GQA) - see LlamaArchitecture's own docstring for
-        # the real file that confirmed this gap.
+        # Falls back to n_head when absent (no GQA); see LlamaArchitecture.
         self.n_head_kv = metadata.get_u32(arch("attention.head_count_kv"), self.n_head)
         self.head_dim = metadata.get_u32(arch("attention.key_length"), self.n_embd // self.n_head)
         self.n_layer = metadata.get_u32(arch("block_count"))
@@ -157,8 +143,7 @@ class CommandRArchitecture(ModelArchitecture):
             layer_started = time.monotonic()
             prefix = f"blk.{i}."
             layer.input_layernorm.weight.copy_(loader.load_tensor(prefix + "attn_norm.weight"))
-            # No unpermute_rope_rows anywhere - confirmed not needed for this architecture, see
-            # this class's own docstring.
+            # No unpermute_rope_rows: not needed for this architecture (class docstring).
             layer.self_attn.q_proj.weight.copy_(loader.load_tensor(prefix + "attn_q.weight"))
             layer.self_attn.k_proj.weight.copy_(loader.load_tensor(prefix + "attn_k.weight"))
             enabled = self._enable_quantized_native
@@ -194,7 +179,7 @@ class CommandRArchitecture(ModelArchitecture):
         stop_check: Callable[[], bool] | None = None,
         image_embeddings: list[tuple[int, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
-        del image_embeddings  # no real vision-language Command-R checkpoint exists yet to fuse
+        del image_embeddings
         _, seq_len = input_ids.shape
         if position_ids is None:
             position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)

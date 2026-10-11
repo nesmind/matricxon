@@ -7,7 +7,7 @@ from app.gguf.constants import GGUFValueType
 from app.gguf.mmap_source import GGUFMemoryMap
 from app.gguf.reader import GGUFReader
 from app.server.errors import InvalidGGUFError
-from scripts.make_tiny_gguf import GGUFBuilder
+from tools.make_tiny_gguf import GGUFBuilder
 
 
 def _write_minimal(path: Path) -> None:
@@ -70,7 +70,7 @@ def test_mmap_reads_back_correct_tensor_bytes(tmp_path: Path) -> None:
     with GGUFMemoryMap(path) as mmap_source:
         raw = mmap_source.raw_tensor_bytes(tensor, parsed.data_start_offset, byte_length=16)
         values = struct.unpack("<4f", bytes(raw))
-        del raw  # a live memoryview slice blocks mmap.close() - see GGUFMemoryMap.close()
+        del raw
 
     assert values == (1.0, 2.0, 3.0, 4.0)
 

@@ -15,14 +15,12 @@ class ResolvedFile:
 
 
 class HFRepoResolver:
-    """Resolves a tag's `<suffix>` against a Hugging Face repo's real file
-    listing (`GET /api/models/<repo_id>?blobs=true`, which conveniently
-    already carries each LFS file's size and sha256 - no download needed to
-    know either upfront).
+    """Resolves a tag's `<suffix>` against a Hugging Face repo's file listing (`GET
+    /api/models/<repo_id>?blobs=true`, which carries each LFS file's size and sha256: nothing to
+    download to know either).
 
-    `http_client` is injectable so tests can point it at an `httpx.MockTransport`
-    instead of the real network - matricxon's automated test suite must stay
-    offline-runnable.
+    `http_client` is injectable so tests use an `httpx.MockTransport`: the automated suite must run
+    offline.
     """
 
     def __init__(self, http_client: httpx.Client | None = None) -> None:

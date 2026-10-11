@@ -1,29 +1,27 @@
-"""A tiny `gemma4` GGUF whose two embedding tables (`token_embd.weight`, gemma4's own tied
-lm_head, and `per_layer_token_embd.weight`, its real Per-Layer Embeddings table - see
-gemma4_ple.py) are Q8_0-quantized, everything else F32 - big enough (n_embd 32, one Q8_0 block)
-for the packed `QuantizedEmbedding` path (app/architectures/quantized_embedding.py) to be checked
-end to end against the float path on the exact same quantized values, same precedent
-tests/tiny_gguf_llama_q8.py already established. One plain, non-sliding, non-KV-shared layer -
-tests/tiny_gguf_gemma4.py's own PLE fixture already covers the sliding/KV-sharing combination
-with different (Q8_0-incompatible, n_embd=8) dimensions, so this stays deliberately separate
-rather than risking those already-passing tests over unrelated dimension changes.
-"""
+"""A tiny `gemma4` GGUF with Q8_0 embedding tables (`token_embd.weight`, gemma4's tied lm_head, and
+`per_layer_token_embd.weight`, its Per-Layer Embeddings table; gemma4_ple.py) and everything else
+F32. Big enough (n_embd 32, one Q8_0 block) for the packed `QuantizedEmbedding` path
+(app/architectures/quantized_embedding.py) to be checked end to end against the float path on the
+same quantized values, like tests/tiny_gguf_llama_q8.py. One plain, non-sliding, non-KV-shared
+layer: tests/tiny_gguf_gemma4.py's PLE fixture already covers the sliding/KV-sharing combination
+with different (Q8_0-incompatible, n_embd=8) dimensions, so this stays separate rather than risk
+those tests with unrelated dimension changes."""
 
 from pathlib import Path
 
 import numpy as np
 
 from app.gguf.constants import GGMLQuantizationType, GGUFValueType
-from scripts.make_tiny_gguf import GGUFBuilder
 from tests.tiny_gguf_llama_q8 import _q8_0_bytes
+from tools.make_tiny_gguf import GGUFBuilder
 
 N_EMBD = 32
 N_HEAD = 2
 N_HEAD_KV = 1
-HEAD_DIM = 16  # N_HEAD * HEAD_DIM == N_EMBD, same real relationship every actual checkpoint has
+HEAD_DIM = 16
 N_LAYER = 1
 FFN_LEN = 32
-PER_LAYER_DIM = 32  # N_LAYER * PER_LAYER_DIM must also be a Q8_0-block-aligned (32) width
+PER_LAYER_DIM = 32
 FINAL_LOGIT_SOFTCAPPING = 30.0
 
 _CONTROL_TOKENS = ["<pad>", "<eos>", "<bos>", "<unk>"]

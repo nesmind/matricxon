@@ -1,11 +1,8 @@
-"""Cross-checks IQ1_S/IQ1_M (app/gguf/dequant/iq1_family.py) against slow, scalar, line-by-line
-ports of ggml's real reference dequantize_row_iq1_s/iq1_m functions (ggml/src/ggml-quants.c,
-llama.cpp `master`) - not code reuse from the shipped strategies, just a test oracle written
-independently here, matching test_extended_quant_kernels.py's established methodology. IQ1_S's
-reference here uses the corrected 8-entry (not 16-entry) `qh` field - see IQ1_SStrategy's own
-docstring for why the first version of both this file and the shipped strategy shared the same
-wrong assumption.
-"""
+"""Cross-checks IQ1_S/IQ1_M (app/gguf/dequant/iq1_family.py) against slow scalar line-by-line ports
+of ggml's dequantize_row_iq1_s/iq1_m (ggml/src/ggml-quants.c, llama.cpp `master`): an oracle written
+independently, as test_extended_quant_kernels.py. IQ1_S's reference uses the corrected 8-entry (not
+16) `qh` field; see IQ1_SStrategy for why the first versions of this file and the shipped strategy
+shared the wrong assumption."""
 
 import random
 import struct
@@ -118,5 +115,5 @@ class TestByteLength:
 class TestGridTable:
     def test_iq1s_grid_has_expected_shape_and_known_entries(self) -> None:
         assert _GRID.shape == (2048, 8)
-        assert list(_GRID[0]) == [-1, -1, -1, -1, -1, -1, -1, -1]  # 0xffffffffffffffff
-        assert list(_GRID[-1]) == [1, 1, 1, 1, 1, 1, 1, 1]  # 0x0101010101010101
+        assert list(_GRID[0]) == [-1, -1, -1, -1, -1, -1, -1, -1]
+        assert list(_GRID[-1]) == [1, 1, 1, 1, 1, 1, 1, 1]

@@ -1,5 +1,5 @@
 """The fused decode ops (RMSNorm, RoPE, cached attention, the sampler's draw) must equal the torch
-code they replace, on BOTH backends: the native C library and the Numba twins."""
+code they replace on BOTH backends: the native C library and the Numba twins."""
 
 import dataclasses
 
@@ -36,7 +36,7 @@ class TestRmsNorm:
     def test_declines_what_it_cannot_do(self, ops: FusedOps) -> None:
         w = torch.ones(8)
         assert ops.rms_norm(torch.randn(1, 8, dtype=torch.bfloat16), w, 1e-5) is None
-        assert ops.rms_norm(torch.randn(1, 4), w, 1e-5) is None  # width mismatch
+        assert ops.rms_norm(torch.randn(1, 4), w, 1e-5) is None
 
 
 class TestRope:
@@ -72,7 +72,7 @@ class TestAttention:
         torch.manual_seed(2)
         heads, kv_heads, dim = 8, 2, 32
         q = torch.randn(1, n_q, heads, dim).transpose(1, 2)
-        cache_k = torch.randn(1, kv_heads, 64, dim)  # a cache with spare capacity, sliced
+        cache_k = torch.randn(1, kv_heads, 64, dim)
         cache_v = torch.randn(1, kv_heads, 64, dim)
         k, v = cache_k[:, :, :n_kv], cache_v[:, :, :n_kv]
         scale = 0.3
@@ -89,8 +89,8 @@ class TestAttention:
 
     def test_declines_prefills_batches_and_other_dtypes(self, ops: FusedOps) -> None:
         q, kv = torch.randn(1, 4, 20, 8), torch.randn(1, 2, 30, 8)
-        assert ops.attention(q, kv, kv, 10, 0.3) is None  # a prefill: torch is faster
-        assert ops.attention(q[:, :, :1], kv, kv, torch.tensor([3]), 0.3) is None  # batched
+        assert ops.attention(q, kv, kv, 10, 0.3) is None
+        assert ops.attention(q[:, :, :1], kv, kv, torch.tensor([3]), 0.3) is None
         assert ops.attention(q[:, :, :1].bfloat16(), kv, kv, 3, 0.3) is None
 
 
@@ -123,7 +123,7 @@ class TestSampler:
         assert ops.can_sample(logits, sampling)
         draws = 6000
         counts = torch.zeros(60)
-        for u in (torch.arange(draws) + 0.5) / draws:  # an even sweep of the unit interval
+        for u in (torch.arange(draws) + 0.5) / draws:
             counts[ops.sample(logits, generated, sampling, float(u))] += 1
         assert torch.allclose(counts / draws, expected, atol=2e-3)
 
@@ -133,7 +133,7 @@ class TestSampler:
         logits = torch.tensor([5.0, 4.0, 4.0, 4.0, 1.0, 0.0])
         sampling = SamplingConfig(temperature=1.0, top_k=2, top_p=1.0, repeat_penalty=1.0)
         expected = _torch_probabilities(logits, [], sampling)
-        assert (expected > 0).sum() == 4  # 5.0 and all three 4.0s
+        assert (expected > 0).sum() == 4
         seen = {ops.sample(logits, [], sampling, (i + 0.5) / 400) for i in range(400)}
         assert seen == {0, 1, 2, 3}
 
@@ -142,7 +142,7 @@ class TestSampler:
         assert not ops.can_sample(torch.randn(10), sampling)
         assert not ops.can_sample(
             torch.randn(10), dataclasses.replace(sampling, temperature=0.0, top_k=5)
-        )  # greedy is argmax elsewhere
+        )
 
 
 def test_the_numba_backend_leaves_attention_to_torch_by_default() -> None:

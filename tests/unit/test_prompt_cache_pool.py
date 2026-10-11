@@ -1,5 +1,5 @@
 """The pool keeps one cache per recent conversation, so users sharing a model don't wipe each
-other's cache - and whatever it reuses must generate exactly what a cold run would."""
+other's cache; reuse must generate what a cold run would."""
 
 from collections.abc import Iterator
 from pathlib import Path
@@ -38,7 +38,7 @@ def qwen35(tmp_path: Path) -> Iterator[Qwen35Architecture]:
 
 
 def _pool(**kwargs: int) -> PromptCache:
-    """Tiny prompts drop fewer tokens than the real fork threshold - lower it to exercise forks."""
+    """Lowers the fork threshold so tiny prompts exercise forks."""
     cache = PromptCache(**kwargs)
     cache.FORK_MIN_DROPPED_TOKENS = 1
     return cache
@@ -55,7 +55,7 @@ def _two_users_alternate(model: object, cache: PromptCache, chunk: int = 512) ->
     turn_a2, turn_b2 = CONV_A + reply_a + [55, 66], CONV_B + reply_b + [77, 88]
 
     out_a2 = _generate(model, cache, turn_a2, chunk)
-    assert cache.reused_tokens > 0  # A's cache survived B's request
+    assert cache.reused_tokens > 0
     out_b2 = _generate(model, cache, turn_b2, chunk)
     assert cache.reused_tokens > 0
 
@@ -82,13 +82,13 @@ def test_a_diverging_prompt_forks_and_leaves_the_original_conversation_intact(
 ) -> None:
     cache = _pool()
     reply = _generate(llama, cache, CONV_A)
-    _generate(llama, cache, CONV_A[:3] + [150, 151, 152])  # shares 3 tokens, then differs
+    _generate(llama, cache, CONV_A[:3] + [150, 151, 152])
 
     assert cache.slot_count == 2
     assert cache.reused_tokens == 3
     follow_up = CONV_A + reply + [55]
     out = _generate(llama, cache, follow_up)
-    assert cache.reused_tokens == len(CONV_A) + len(reply) - 1  # the original was not cut back
+    assert cache.reused_tokens == len(CONV_A) + len(reply) - 1
     assert out == _generate(llama, PromptCache(), follow_up)
 
 
@@ -103,7 +103,7 @@ def test_with_a_single_slot_users_take_turns_correctly_without_reuse(
     out = _generate(llama, cache, turn_a2)
 
     assert cache.slot_count == 1
-    assert cache.reused_tokens == 1  # only the shared first token: B replaced A's cache
+    assert cache.reused_tokens == 1
     assert out == _generate(llama, PromptCache(), turn_a2)
 
 
@@ -115,19 +115,19 @@ def test_a_tiny_memory_budget_still_keeps_one_slot(llama: LlamaArchitecture) -> 
 
     turn_b2 = CONV_B + [1, 2]
     assert _generate(llama, cache, turn_b2) == _generate(llama, PromptCache(), turn_b2)
-    assert reply_a  # generation itself was unaffected
+    assert reply_a
 
 
 def test_slots_are_evicted_least_recently_used_first(llama: LlamaArchitecture) -> None:
     cache = _pool(max_slots=2)
     reply_a = _generate(llama, cache, CONV_A)
     _generate(llama, cache, CONV_B)
-    _generate(llama, cache, CONV_A + reply_a + [9])  # touches A -> B is now the oldest
-    _generate(llama, cache, [1, 250, 251, 252, 253])  # a third conversation evicts B
+    _generate(llama, cache, CONV_A + reply_a + [9])
+    _generate(llama, cache, [1, 250, 251, 252, 253])
 
     assert cache.slot_count == 2
     _generate(llama, cache, CONV_A + reply_a + [9, 8])
-    assert cache.reused_tokens > 0  # A still cached
+    assert cache.reused_tokens > 0
 
 
 def test_a_continuing_conversation_stays_in_one_slot(llama: LlamaArchitecture) -> None:
@@ -137,4 +137,4 @@ def test_a_continuing_conversation_stays_in_one_slot(llama: LlamaArchitecture) -
         reply = _generate(llama, cache, prompt)
         prompt = prompt + reply + new_message
 
-    assert cache.slot_count == 1  # no stale copies piling up as the chat goes on
+    assert cache.slot_count == 1

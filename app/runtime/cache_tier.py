@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 class ModelCacheTier:
-    """One loaded model's view of the on-disk store: its `PromptCache` spills evicted slots here
-    and asks here for a conversation it no longer holds in RAM. `model_id` ties files to exact
-    weights (tag + file size), so a replaced model never picks up another's cache."""
+    """One loaded model's view of the on-disk store: its `PromptCache` spills evicted slots here and
+    asks here for a conversation it no longer holds in RAM. `model_id` ties files to exact weights
+    (tag + file size), so a replaced model never picks up another's cache."""
 
     def __init__(self, store: PersistentCacheStore, model_id: str) -> None:
         self._store = store
@@ -31,8 +31,8 @@ class ModelCacheTier:
         dtype: torch.dtype,
         min_tokens: int,
     ) -> CacheSlot | None:
-        """A slot rebuilt from disk that shares more than `min_tokens` leading tokens with
-        `prompt_ids`, or None (nothing stored, or the file no longer fits this model)."""
+        """A slot rebuilt from disk sharing more than `min_tokens` leading tokens with `prompt_ids`,
+        or None (nothing stored, or the file no longer fits this model)."""
         taken = self._store.take(self._model_id, prompt_ids, dtype, min_tokens)
         if taken is None:
             return None
@@ -42,7 +42,7 @@ class ModelCacheTier:
         except (ValueError, KeyError, RuntimeError):
             logger.warning("a stored prompt cache no longer fits its model, ignoring it")
             return None
-        slot.tag = tag  # which chat it belongs to, so a trimmed chat can be cut (PromptCache)
+        slot.tag = tag
         logger.info("restored a %d-token prompt cache from disk", len(slot.token_ids))
         return slot
 

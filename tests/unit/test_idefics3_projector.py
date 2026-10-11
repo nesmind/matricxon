@@ -1,9 +1,6 @@
-"""Direct unit tests for app.vision.idefics3_projector - isolated from
-
-ClipVisionEncoder's self-attention (which would otherwise entangle every
-patch's output with every other patch's, making a targeted "did this
-specific merge group move" assertion meaningless at the full-model level).
-"""
+"""Direct unit tests for app.vision.idefics3_projector, isolated from ClipVisionEncoder's
+self-attention (which entangles every patch's output with every other's, making a targeted "did this
+merge group move" assertion meaningless at full-model level)."""
 
 import torch
 
@@ -23,16 +20,11 @@ class TestComputeNumPatches:
 
 class TestPixelShuffle:
     def test_merges_a_2x2_spatial_block_in_row_major_order(self) -> None:
-        """Hand-verified against HF transformers' own
-
-        `Idefics3Connector.pixel_shuffle` algorithm for a 4x4 patch grid,
-        embed_dim=2, scale_factor=2: each output token must be exactly the
-        concatenation of its 2x2 spatial block's 4 patch embeddings, in
-        row-major (top-left, top-right, bottom-left, bottom-right) order -
-        not some other transposed/flattened arrangement that would still
-        happen to produce the right output *shape* but scramble which
-        patch's features land in which output token.
-        """
+        """Hand-verified against HF transformers' `Idefics3Connector.pixel_shuffle` for a 4x4 patch
+        grid, embed_dim=2, scale_factor=2: each output token is exactly the concatenation of its 2x2
+        block's 4 patch embeddings in row-major order (top-left, top-right, bottom-left,
+        bottom-right), not another arrangement with the right output *shape* but scrambled
+        features."""
         height = width = 4
         embed_dim = 2
         scale_factor = 2
@@ -58,6 +50,6 @@ class TestPixelShuffle:
                 assert out[0, out_idx].tolist() == expected
 
     def test_output_shape_matches_batch_and_merged_dims(self) -> None:
-        x = torch.randn(3, 64, 5)  # 8x8 grid
+        x = torch.randn(3, 64, 5)
         out = pixel_shuffle(x, scale_factor=4)
-        assert out.shape == (3, 4, 80)  # 64/16=4 tokens, 5*16=80 embed dim
+        assert out.shape == (3, 4, 80)

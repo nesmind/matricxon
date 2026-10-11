@@ -47,7 +47,7 @@ def test_next_turn_restores_the_latest_snapshot_in_the_shared_prefix(
 
     result = _generate(model, cache, turn2, chunk=8)
 
-    assert cache.reused_tokens == 24  # snapshots at 8/14/16/24/30, newest 4 kept, 24 <= 25
+    assert cache.reused_tokens == 24
     assert result == _generate(model, PromptCache(), turn2)
 
 

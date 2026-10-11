@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Installs matricxon on macOS, in this checkout: the manual steps from README.md's
-# "Setup on macOS", automated. Written for macOS's own bash 3.2 (no bash-4-only features).
-# pAIring's "Install from GitHub" button only runs on Linux, which is why this exists.
+# Installs matricxon on macOS in this checkout (the steps of README.md's "Setup on macOS"). Written for macOS bash 3.2. pAIring's "Install from GitHub" button runs only on Linux.
 #
 # Usage: scripts/install_mac.sh [--yes]
-#   --yes   install Homebrew's libomp without asking (multi-threaded native kernels)
+# --yes   install Homebrew's libomp without asking (multi-threaded kernels)
 #
-# NOT yet tested on a real Mac - please report its output if anything fails.
+# Not yet tested on a real Mac; please report any failure.
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
