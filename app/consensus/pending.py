@@ -15,6 +15,9 @@ class PendingCommands:
     def add(self, command: Command) -> None:
         self._commands[command.cmd_id] = command
 
+    def discard(self, cmd_id: str) -> None:
+        self._commands.pop(cmd_id, None)
+
     def open(self) -> list[Command]:
         for cmd_id in [c for c in self._commands if self._replica.applied(c)]:
             del self._commands[cmd_id]

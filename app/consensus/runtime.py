@@ -128,7 +128,11 @@ class ConsensusRuntime:
         self.voter_keeper = VoterKeeper(self, target_voters)
         self.cluster_id = ClusterIdKeeper(self)
         self.leases = Leases(node.id, self.submit, self._config_view)
-        self.keeper = LeaseKeeper(self.leases, lease_names, lease_ttl) if lease_names else None
+        self.keeper = (
+            LeaseKeeper(self.leases, lease_names, lease_ttl, ready=self.has_quorum)
+            if lease_names
+            else None
+        )
 
     # lifecycle
 
@@ -247,7 +251,13 @@ class ConsensusRuntime:
                 if self.node.replica.applied(command.cmd_id):
                     return command, True, self.node.replica.result(command.cmd_id)
             time.sleep(0.02)
+        with self._lock:
+            self.node.abandon(command)  # the caller stops waiting: stop retrying it too
         return command, False, None
+
+    def has_quorum(self) -> bool:
+        with self._lock:
+            return self.node.quorum_status(self._clock())[0]
 
     def _config_view(self) -> dict[str, Any]:
         with self._lock:

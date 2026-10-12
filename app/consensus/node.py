@@ -128,6 +128,10 @@ class PaxosNode(SnapshotRole, LeaderRole):
         self._route(command)
         self._drain(now)
 
+    def abandon(self, command: Command) -> None:
+        """Stops retrying `command` (its caller gave up); a proposed one may still be chosen."""
+        self._pending.discard(command.cmd_id)
+
     def reconfigure(self, members: dict[str, str], now: float) -> Command:
         """Asks the cluster to move to a new voter set (id -> address)."""
         command = self.new_command(reconfigure_payload(self.epoch, members))

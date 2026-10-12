@@ -92,7 +92,9 @@ class LeaseKeeper:
         names: tuple[str, ...],
         ttl: float = 15.0,
         interval: float | None = None,
+        ready: Callable[[], bool] | None = None,
     ) -> None:
+        self._ready = ready  # False while the cluster cannot decide: renewals would only pile up
         self.leases = leases
         self.names = names
         self.ttl = ttl
@@ -121,8 +123,9 @@ class LeaseKeeper:
         self._tasks.append((lease, task))
 
     def tick(self) -> None:
-        for name in self.names:
-            self.leases.try_acquire(name, self.ttl)
+        if self._ready is None or self._ready():
+            for name in self.names:
+                self.leases.try_acquire(name, self.ttl)
         for lease, task in self._tasks:
             if self.holds(lease):
                 task()
