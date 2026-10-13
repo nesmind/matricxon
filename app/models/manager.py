@@ -196,6 +196,48 @@ class ModelManager:
         if self._cache_store is not None:
             self._cache_store.flush()
 
+    def set_limits(
+        self,
+        *,
+        max_loaded: int | None = None,
+        default_keep_alive_seconds: int | None = None,
+        memory_safety_margin: float | None = None,
+        prompt_cache_slots: int | None = None,
+        prompt_cache_budget_mb: int | None = None,
+        max_decode_batch: int | None = None,
+        enable_quantized_native_compute: bool | None = None,
+        gpu_weight_mode: str | None = None,
+    ) -> None:
+        """New values without a restart; None keeps one. Loaded models take the keep-alive, cache
+        and concurrency limits now; the other values apply from the next load."""
+        if max_loaded is not None:
+            self._max_loaded = max_loaded
+        if default_keep_alive_seconds is not None:
+            self._default_keep_alive_seconds = default_keep_alive_seconds
+        if memory_safety_margin is not None:
+            self._memory_safety_margin = memory_safety_margin
+        if prompt_cache_slots is not None:
+            self._prompt_cache_slots = prompt_cache_slots
+        if prompt_cache_budget_mb is not None:
+            self._prompt_cache_budget_bytes = prompt_cache_budget_mb << 20
+        if max_decode_batch is not None:
+            self._max_decode_batch = max_decode_batch
+        if enable_quantized_native_compute is not None:
+            self._enable_quantized_native_compute = enable_quantized_native_compute
+        if gpu_weight_mode is not None:
+            self._gpu_weight_mode = gpu_weight_mode
+        cache_changed = prompt_cache_slots is not None or prompt_cache_budget_mb is not None
+        for handle in list(self._handles.values()):
+            if default_keep_alive_seconds is not None:
+                handle.keep_alive_seconds = default_keep_alive_seconds
+            if cache_changed:
+                budget = self._prompt_cache_budget_bytes
+                if self.on_gpu:  # never above the VRAM cap set at load
+                    budget = min(budget, handle.prompt_cache.budget_bytes)
+                handle.prompt_cache.set_limits(self._prompt_cache_slots, budget)
+            if max_decode_batch is not None:
+                handle.worker.set_max_active(max_decode_batch)
+
     def _cache_budget_bytes(self, on_gpu: bool, free_before_load: int, weight_bytes: int) -> int:
         """Prompt-cache budget. On a GPU the cached KV lives in VRAM beside the weights, so it is
         capped at half the VRAM left once this model's weights are in (never above the setting; the

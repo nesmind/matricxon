@@ -35,6 +35,7 @@ from app.routers import (
     ps_router,
     pull_router,
     push_router,
+    runtime_settings_router,
     show_router,
     storage_router,
     tags_router,
@@ -42,12 +43,8 @@ from app.routers import (
 )
 from app.runtime.compute_device import ComputeDevice
 from app.server.errors import DeviceUnavailableError, ErrorHandlerRegistrar
-from app.server.log_filters import quiet_cluster_logging
+from app.server.log_filters import LOG_LEVELS_BY_SETTING, quiet_cluster_logging
 from app.server.pidfile import PidFile
-
-# Maps Settings.log_level (0-2) onto stdlib `logging` levels; every module's
-# `logging.getLogger(__name__)` depends on this being configured once here, before anything logs.
-_LOG_LEVELS_BY_SETTING = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
 
 
 class MatricxonApp:
@@ -73,6 +70,7 @@ class MatricxonApp:
         cache_chats_router.router,
         storage_router.router,
         cluster_router.router,
+        runtime_settings_router.router,
         consensus_router.router,
     )
 
@@ -86,7 +84,7 @@ class MatricxonApp:
         # existed; 1: per-request milestones; 2: adds a per-decoder-layer trace). basicConfig
         # here, once, is the init point every module's logger depends on.
         logging.basicConfig(
-            level=_LOG_LEVELS_BY_SETTING[settings.log_level],
+            level=LOG_LEVELS_BY_SETTING[settings.log_level],
             format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         )
         quiet_cluster_logging(include_traffic=settings.log_consensus_traffic)

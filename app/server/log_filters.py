@@ -3,6 +3,9 @@ import re
 
 CONSENSUS_PATH = "/api/consensus/message"
 
+# Settings.log_level: 0 warnings/errors, 1 per-request milestones, 2 per-layer trace.
+LOG_LEVELS_BY_SETTING = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
+
 
 class ConsensusTrafficFilter(logging.Filter):
     """Drops the access-log line of each consensus message that went through (a heartbeat alone is

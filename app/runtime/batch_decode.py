@@ -46,6 +46,9 @@ class BatchDecoder:
         self._max_batch = max(1, max_batch)
         self._can_batch: bool | None = None
 
+    def set_max_batch(self, max_batch: int) -> None:
+        self._max_batch = max(1, max_batch)
+
     def can_batch(self) -> bool:
         """Batching needs an architecture that supports it and matmuls that profit from several
         tokens: packed weights on the Numba kernels would dequantize a whole matrix per call."""

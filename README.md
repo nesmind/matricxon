@@ -3,7 +3,7 @@
 </h1>
 
 A small, readable LLM inference runtime written from scratch in Python and PyTorch (optionally native C kernels are used for the dequantization stages and various forward-pass steps, for speed). It runs GGUF models locally - chat and text generation, embeddings, and vision-language
-models - and serves them through an HTTP API, so tools like [pAIring](https://github.com/nesmind/pairing) can use all of its features.
+models - and serves them through an HTTP API, so tools like [pAIring](https://github.com/upupabit/pairing) can use all of its features.
 
 **Cluster mode:** several Matricxon nodes can share models and chat caches and agree on membership through built-in Paxos consensus. The cluster is fully managed from pAIring's advanced cluster management, with live node and cluster status on an interactive map that adapts from a few nodes to hundreds. Cluster mode is in BETA: it is designed for hundreds of nodes, but so far only small clusters have been tested.
 
@@ -105,7 +105,7 @@ Pulling resolves only `hf.co/<repo>:<file>` tags.
 ## Setup
 
 ```bash
-git clone https://github.com/nesmind/matricxon.git
+git clone https://github.com/upupabit/matricxon.git
 cd matricxon
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt     # requirements-dev.txt adds the test tools

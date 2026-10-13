@@ -97,6 +97,17 @@ class PromptCache:
     def slot_count(self) -> int:
         return len(self._slots)
 
+    @property
+    def budget_bytes(self) -> int:
+        return self._budget_bytes
+
+    @_locked
+    def set_limits(self, max_slots: int, budget_bytes: int) -> None:
+        """New limits without a restart; evicts (to disk, if any) down to them now."""
+        self._max_slots = max(1, max_slots)
+        self._budget_bytes = budget_bytes
+        self._evict_over_limits()
+
     @_locked
     def acquire(
         self,

@@ -72,6 +72,12 @@ class ModelWorker:
 
     # state other threads read
 
+    def set_max_active(self, max_active: int) -> None:
+        """Concurrent replies, applied from the next scheduling round."""
+        self._max_active = max(1, max_active)
+        if self._batch_decoder is not None:
+            self._batch_decoder.set_max_batch(max_active)
+
     def is_busy(self) -> bool:
         """True while a stream job is queued or running on this worker.
 
