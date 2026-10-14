@@ -101,3 +101,20 @@ class TestGenerateErrorsBeforeStreaming:
 
         assert response.status_code == 400
         assert "num_ctx" in response.json()["error"]
+
+
+class TestGenerateLoadCall:
+    def test_empty_prompt_loads_the_model_and_generates_nothing(
+        self, client: TestClient, tiny_mistral3_model: InstalledModel
+    ) -> None:
+        response = client.post("/api/generate", json={"model": "tiny-mistral3:latest"})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "model": "tiny-mistral3:latest",
+            "response": "",
+            "done": True,
+            "done_reason": "load",
+        }
+        loaded = [m["name"] for m in client.get("/api/ps").json()["models"]]
+        assert "tiny-mistral3:latest" in loaded

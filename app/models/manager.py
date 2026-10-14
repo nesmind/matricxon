@@ -1,3 +1,4 @@
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -95,8 +96,18 @@ class ModelManager:
         # stop well before it finishes.
         self._cancelled_loads: set[str] = set()
         self._cancelled_requests: OrderedDict[str, None] = OrderedDict()
+        # One lock per tag: requests for a model that is still loading (chats, a cluster warm-up)
+        # wait for that load instead of loading a second copy.
+        self._load_locks: dict[str, threading.Lock] = {}
+        self._load_locks_guard = threading.Lock()
 
     def get_or_load(self, tag: str, keep_alive_seconds: int | None = None) -> ModelHandle:
+        with self._load_locks_guard:
+            lock = self._load_locks.setdefault(tag, threading.Lock())
+        with lock:
+            return self._get_or_load(tag, keep_alive_seconds)
+
+    def _get_or_load(self, tag: str, keep_alive_seconds: int | None) -> ModelHandle:
         now = self._clock()
         self._evict_expired(now)
 

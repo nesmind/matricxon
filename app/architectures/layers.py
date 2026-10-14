@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from app.architectures.shared_projection import project_shared
 from app.native.fused_ops import FusedOps
 
 
@@ -50,7 +51,10 @@ class SwiGLUMLP(nn.Module):
         self.down_proj = nn.Linear(ffn_len, n_embd, bias=bias, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
+        gate, up = project_shared(self, ("gate_proj", "up_proj"), x)
+        fused = FusedOps.active()
+        hidden = fused.silu_mul(gate, up) if fused is not None else None
+        return self.down_proj(hidden if hidden is not None else F.silu(gate) * up)
 
 
 class RMSNorm(nn.Module):

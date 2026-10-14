@@ -1,9 +1,7 @@
 /* Entry point: y = x @ W.T for a packed GGUF weight W, called via ctypes (app/native/gemm.py). Covers decode (n_tokens == 1) and prefill: every activation row is quantized to Q8_K once, then output rows are split across OpenMP threads. K-quant rows are unpacked once (mx_block_unpacked) and reused for every token while hot in cache. */
 #include <stdlib.h>
 
-#include "mx_common.h"
-
-typedef float (*mx_vec_dot_fn)(const uint8_t *row, const mx_block_q8_k *y, int nb);
+#include "mx_gemm.h"
 
 /* Up to this many tokens a K-quant uses its fused per-token kernel (`fused`) instead of unpacking each row: unpacking pays off only when reused. Measured on a Sandy Bridge CPU (Qwen3.5-4B Q4_K/Q6_K, 2 threads): fused is faster for 2-8 tokens (4 tokens: 4.5ms vs 6.0ms) and level at 16, so a small batched decode uses the fused kernel. Per-token cost there is ~constant (1.1ms for 9216x2560 Q4_K): compute-bound. */
 #ifndef MX_FUSED_MAX_TOKENS
@@ -17,17 +15,6 @@ void mx_set_fused_max_tokens(int n_tokens) {
     mx_fused_max_tokens = n_tokens;
 }
 
-/* How one GGML type is computed: K-quants set `unpack` (and `has_min` for Q4_K/Q5_K), plus `fused` with SSSE3; Q8_0 sets only `dot`; I-/T-quants set only `dot_f32` (see mx_common.h). `block_size` defaults to MX_QK_K; each case overrides it with its real size (IQ4_NL: 32). */
-typedef struct {
-    size_t row_bytes;
-    int block_size;
-    mx_unpack_fn unpack;
-    int has_min;
-    mx_vec_dot_fn fused;
-    mx_vec_dot_fn dot;
-    mx_vec_dot_f32_fn dot_f32;
-} mx_kernel;
-
 #if defined(__SSSE3__)
 #define MX_FUSED(fn) (fn)
 #else
@@ -35,7 +22,7 @@ typedef struct {
 #endif
 
 /* Fills `k` for one GGML type; 0 when unsupported. */
-static int mx_kernel_for(int ggml_type, int in_features, mx_kernel *k) {
+int mx_kernel_for(int ggml_type, int in_features, mx_kernel *k) {
     k->block_size = MX_QK_K;
     k->unpack = NULL;
     k->has_min = 0;
@@ -120,6 +107,10 @@ static int mx_kernel_for(int ggml_type, int in_features, mx_kernel *k) {
     }
 }
 
+mx_vec_dot_fn mx_row_dot(const mx_kernel *k, int n_tokens) {
+    return k->dot != NULL ? k->dot : (n_tokens <= mx_fused_max_tokens ? k->fused : NULL);
+}
+
 /* 1 when mx_gemm handles this (type, in_features); otherwise Python keeps the Numba kernel. */
 int mx_supports(int ggml_type, int in_features) {
     mx_kernel k;
@@ -165,8 +156,7 @@ int mx_gemm(int ggml_type, const uint8_t *w, const float *x, float *y, int n_tok
     }
 
     int status = 0;
-    const mx_vec_dot_fn dot =
-        k.dot != NULL ? k.dot : (n_tokens <= mx_fused_max_tokens ? k.fused : NULL);
+    const mx_vec_dot_fn dot = mx_row_dot(&k, n_tokens);
     if (dot != NULL) {
 #pragma omp parallel for schedule(static) num_threads(n_threads)
         for (int o = 0; o < out_features; ++o) {

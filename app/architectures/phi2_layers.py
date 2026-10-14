@@ -7,6 +7,7 @@ from torch import nn
 
 from app.architectures.fused_attention import fused_cached_attention
 from app.architectures.rope import apply_rotary_pos_emb_partial
+from app.architectures.shared_projection import project_shared
 from app.runtime.kv_cache import KVCache
 
 logger = logging.getLogger(__name__)
@@ -62,9 +63,10 @@ class Phi2Attention(nn.Module):
     ) -> torch.Tensor:
         batch, seq_len, _ = x.shape
 
-        q = self.q_proj(x).view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
+        q, k, v = project_shared(self, ("q_proj", "k_proj", "v_proj"), x)
+        q = q.view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
+        k = k.view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
+        v = v.view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
 
         q, k = apply_rotary_pos_emb_partial(q, k, cos, sin)
 

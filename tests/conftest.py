@@ -27,5 +27,7 @@ os.environ.update(
         "MATRICXON_CONSENSUS_NODE_ID": "",
         "MATRICXON_CONSENSUS_SECRET": "",
         "MATRICXON_CACHE_KEY": "",
+        "MATRICXON_ADMIN_SECRET": "",  # tests that need one set it themselves
+        "MATRICXON_LOG_LEVEL": "0",  # the default; some tests read log lines
     }
 )

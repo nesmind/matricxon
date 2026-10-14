@@ -9,6 +9,7 @@ from app.architectures.layers import RMSNorm, SwiGLUMLP
 from app.architectures.qwen35_deltanet import Qwen35GatedDeltaNet
 from app.architectures.qwen_layers import _causal_mask
 from app.architectures.rope import apply_rotary_pos_emb_partial
+from app.architectures.shared_projection import project_shared
 from app.gguf.loader import GGUFModelLoader
 
 LoadProjection = Callable[..., nn.Module]
@@ -52,12 +53,12 @@ class Qwen35Attention(nn.Module):
         layer_idx: int,
     ) -> torch.Tensor:
         batch, seq_len, _ = x.shape
-        q_and_gate = self.q_proj(x).view(batch, seq_len, self.n_head, 2 * self.head_dim)
+        q_and_gate, k, v = project_shared(self, ("q_proj", "k_proj", "v_proj"), x)
+        q_and_gate = q_and_gate.view(batch, seq_len, self.n_head, 2 * self.head_dim)
         q, gate = q_and_gate.chunk(2, dim=-1)
         q = self.q_norm(q).transpose(1, 2)
-        k = self.k_proj(x).view(batch, seq_len, self.n_head_kv, self.head_dim)
-        k = self.k_norm(k).transpose(1, 2)
-        v = self.v_proj(x).view(batch, seq_len, self.n_head_kv, self.head_dim).transpose(1, 2)
+        k = self.k_norm(k.view(batch, seq_len, self.n_head_kv, self.head_dim)).transpose(1, 2)
+        v = v.view(batch, seq_len, self.n_head_kv, self.head_dim).transpose(1, 2)
         q, k = apply_rotary_pos_emb_partial(q, k, cos, sin)
 
         if hybrid_cache is not None:

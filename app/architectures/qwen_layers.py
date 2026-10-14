@@ -5,6 +5,7 @@ from torch import nn
 from app.architectures.fused_attention import fused_cached_attention
 from app.architectures.layers import RMSNorm, SwiGLUMLP
 from app.architectures.rope import apply_rotary_pos_emb
+from app.architectures.shared_projection import project_shared
 from app.runtime.kv_cache import KVCache
 
 
@@ -67,9 +68,10 @@ class QwenAttention(nn.Module):
     ) -> torch.Tensor:
         batch, seq_len, _ = x.shape
 
-        q = self.q_proj(x).view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(batch, seq_len, self.n_head_kv, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(batch, seq_len, self.n_head_kv, self.head_dim).transpose(1, 2)
+        q, k, v = project_shared(self, ("q_proj", "k_proj", "v_proj"), x)
+        q = q.view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
+        k = k.view(batch, seq_len, self.n_head_kv, self.head_dim).transpose(1, 2)
+        v = v.view(batch, seq_len, self.n_head_kv, self.head_dim).transpose(1, 2)
 
         if self.q_norm is not None:
             q = self.q_norm(q)

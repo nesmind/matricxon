@@ -131,3 +131,10 @@ def sample(logits, penalty_ids, penalty, temperature, top_k, top_p, u):  # pragm
         if running > target:
             return ids[c]
     return ids[-1]
+
+
+@numba.njit(cache=True, fastmath=True)
+def silu_mul(gate, up, out):  # pragma: no cover - jitted
+    for i in range(out.shape[0]):
+        g = gate[i]
+        out[i] = g / (np.float32(1.0) + np.exp(-g)) * up[i]

@@ -78,6 +78,12 @@ class ModelWorker:
         if self._batch_decoder is not None:
             self._batch_decoder.set_max_batch(max_active)
 
+    @property
+    def busy_count(self) -> int:
+        """Replies queued or running on this worker now (GET /api/node/load)."""
+        with self._busy_lock:
+            return self._busy_count
+
     def is_busy(self) -> bool:
         """True while a stream job is queued or running on this worker.
 

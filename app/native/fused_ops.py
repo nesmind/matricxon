@@ -50,6 +50,7 @@ class _NativeBackend:
             c_float,
         ]
         lib.mx_sample.restype = c_int
+        lib.mx_silu_mul.argtypes = [f32p, f32p, f32p, c_int]
 
     def rms_norm(self, x: torch.Tensor, w: torch.Tensor, out: torch.Tensor, eps: float) -> None:
         self._lib.mx_rms_norm(_ptr(x), _ptr(w), _ptr(out), x.shape[0], x.shape[1], eps)
@@ -71,6 +72,9 @@ class _NativeBackend:
         )  # fmt: skip
         if status != 0:
             raise RuntimeError("mx_attention ran out of memory")
+
+    def silu_mul(self, gate: torch.Tensor, up: torch.Tensor, out: torch.Tensor) -> None:
+        self._lib.mx_silu_mul(_ptr(gate), _ptr(up), _ptr(out), out.numel())
 
     def sample(self, logits, ids, penalty, temperature, top_k, top_p, u) -> int:
         token = self._lib.mx_sample(
@@ -104,6 +108,10 @@ class _NumbaBackend:
         numba_ops.attention(
             q.numpy(), k.numpy(), v.numpy(), out.numpy(), np.float32(scale), offset, window
         )
+
+    @staticmethod
+    def silu_mul(gate, up, out) -> None:
+        numba_ops.silu_mul(gate.numpy(), up.numpy(), out.numpy())
 
     @staticmethod
     def sample(logits, ids, penalty, temperature, top_k, top_p, u) -> int:
@@ -187,6 +195,15 @@ class FusedOps:
             return None
         out = torch.empty(q.shape, dtype=torch.float32)
         self._backend.attention(q[0], k[0], v[0], out[0], scale, offset, window)
+        return out
+
+    def silu_mul(self, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor | None:
+        """silu(gate) * up for a few tokens (decode): one pass instead of two torch ops."""
+        if not _is_f32_cpu(gate, up) or gate.shape != up.shape or gate.numel() > 65536:
+            return None
+        gate, up = gate.contiguous(), up.contiguous()
+        out = torch.empty_like(gate)
+        self._backend.silu_mul(gate.reshape(-1), up.reshape(-1), out.reshape(-1))
         return out
 
     @staticmethod

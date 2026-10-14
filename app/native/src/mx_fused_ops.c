@@ -1,4 +1,4 @@
-/* Small per-layer ops (RMSNorm, rotary embedding) that cost more in PyTorch dispatch than arithmetic during a one-token decode. float32, contiguous unless a stride says otherwise. Numba twins: app/native/fused_ops_numba.py (keep in sync); the PyTorch originals: layers.py RMSNorm, rope.py apply_rotary_pos_emb. Single-threaded: OpenMP fork/join would cost more than a few thousand floats. */
+/* Small per-layer ops (RMSNorm, rotary embedding, SwiGLU silu*up) that cost more in PyTorch dispatch than arithmetic during a one-token decode. float32, contiguous unless a stride says otherwise. Numba twins: app/native/fused_ops_numba.py (keep in sync); the PyTorch originals: layers.py RMSNorm, rope.py apply_rotary_pos_emb. Single-threaded: OpenMP fork/join would cost more than a few thousand floats. */
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -30,5 +30,13 @@ void mx_rope(const float *x, float *out, const float *cos, const float *sin, int
                 o[i + half] = xr[i + half] * c[i + half] + xr[i] * s[i + half];
             }
         }
+    }
+}
+
+/* SwiGLU's middle step: out = silu(gate) * up, elementwise. */
+void mx_silu_mul(const float *gate, const float *up, float *out, int n) {
+    for (int i = 0; i < n; ++i) {
+        const float g = gate[i];
+        out[i] = g / (1.0f + expf(-g)) * up[i];
     }
 }

@@ -32,6 +32,7 @@ from app.routers import (
     embeddings_router,
     generate_router,
     health_router,
+    node_load_router,
     ps_router,
     pull_router,
     push_router,
@@ -72,6 +73,7 @@ class MatricxonApp:
         cluster_router.router,
         runtime_settings_router.router,
         consensus_router.router,
+        node_load_router.router,
     )
 
     def __init__(self) -> None:

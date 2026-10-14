@@ -44,6 +44,16 @@ class GenerateRequestHandler:
 
         if self._model_manager.pop_cancelled_load(request.model):
             return JSONResponse(status_code=200, content={})
+        if request.is_load_call():
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "model": request.model,
+                    "response": "",
+                    "done": True,
+                    "done_reason": "load",
+                },
+            )
 
         prompt_token_ids = handle.tokenizer.encode(request.prompt, add_bos=True)
         if len(prompt_token_ids) > request.options.num_ctx:

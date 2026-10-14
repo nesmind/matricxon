@@ -158,6 +158,11 @@ class NativeGemm:
         of unpacking each weight row once (mx_gemm.c): what a small decode batch should use."""
         self._lib.mx_set_fused_max_tokens(n_tokens)
 
+    def record(self, seconds: float) -> None:
+        """Counts a native call made outside `matmul` (e.g. `MultiGemmPlan`) in `take_stats`."""
+        self._calls += 1
+        self._seconds += seconds
+
     def take_stats(self) -> tuple[int, float]:
         """(calls, seconds) in native kernels since the last call; chat_router logs it per reply.
         Read/reset only from the one generating worker thread per model."""

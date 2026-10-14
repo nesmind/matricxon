@@ -62,6 +62,24 @@ class QuantizedLinear(nn.Module):
         """
         self._raw = None
 
+    @property
+    def native_ready(self) -> bool:
+        """Whether this weight runs on the native kernels (so it can join a `MultiGemmPlan`)."""
+        return self._native is not None and self._raw is not None
+
+    @property
+    def ggml_type(self) -> int:
+        return self._ggml_type
+
+    @property
+    def raw(self) -> memoryview:
+        return self._raw
+
+    def finish(self, y: torch.Tensor, batch: int, seq_len: int) -> torch.Tensor:
+        """Native output `(tokens, out_features)` float32 -> layer dtype and shape, plus bias."""
+        y = y.to(self._dtype).reshape(batch, seq_len, self.out_features)
+        return y + self.bias if self.bias is not None else y
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, _ = x.shape
         if self._native is not None:
@@ -72,7 +90,7 @@ class QuantizedLinear(nn.Module):
                 self.out_features,
                 self.in_features,
             )
-            y = y.to(self._dtype).reshape(batch, seq_len, self.out_features)
+            return self.finish(y, batch, seq_len)
         elif batch == 1 and seq_len == 1:
             # Decode step: the fused GEMV kernel, never a full dequantized weight.
             x_flat = x.reshape(-1).to(torch.float32)

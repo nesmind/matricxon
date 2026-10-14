@@ -8,6 +8,7 @@ from torch import nn
 from app.architectures.fused_attention import fused_cached_attention
 from app.architectures.layers import RMSNorm
 from app.architectures.rope import apply_rotary_pos_emb
+from app.architectures.shared_projection import project_shared
 from app.runtime.kv_cache import KVCache
 
 logger = logging.getLogger(__name__)
@@ -58,8 +59,8 @@ class Gemma4MLP(nn.Module):
         self.down_proj = nn.Linear(ffn_len, n_embd, bias=False, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate = F.gelu(self.gate_proj(x), approximate="tanh")
-        return self.down_proj(gate * self.up_proj(x))
+        gate, up = project_shared(self, ("gate_proj", "up_proj"), x)
+        return self.down_proj(F.gelu(gate, approximate="tanh") * up)
 
 
 class Gemma4Attention(nn.Module):

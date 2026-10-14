@@ -7,6 +7,7 @@ from torch import nn
 from app.architectures.fused_attention import fused_cached_attention
 from app.architectures.layers import RMSNorm
 from app.architectures.nemotron_h_mamba2 import NemotronHMamba2Mixer
+from app.architectures.shared_projection import project_shared
 from app.gguf.loader import GGUFModelLoader
 
 
@@ -44,9 +45,10 @@ class NemotronHAttention(nn.Module):
 
     def forward(self, x: torch.Tensor, hybrid_cache: object, layer_idx: int) -> torch.Tensor:
         batch, seq_len, _ = x.shape
-        q = self.q_proj(x).view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(batch, seq_len, self.n_head_kv, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(batch, seq_len, self.n_head_kv, self.head_dim).transpose(1, 2)
+        q, k, v = project_shared(self, ("q_proj", "k_proj", "v_proj"), x)
+        q = q.view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
+        k = k.view(batch, seq_len, self.n_head_kv, self.head_dim).transpose(1, 2)
+        v = v.view(batch, seq_len, self.n_head_kv, self.head_dim).transpose(1, 2)
         # No apply_rotary_pos_emb call: the one structural difference from
         # GroupedQueryAttention/GraniteAttention.
 

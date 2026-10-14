@@ -21,6 +21,10 @@ class GenerateRequest(BaseModel):
     def is_unload_call(self) -> bool:
         return not self.prompt and self.keep_alive == 0
 
+    def is_load_call(self) -> bool:
+        """Ollama's "empty prompt loads the model": nothing is generated."""
+        return not self.prompt and self.keep_alive != 0
+
 
 class GenerateChunk(BaseModel):
     response: str
