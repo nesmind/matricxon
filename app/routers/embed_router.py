@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from app.dependencies import get_model_manager
 from app.models.manager import ModelManager
 from app.runtime.embedding_engine import EmbeddingEngine
+from app.runtime.rerank_engine import ModelKind
 from app.schemas.embed import EmbedRequest, EmbedResponse
 from app.server.errors import PromptTooLongError
 from app.server.node_kind import require_compute
@@ -23,6 +24,7 @@ class EmbedRequestHandler:
 
     def handle(self, request: EmbedRequest) -> EmbedResponse:
         handle = self._model_manager.get_or_load(request.model)
+        ModelKind.require_generative(handle)
         engine = EmbeddingEngine(handle.architecture, handle.tokenizer)
 
         embeddings = []

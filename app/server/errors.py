@@ -40,6 +40,12 @@ class UnsupportedQuantTypeError(MatricxonError):
     status_code = 400
 
 
+class WrongModelKindError(MatricxonError):
+    """A request for the wrong kind of model, e.g. a chat with a reranker."""
+
+    status_code = 400
+
+
 class InvalidGGUFError(MatricxonError):
     status_code = 400
 

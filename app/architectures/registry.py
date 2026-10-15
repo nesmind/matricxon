@@ -15,6 +15,7 @@ from app.architectures.phi2 import Phi2Architecture
 from app.architectures.qwen2 import Qwen2Architecture
 from app.architectures.qwen3 import Qwen3Architecture
 from app.architectures.qwen35 import Qwen35Architecture
+from app.architectures.score_head import ScoreHead
 from app.architectures.starcoder2 import Starcoder2Architecture
 from app.gguf.metadata import GGUFMetadata
 from app.gguf.reader import GGUFReader
@@ -116,3 +117,19 @@ def unsupported_features(gguf_path: str | Path) -> list[str]:
         result = architecture_cls.unsupported_features(metadata)
     _unsupported_features_cache[cache_key] = result
     return result
+
+
+_scoring_cache: dict[tuple[str, int, int], bool] = {}
+
+
+def is_scoring_model(gguf_path: str | Path) -> bool:
+    """Whether `gguf_path` is a scoring model (reranker/classifier; score_head.py). Header-only and
+    cached like `unsupported_features`."""
+    path = Path(gguf_path)
+    stat = path.stat()
+    cache_key = (str(path), stat.st_mtime_ns, stat.st_size)
+    if cache_key not in _scoring_cache:
+        parsed = GGUFReader(path).read()
+        names = {info.name for info in parsed.tensor_infos}
+        _scoring_cache[cache_key] = ScoreHead.is_scoring(parsed.metadata, names)
+    return _scoring_cache[cache_key]

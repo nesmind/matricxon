@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from app.dependencies import get_model_manager
 from app.models.manager import ModelManager
 from app.runtime.embedding_engine import EmbeddingEngine
+from app.runtime.rerank_engine import ModelKind
 from app.schemas.embeddings import EmbeddingsRequest, EmbeddingsResponse
 from app.server.errors import PromptTooLongError
 from app.server.node_kind import require_compute
@@ -16,6 +17,7 @@ class EmbeddingsRequestHandler:
 
     def handle(self, request: EmbeddingsRequest) -> EmbeddingsResponse:
         handle = self._model_manager.get_or_load(request.model)
+        ModelKind.require_generative(handle)
 
         token_ids = handle.tokenizer.encode(request.prompt)
         if len(token_ids) > request.options.num_ctx:

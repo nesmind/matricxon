@@ -6,10 +6,12 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from app.architectures import score_head
 from app.architectures.base import GenerationCancelledError, ModelArchitecture
 from app.architectures.layers import RMSNorm
 from app.architectures.qwen_layers import QwenDecoderLayer
 from app.architectures.rope import RotaryEmbedding
+from app.architectures.score_head import ScoreHead
 from app.gguf.loader import GGUFModelLoader
 from app.gguf.metadata import GGUFMetadata
 from app.runtime.kv_cache import KVCache
@@ -45,11 +47,14 @@ class Qwen3Architecture(ModelArchitecture):
         dtype: torch.dtype = torch.float32,
         enable_quantized_native: bool = False,
         tied_embeddings: bool = False,
+        score_labels: list[str] | None = None,
     ) -> None:
         super().__init__()
         self._enable_quantized_native = enable_quantized_native
         self._dtype = dtype
-        self._tied_embeddings = tied_embeddings
+        # A reranker (score_head.py): its head scores labels, so it's never tied to the vocabulary.
+        self.score_labels = score_labels
+        self._tied_embeddings = tied_embeddings and not score_labels
         arch = metadata.arch_key
         self.n_embd = metadata.get_u32(arch("embedding_length"))
         self.n_head = metadata.get_u32(arch("attention.head_count"))
@@ -87,8 +92,9 @@ class Qwen3Architecture(ModelArchitecture):
             ]
         )
         self.output_norm = RMSNorm(self.n_embd, self.rms_eps, dtype=dtype)
-        if not tied_embeddings:
-            self.lm_head = nn.Linear(self.n_embd, self.vocab_size, bias=False, dtype=dtype)
+        if not self._tied_embeddings:
+            out_features = len(score_labels) if score_labels else self.vocab_size
+            self.lm_head = nn.Linear(self.n_embd, out_features, bias=False, dtype=dtype)
 
     def _rebuild_derived_buffers(self) -> None:
         self.rope = RotaryEmbedding(**self._rope_kwargs)
@@ -108,11 +114,13 @@ class Qwen3Architecture(ModelArchitecture):
         dtype: torch.dtype = torch.float32,
         enable_quantized_native: bool = False,
     ) -> "Qwen3Architecture":
+        scoring = loader.has_tensor(score_head.TENSOR)
         model = cls._construct_without_init(
             loader.metadata,
             dtype=dtype,
             enable_quantized_native=enable_quantized_native,
             tied_embeddings=not loader.has_tensor("output.weight"),
+            score_labels=(ScoreHead.labels(loader.metadata) or ["score"]) if scoring else None,
         )
         model._rebuild_derived_buffers()
         model._defer_materialization(loader)
@@ -125,8 +133,9 @@ class Qwen3Architecture(ModelArchitecture):
         self.token_embd.weight.copy_(loader.load_tensor("token_embd.weight"))
         self.output_norm.weight.copy_(loader.load_tensor("output_norm.weight"))
         if not self._tied_embeddings:
+            head = score_head.TENSOR if self.score_labels else "output.weight"
             self.lm_head = self._load_projection(
-                loader, "output.weight", self.lm_head, self._dtype, self._enable_quantized_native
+                loader, head, self.lm_head, self._dtype, self._enable_quantized_native
             )
         logger.debug(
             "materializing: token_embd + output_norm + lm_head in %.1fs",

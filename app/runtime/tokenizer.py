@@ -15,16 +15,23 @@ _GPT2_SPLIT_PATTERN = regex.compile(
 # Split patterns for other `tokenizer.ggml.pre` values, from llama.cpp's llama-vocab.cpp. Llama 3's
 # ("llama-bpe") keeps a newline run together (`\s*[\r\n]+`) and caps digit runs at 3: under the
 # GPT-2 pattern "\n\nSay" split into two "\n" tokens instead of Llama 3's single "\n\n" (found
-# comparing a prompt's token count with Ollama's). Any other value keeps the GPT-2
-# pattern (today's behavior).
+# comparing a prompt's token count with Ollama's). Qwen's ("qwen2") is the same with single digits:
+# under GPT-2's, "?\n" and "<Document" split apart (found comparing Qwen3-Reranker tokens with
+# llama.cpp). Any other value keeps the GPT-2 pattern.
 _SPLIT_PATTERNS_BY_PRE = {
     "llama-bpe": regex.compile(
         r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?\p{L}+"
         r"|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
     ),
+    "qwen2": regex.compile(
+        r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?\p{L}+"
+        r"|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+    ),
 }
 
-_CONTROL_TOKEN_TYPE = 3
+# Matched literally, never split by BPE: control (3) and user-defined (4) tokens, as llama.cpp does.
+# Qwen's `<think>`/`<tool_call>` are user-defined; matching only control split them apart.
+_LITERAL_TOKEN_TYPES = (3, 4)
 
 
 @functools.lru_cache(maxsize=1)
@@ -73,7 +80,7 @@ class GGUFTokenizer:
             "|".join(
                 regex.escape(token)
                 for token, token_type in zip(tokens, token_types, strict=True)
-                if token_type == _CONTROL_TOKEN_TYPE
+                if token_type in _LITERAL_TOKEN_TYPES
             )
         )
 

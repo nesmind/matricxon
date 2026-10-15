@@ -2,7 +2,7 @@
   <img src="assets/matricxon-logo.svg" alt="Matricxon - LLM inference runtime" width="460">
 </h1>
 
-A small, readable LLM inference runtime written from scratch in Python and PyTorch (optionally native C kernels are used for the dequantization stages and various forward-pass steps, for speed). It runs GGUF models locally - chat and text generation, embeddings, and vision-language
+A small, readable LLM inference runtime written from scratch in Python and PyTorch (optionally native C kernels are used for the dequantization stages and various forward-pass steps, for speed). It runs GGUF models locally - chat and text generation, embeddings, reranking and vision-language
 models - and serves them through an HTTP API, so tools like [pAIring](https://github.com/upupabit/pairing) can use all of its features.
 
 **Cluster mode:** several Matricxon nodes can share models and chat caches and agree on membership through built-in Paxos consensus. The cluster is fully managed from pAIring's advanced cluster management, with live node and cluster status on an interactive map that adapts from a few nodes to hundreds. Cluster mode is in BETA: it is designed for hundreds of nodes, but so far only small clusters have been tested.
@@ -32,7 +32,7 @@ dequantization, the transformer forward passes, caching, sampling and scheduling
 | `mistral3` | Ministral | checked on real weights |
 | `gemma4`, `granite`, `granitemoe`, `command-r`, `falcon` | Gemma 4 (dense and MoE), IBM Granite, Cohere Command R, Falcon | tiny-model tests only |
 | `nemotron_h` | NVIDIA Nemotron-H (hybrid Mamba-2) | tiny-model tests only |
-| `qwen2`, `qwen3` | Qwen 2.5, Qwen 3 | checked on real weights |
+| `qwen2`, `qwen3` | Qwen 2.5, Qwen 3, Qwen3-Reranker | checked on real weights |
 | `qwen35` | Qwen 3.5 (hybrid: Gated DeltaNet + attention), text and vision | checked on real weights |
 | `phi2` | Phi-2, moondream2 (vision) | checked on real weights |
 | `starcoder2` | StarCoder2 | checked on real weights |
@@ -82,6 +82,13 @@ raw integer types, which fail with a clear error.
   and Gemma 4. Models where a format was found list `tools` in their capabilities.
 - **Vision.** CLIP/SigLIP-style projector files feed image embeddings into `llama` (LLaVA),
   `phi2` (moondream2) and `qwen35`.
+- **Reranking.** A reranker scores how well each document answers a query: it reads the two
+  together, so it judges relevance better than comparing embedding vectors. `POST /api/rerank`
+  takes a query and documents and returns relevance scores (0 to 1), best first. Supported:
+  Qwen3-Reranker (a `qwen3` GGUF with a yes/no scoring head, e.g.
+  `hf.co/ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF`); its scores match llama.cpp's within 0.01. A
+  reranker lists only the `rerank` capability and can't be used for chat. pAIring uses it to pick
+  the best Knowledge base passages.
 - **Safe memory use.** A model that would not fit in free RAM (with a safety margin) is refused. Idle models unload after a keep-alive time.
 - **Cancelling one reply.** A `request_id` on `/api/chat` stops just that reply; the model and
   other users' replies are untouched.
@@ -93,6 +100,7 @@ raw integer types, which fail with a clear error.
 | `POST /api/chat` | Streaming NDJSON chat with tools and image support |
 | `POST /api/generate` | Raw-prompt completion, no chat template |
 | `POST /api/embeddings`, `POST /api/embed` | Mean-pooled, L2-normalized vectors (single and list input) |
+| `POST /api/rerank` | Matricxon-only: `{model, query, documents, top_n?, instruction?, return_documents?}` -> `{results: [{index, relevance_score}]}`, best first |
 | `POST /api/pull` | Downloads `hf.co/<repo>:<file>` from Hugging Face with progress and sha256 check |
 | `GET /api/tags`, `POST /api/show`, `GET /api/ps` | Installed models, model details, loaded models with expiry |
 | `DELETE /api/delete`, `POST /api/copy`, `POST /api/create` | Remove, duplicate, re-tag (`create` supports only `FROM <tag>`) |

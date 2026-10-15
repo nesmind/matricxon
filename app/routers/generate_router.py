@@ -11,6 +11,7 @@ from app.models.handle import ModelHandle
 from app.models.manager import ModelManager
 from app.runtime.chat_engine import ChatEngine
 from app.runtime.generation_request import GenerationRequest, SamplingConfig
+from app.runtime.rerank_engine import ModelKind
 from app.runtime.special_token_filter import SpecialTokenTextFilter
 from app.runtime.tokenizer import IncrementalTextDecoder
 from app.schemas.generate import GenerateChunk, GenerateDoneChunk, GenerateRequest
@@ -40,6 +41,7 @@ class GenerateRequestHandler:
         handle = self._model_manager.get_or_load(
             request.model, keep_alive_seconds=request.keep_alive
         )
+        ModelKind.require_generative(handle)
         load_duration = time.monotonic() - load_started
 
         if self._model_manager.pop_cancelled_load(request.model):

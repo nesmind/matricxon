@@ -17,6 +17,7 @@ from app.runtime.generation_request import GenerationRequest, SamplingConfig
 from app.runtime.prompt_builder import Mistral3PromptBuilder
 from app.runtime.qwen3vl_fusion import FusedPrompt, build_qwen3vl_prompt
 from app.runtime.reply_text_stream import ReplyTextStream
+from app.runtime.rerank_engine import ModelKind
 from app.runtime.vision_fusion import build_prompt_with_images
 from app.schemas.chat import ChatChunk, ChatDoneChunk, ChatRequest, ChatStreamMessage, ToolCall
 from app.server.errors import PromptTooLongError
@@ -55,6 +56,7 @@ class ChatRequestHandler:
         handle = self._model_manager.get_or_load(
             request.model, keep_alive_seconds=request.keep_alive
         )
+        ModelKind.require_generative(handle)
         load_duration = time.monotonic() - load_started
         logger.info("model %r ready in %.2fs (get_or_load)", request.model, load_duration)
 

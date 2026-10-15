@@ -38,7 +38,14 @@ def _random_norm_weight(rng: np.random.RandomState, dim: int) -> np.ndarray:
     return (np.ones(dim) + rng.randn(dim) * 0.05).astype("<f4")
 
 
-def build_tiny_qwen3_gguf(path: Path, seed: int = 0, tied_embeddings: bool = False) -> Path:
+def build_tiny_qwen3_gguf(
+    path: Path,
+    seed: int = 0,
+    tied_embeddings: bool = False,
+    score_labels: list[str] | None = None,
+) -> Path:
+    """`score_labels`: a reranker as llama.cpp converts one (rank pooling, `cls.output.weight`, no
+    `output.weight`)."""
     rng = np.random.RandomState(seed)
     tokens = _CONTROL_TOKENS + _byte_tokens()
     token_types = [3] * len(_CONTROL_TOKENS) + [1] * 256
@@ -64,13 +71,19 @@ def build_tiny_qwen3_gguf(path: Path, seed: int = 0, tied_embeddings: bool = Fal
         .set_u32("tokenizer.ggml.eos_token_id", EOS_TOKEN_ID)
     )
 
+    if score_labels:
+        builder.set_u32("qwen3.pooling_type", 4)
+        builder.set_array("qwen3.classifier.output_labels", GGUFValueType.STRING, score_labels)
+
     def add(name: str, array: np.ndarray) -> None:
         builder.add_tensor(
             name, list(reversed(array.shape)), GGMLQuantizationType.F32, array.tobytes()
         )
 
     add("token_embd.weight", _random_weight(rng, vocab_size, N_EMBD))
-    if not tied_embeddings:
+    if score_labels:
+        add("cls.output.weight", (rng.randn(len(score_labels), N_EMBD)).astype("<f4"))
+    elif not tied_embeddings:
         add("output.weight", _random_weight(rng, vocab_size, N_EMBD))
     add("output_norm.weight", np.ones(N_EMBD, dtype="<f4"))
     add("blk.0.attn_norm.weight", np.ones(N_EMBD, dtype="<f4"))

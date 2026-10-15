@@ -1,4 +1,8 @@
-from app.architectures.registry import ArchitectureRegistry, unsupported_features
+from app.architectures.registry import (
+    ArchitectureRegistry,
+    is_scoring_model,
+    unsupported_features,
+)
 from app.models.installed_model import InstalledModel
 from app.models.tool_support import supports_tools
 from app.runtime.chat_template import has_confirmed_chat_format
@@ -46,7 +50,8 @@ class CapabilityInferer:
 
 def effective_capabilities(installed: InstalledModel, has_paired_mmproj: bool) -> list[str]:
     """The request-time capability list for `installed`: its stored `capabilities` (computed at pull
-    time by `CapabilityInferer.infer`) plus:
+    time by `CapabilityInferer.infer`) plus the items below. A scoring model (reranker;
+    `is_scoring_model`) is only `["rerank"]`: pull-time inference sees just the architecture name.
 
     - `"vision"` when `has_paired_mmproj` (`ModelCatalog.find_paired_mmproj`) is true and
       `installed.architecture` has image-embedding fusion (`_VISION_FUSION_ARCHITECTURES`): a paired
@@ -65,6 +70,9 @@ def effective_capabilities(installed: InstalledModel, has_paired_mmproj: bool) -
     - `"tools"` when the chat template shows a tool-call format matricxon can parse
       (`app.runtime.tool_call_formats`).
     """
+    if is_scoring_model(installed.path):
+        # A reranker scores (POST /api/rerank); it can't chat or embed.
+        return ["rerank"]
     capabilities = installed.capabilities
     has_real_fusion = has_paired_mmproj and installed.architecture in _VISION_FUSION_ARCHITECTURES
     if has_real_fusion and "vision" not in capabilities:
