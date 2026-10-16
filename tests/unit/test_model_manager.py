@@ -310,3 +310,21 @@ class TestModelManagerUnload:
         manager.unload("model-a:latest")
 
         assert calls == [True]
+
+
+def test_an_unloaded_model_is_freed(manager: ModelManager) -> None:
+    """The worker thread never ended and held the model (decoder, keep-alive callback), so every
+    unloaded model stayed in RAM."""
+    import gc
+    import weakref
+
+    handle = manager.get_or_load("model-a:latest")
+    handle_ref, architecture_ref = weakref.ref(handle), weakref.ref(handle.architecture)
+    thread = handle.worker._thread
+    del handle
+    manager.unload("model-a:latest")
+    thread.join(5)
+    gc.collect()
+
+    assert not thread.is_alive()
+    assert handle_ref() is None and architecture_ref() is None

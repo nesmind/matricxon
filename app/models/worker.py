@@ -6,34 +6,10 @@ from collections.abc import Callable, Iterator
 
 import torch
 
-from app.runtime.batch_decode import BatchDecoder, Checkpoint, DecodeStep
+from app.models.worker_job import WorkerJob
+from app.runtime.batch_decode import BatchDecoder
 
 logger = logging.getLogger(__name__)
-
-
-class _Job:
-    """One submitted reply: its generator, where its items go, and its place in the scheduler."""
-
-    def __init__(
-        self,
-        generator_fn: Callable[[], Iterator[object]],
-        loop: asyncio.AbstractEventLoop,
-        results: "asyncio.Queue[object]",
-        request_id: str | None,
-        stop_event: threading.Event | None,
-    ) -> None:
-        self.generator_fn = generator_fn
-        self.loop = loop
-        self.results = results
-        self.request_id = request_id
-        self.stop_event = stop_event
-        self.iterator: Iterator[object] | None = None
-        self.waiting: DecodeStep | None = None
-        self.reply: object = None
-        self.done = False
-
-    def emit(self, item: object) -> None:
-        self.loop.call_soon_threadsafe(self.results.put_nowait, item)
 
 
 class ModelWorker:
@@ -58,7 +34,8 @@ class ModelWorker:
     def __init__(self, batch_decoder: BatchDecoder | None = None, max_active: int = 8) -> None:
         self._batch_decoder = batch_decoder
         self._max_active = max(1, max_active)
-        self._jobs: queue.Queue[_Job] = queue.Queue()
+        # None is the shutdown sentinel (`shutdown`).
+        self._jobs: queue.Queue[WorkerJob | None] = queue.Queue()
         self._stop_event = threading.Event()
         # One stop event per submitted reply (keyed by the caller's request id): cancelling one
         # never touches another user's reply on this model.
@@ -163,7 +140,7 @@ class ModelWorker:
         with self._busy_lock:
             self._busy_count += 1
             self._idle_event.clear()
-        self._jobs.put(_Job(generator_fn, loop, results, request_id, stop_event))
+        self._jobs.put(WorkerJob(generator_fn, loop, results, request_id, stop_event))
         return results
 
     # the scheduler (worker thread)
@@ -172,18 +149,27 @@ class ModelWorker:
         # Gradients off for this thread for good: replies interleave here, so no grad-mode context
         # manager may span a suspension (ChatEngine.stream_steps).
         torch.set_grad_enabled(False)
-        active: list[_Job] = []
+        active: list[WorkerJob] = []
+        closing = False
         while True:
             if not active:
+                if closing:
+                    break
                 job = self._jobs.get()
+                if job is None:
+                    break
                 # A stop aimed at replies that already finished must not kill this new one.
                 self._stop_event.clear()
                 active.append(job)
             while len(active) < self._max_active:
                 try:
-                    active.append(self._jobs.get_nowait())
+                    job = self._jobs.get_nowait()
                 except queue.Empty:
                     break
+                if job is None:
+                    closing = True
+                    break
+                active.append(job)
             if self._stop_event.is_set():
                 for job in active:
                     self._finish(job)
@@ -192,42 +178,26 @@ class ModelWorker:
                 self._advance(job)
             self._decode_round([job for job in active if job.waiting is not None])
             active = [job for job in active if not job.done]
+        # Drops the references to the model, so a retired one can be freed.
+        self._batch_decoder = None
+        self.on_job_done = None
 
-    def _stopped(self, job: _Job) -> bool:
+    def shutdown(self) -> None:
+        """Ends this worker's thread once its jobs are done (the model is being retired). The
+        thread held the model (via its decoder and `on_job_done`), so without this every unloaded
+        model stayed in RAM."""
+        self.on_job_done = None
+        self._jobs.put(None)
+
+    def _stopped(self, job: WorkerJob) -> bool:
         return self._stop_event.is_set() or (job.stop_event is not None and job.stop_event.is_set())
 
-    def _advance(self, job: _Job) -> None:
+    def _advance(self, job: WorkerJob) -> None:
         """Runs `job` until it needs logits, yields a checkpoint, or ends."""
-        while not job.done and job.waiting is None:
-            if self._stopped(job):
-                self._finish(job)
-                return
-            try:
-                reply, job.reply = job.reply, None
-                if job.iterator is None:
-                    job.iterator = iter(job.generator_fn())
-                    item = next(job.iterator)
-                elif isinstance(reply, BaseException):
-                    item = job.iterator.throw(reply)
-                elif reply is None:
-                    item = next(job.iterator)
-                else:
-                    item = job.iterator.send(reply)
-            except StopIteration:
-                self._finish(job)
-                return
-            except Exception as exc:  # noqa: BLE001 - handed to the async consumer, not swallowed
-                job.emit(exc)
-                self._finish(job)
-                return
-            if isinstance(item, DecodeStep):
-                job.waiting = item
-            elif isinstance(item, Checkpoint):
-                return
-            else:
-                job.emit(item)
+        if job.advance(lambda: self._stopped(job)):
+            self._finish(job)
 
-    def _decode_round(self, waiting: list[_Job]) -> None:
+    def _decode_round(self, waiting: list[WorkerJob]) -> None:
         """One batched decode step for every reply waiting on logits."""
         waiting = [job for job in waiting if not job.done]
         if not waiting:
@@ -243,19 +213,10 @@ class ModelWorker:
             job.waiting = None
             job.reply = result
 
-    def _finish(self, job: _Job) -> None:
-        """Closes `job`'s generator (running its `finally` blocks: cache release), tells the
-        consumer and frees its place."""
-        if job.done:
+    def _finish(self, job: WorkerJob) -> None:
+        """Closes `job` and frees its place."""
+        if not job.close():
             return
-        job.done = True
-        job.waiting = None
-        if job.iterator is not None and hasattr(job.iterator, "close"):
-            try:
-                job.iterator.close()
-            except Exception:  # noqa: BLE001 - a failing cleanup must not kill the worker thread
-                logger.exception("closing a reply's generator failed")
-        job.emit(None)
         with self._busy_lock:
             if job.request_id is not None:
                 self._job_stops.pop(job.request_id, None)

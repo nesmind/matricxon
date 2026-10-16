@@ -186,6 +186,7 @@ class ModelManager:
         """Drops a handle for good: its idle cached conversations go to the disk tier first (a
         background write; the slots are independent of the weights closed right after)."""
         handle.prompt_cache.persist_all()
+        handle.worker.shutdown()
         handle.architecture.close()
 
     def holds_chat(self, tag: str) -> bool:
