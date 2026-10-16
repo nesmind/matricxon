@@ -204,6 +204,8 @@ class PersistentCacheStore:
         consumed."""
         if not self.policy.enabled:
             return None
+        # A save still being written (e.g. this model's own unload a moment ago) would be missed.
+        self.flush()
         self._rescan_if_due()
         wanted = self._cipher.prefix_fingerprints(prompt_ids, BLOCK_TOKENS)
         best = self._best_match(model_id, dtype, wanted, min_tokens)

@@ -1,6 +1,7 @@
 """ModelManager hands a retiring model's cached conversations to the disk tier (unload, eviction,
 shutdown), and a fresh manager resumes them."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -73,3 +74,22 @@ def test_without_a_store_nothing_changes(tmp_path: Path, store: PersistentCacheS
     _generate(manager, PROMPT)
     manager.shutdown()
     assert store.usage()[0] == 0
+
+
+def test_a_lookup_waits_for_a_save_still_being_written(
+    tmp_path: Path, store: PersistentCacheStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The next message right after an unload found the disk empty while the file was written."""
+    slow_spill = store._spill
+
+    def spill_slowly(model_id: str, slot: object) -> None:
+        time.sleep(0.3)
+        slow_spill(model_id, slot)
+
+    monkeypatch.setattr(store, "_spill", spill_slowly)
+    first = _manager(tmp_path, store)
+    _generate(first, PROMPT)
+    first.unload(TAG)  # no store.flush(): the save is still queued
+
+    second = _manager(tmp_path, store)
+    assert _generate(second, PROMPT + [4, 5, 6]) >= 16

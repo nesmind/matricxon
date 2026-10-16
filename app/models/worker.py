@@ -67,6 +67,9 @@ class ModelWorker:
         self._busy_lock = threading.Lock()
         self._idle_event = threading.Event()
         self._idle_event.set()
+        # Called after each job ends; ModelManager restarts the keep-alive there, so it counts from
+        # a reply's end, not its start (a reply longer than keep-alive unloaded the model at once).
+        self.on_job_done: Callable[[], None] | None = None
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -259,3 +262,8 @@ class ModelWorker:
             self._busy_count -= 1
             if self._busy_count == 0:
                 self._idle_event.set()
+        if self.on_job_done is not None:
+            try:
+                self.on_job_done()
+            except Exception:  # noqa: BLE001 - must not kill the worker thread
+                logger.exception("on_job_done callback failed")

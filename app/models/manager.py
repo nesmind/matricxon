@@ -123,6 +123,7 @@ class ModelManager:
         # attempt for this tag.
         self._cancelled_loads.discard(tag)
         handle = self._load(tag, keep_alive_seconds, now)
+        handle.worker.on_job_done = lambda: handle.touch(self._clock())
         self._handles[tag] = handle
         return handle
 

@@ -130,11 +130,11 @@ class Settings(BaseSettings):
     # path.
     enable_fused_ops: bool = True
 
-    # "cpu" (default) or "cuda"/"cuda:N": EXPERIMENTAL GPU mode (dense architectures marked
-    # `SUPPORTS_GPU`, never quantized-native). A missing GPU fails the first load instead of using
-    # the CPU.
+    # "cpu" (default), "cuda"/"cuda:N" or "mps" (Apple Silicon): EXPERIMENTAL GPU mode (dense
+    # architectures marked `SUPPORTS_GPU`, never quantized-native). A missing GPU fails the first
+    # load instead of using the CPU.
     device: str = "cpu"
-    # With `device` cuda: "dequantized" (default) keeps weights in bf16/fp16 (fastest, ~2 bytes of
+    # With a GPU `device`: "dequantized" (default) keeps weights in bf16/fp16 (fastest, ~2 bytes of
     # VRAM per
     # parameter); "packed" keeps supported quant types (Q4_0/4_1/5_0/5_1/8_0, Q2_K-Q6_K, Q8_K,
     # IQ4_NL/IQ4_XS)

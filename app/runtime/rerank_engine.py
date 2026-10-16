@@ -1,6 +1,8 @@
 """Scores how well each document answers a query with a scoring model (score_head.py). One forward
 pass per document, like EmbeddingEngine: correct, not batched."""
 
+from collections.abc import Iterator
+
 import torch
 
 from app.architectures.base import ModelArchitecture
@@ -75,3 +77,8 @@ class RerankEngine:
                 torch.tensor([token_ids], dtype=torch.long), last_logits_only=True
             )
         return ScoreHead.relevance(logits[0, -1], self._labels)
+
+    def score_all(self, query: str, documents: list[str], instruction: str) -> Iterator[float]:
+        """One score per document, in order (a worker job: WorkerCall.collect)."""
+        for document in documents:
+            yield self.score(query, document, instruction)

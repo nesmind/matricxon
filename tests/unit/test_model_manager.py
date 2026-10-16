@@ -166,6 +166,22 @@ class TestModelManagerBusyEviction:
             release.set()
 
     @pytest.mark.asyncio
+    async def test_keep_alive_counts_from_the_end_of_a_reply(
+        self, manager: ModelManager, clock: FakeClock
+    ) -> None:
+        """A reply longer than keep-alive used to unload the model the moment it ended."""
+        handle = manager.get_or_load("model-a:latest", keep_alive_seconds=10)
+        started, release = self._mark_busy(handle)
+        await asyncio.to_thread(started.wait)
+        clock.advance(11)
+        release.set()
+        await asyncio.to_thread(handle.worker.wait_until_idle)
+
+        assert "model-a:latest" in {h.tag for h in manager.list_loaded()}
+        clock.advance(11)
+        assert "model-a:latest" not in {h.tag for h in manager.list_loaded()}
+
+    @pytest.mark.asyncio
     async def test_evict_least_recently_used_skips_a_busy_handle(
         self, manager: ModelManager, clock: FakeClock
     ) -> None:

@@ -57,7 +57,8 @@ raw integer types, which fail with a clear error.
 - **Quantized-native compute.** Weights stay packed in the memory-mapped file and are multiplied
   directly, with no full dequantized copy in RAM. A native C kernel (OpenMP threads) is the
   default; the Numba kernels are the fallback when there is no C compiler.
-- **GPU (experimental).** Set `MATRICXON_DEVICE=cuda` to run on an NVIDIA GPU, with weights in
+- **GPU (experimental).** Set `MATRICXON_DEVICE=cuda` to run on an NVIDIA GPU (or `mps` on an
+  Apple Silicon Mac, untested), with weights in
   bf16/fp16 (or, with `MATRICXON_GPU_WEIGHT_MODE=packed`, kept quantized in VRAM to save memory at
   some speed cost). Works for the dense, mixture-of-experts and hybrid architectures listed above,
   and refuses to start with a clear error if no GPU is found (it never silently uses the CPU). Treat it as
@@ -159,7 +160,7 @@ variables win). All of them are listed in `app/config.py`.
 | `MATRICXON_ENABLE_QUANTIZED_NATIVE_COMPUTE` | `true` | Multiply packed weights directly |
 | `MATRICXON_GEMV_BACKEND` | `native` | `native` (C kernels) or `numba` |
 | `MATRICXON_TORCH_THREADS` | all cores | CPU threads; fewer runs cooler |
-| `MATRICXON_DEVICE` | `cpu` | `cpu` or `cuda` / `cuda:N` (experimental GPU mode) |
+| `MATRICXON_DEVICE` | `cpu` | `cpu`, `cuda` / `cuda:N` or `mps` (experimental GPU mode) |
 | `MATRICXON_GPU_WEIGHT_MODE` | `dequantized` | On a GPU: `dequantized` (fast, more VRAM) or `packed` (less VRAM, slower) |
 | `MATRICXON_ENABLE_FUSED_OPS` | `true` | One native call for RMSNorm, RoPE, decode attention and sampling |
 | `MATRICXON_MAX_DECODE_BATCH` | `8` | Replies that run at once per model |
