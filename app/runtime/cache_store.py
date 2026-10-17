@@ -224,19 +224,27 @@ class PersistentCacheStore:
     def _best_match(
         self, model_id: str, dtype: torch.dtype, wanted: list[str], min_tokens: int
     ) -> tuple[int, str, str] | None:
-        """(shared blocks, file name, chat tag) of the stored file sharing the longest prefix."""
+        """(shared blocks, file name, chat tag) of the stored file sharing the longest prefix. Any
+        precision: a restore converts it (`KVCache.load`); on a tie the same precision wins."""
         best: tuple[int, str, str] | None = None
+        best_same_dtype = False
         with self._lock:
             for name, entry in self._index.items():
-                if (entry.model_id, entry.dtype_name) != (model_id, str(dtype)):
+                if entry.model_id != model_id:
                     continue
                 shared = 0
                 for mine, theirs in zip(wanted, entry.blocks, strict=False):
                     if mine != theirs:
                         break
                     shared += 1
-                if shared * BLOCK_TOKENS > min_tokens and (best is None or shared > best[0]):
+                same_dtype = entry.dtype_name == str(dtype)
+                if shared * BLOCK_TOKENS > min_tokens and (
+                    best is None
+                    or shared > best[0]
+                    or (shared == best[0] and same_dtype and not best_same_dtype)
+                ):
                     best = (shared, name, entry.tag)
+                    best_same_dtype = same_dtype
         return best
 
     def inspect(self, prompt_ids: list[int]) -> tuple[list[StoredEntry], list[str]]:

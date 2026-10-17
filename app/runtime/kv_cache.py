@@ -130,8 +130,9 @@ class KVCache:
         )
 
     def load(self, keys: list[torch.Tensor], values: list[torch.Tensor]) -> None:
-        """Fills an empty cache from `export` output and sets its length. A mismatch with this
-        cache's layers/shapes/dtype (a stale or foreign save) raises `ValueError`."""
+        """Fills an empty cache from `export` output and sets its length; a float save is converted
+        to this cache's precision (the model can load in float32 or bf16 depending on free RAM). A
+        mismatch in layers or shapes (a stale or foreign save) raises `ValueError`."""
         if len(keys) != len(self._k) or len(values) != len(self._v):
             raise ValueError("saved cache has a different number of layers")
         length = keys[0].shape[2] if keys else 0
@@ -139,7 +140,11 @@ class KVCache:
             raise ValueError(f"saved cache has {length} positions, num_ctx is {self._max_seq_len}")
         for dst_list, src_list in ((self._k, keys), (self._v, values)):
             for dst, src in zip(dst_list, src_list, strict=True):
-                if src.shape != (*dst.shape[:2], length, dst.shape[3]) or src.dtype != dst.dtype:
-                    raise ValueError("saved cache layer shape or dtype differs from this model's")
-                dst[:, :, :length, :] = src
+                if src.shape != (*dst.shape[:2], length, dst.shape[3]):
+                    raise ValueError("saved cache layer shape differs from this model's")
+                if src.dtype != dst.dtype and not (
+                    src.is_floating_point() and dst.is_floating_point()
+                ):
+                    raise ValueError("saved cache dtype differs from this model's")
+                dst[:, :, :length, :] = src.to(dst.dtype)
         self._length = length

@@ -58,7 +58,10 @@ class SlotCodec:
         state = torch.load(io.BytesIO(payload), weights_only=True, map_location="cpu")
         cache = architecture.build_cache(max_seq_len=num_ctx, dtype=dtype)
         snapshots = {
-            s["length"]: HybridSnapshot(s["length"], s["conv"], s["ssm"])
+            # Converted like the KV in `cache.load`: the model may have loaded in another precision.
+            s["length"]: HybridSnapshot(
+                s["length"], [t.to(dtype) for t in s["conv"]], [t.to(dtype) for t in s["ssm"]]
+            )
             for s in state["snapshots"]
         }
         if bool(snapshots) != isinstance(cache, NemotronHHybridCache):

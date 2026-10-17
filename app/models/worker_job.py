@@ -31,7 +31,12 @@ class WorkerJob:
         self.done = False
 
     def emit(self, item: object) -> None:
-        self.loop.call_soon_threadsafe(self.results.put_nowait, item)
+        """Hands `item` to the caller's event loop. A closed loop (the caller is gone) is ignored:
+        raising here would end the worker thread, and with it every later reply on the model."""
+        try:
+            self.loop.call_soon_threadsafe(self.results.put_nowait, item)
+        except RuntimeError:
+            pass
 
     def advance(self, stopped: Callable[[], bool]) -> bool:
         """Runs the generator until it needs logits, yields a checkpoint, or ends. True when it

@@ -27,7 +27,8 @@ fi
 
 kill -TERM "$PID" 2>/dev/null || true
 
-for _ in $(seq 1 20); do
+# Up to 60 s: shutdown saves cached chats to disk first, and a big one takes a while.
+for _ in $(seq 1 120); do
     if ! kill -0 "$PID" 2>/dev/null; then
         rm -f "$PID_FILE"
         info "matricxon stopped (pid $PID)"

@@ -56,8 +56,6 @@ class CacheMissDiagnosis:
         for entry in mine or entries:
             if entry.model_id != model_id:
                 parts.append("saved for a different model file")
-            elif entry.dtype_name != str(dtype):
-                parts.append(f"saved with {entry.dtype_name}, now {dtype}")
             else:
                 shared = 0
                 for mine_hash, theirs in zip(wanted, entry.blocks, strict=False):
