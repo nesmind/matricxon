@@ -27,6 +27,7 @@ from app.runtime.cache_tier import ModelCacheTier
 from app.runtime.chat_stop_tokens import extra_eos_token_ids
 from app.runtime.chat_template import PromptBuilderFactory
 from app.runtime.compute_device import ComputeDevice
+from app.runtime.memory_trim import memory_trimmer
 from app.runtime.prompt_cache import PromptCache
 from app.runtime.tool_call_formats import ToolCallFormats
 from app.server.errors import DeviceUnavailableError
@@ -125,6 +126,8 @@ class ModelManager:
         handle = self._load(tag, keep_alive_seconds, now)
         handle.worker.on_job_done = lambda: handle.touch(self._clock())
         self._handles[tag] = handle
+        # Loading leaves large temporary buffers behind.
+        memory_trimmer.schedule()
         return handle
 
     def cancel_request(self, tag: str, request_id: str) -> None:
@@ -188,6 +191,7 @@ class ModelManager:
         handle.prompt_cache.persist_all()
         handle.worker.shutdown()
         handle.architecture.close()
+        memory_trimmer.schedule()
 
     def holds_chat(self, tag: str) -> bool:
         """Is a conversation of the chat `tag` in RAM on any loaded model? (cluster routing)"""

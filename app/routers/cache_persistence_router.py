@@ -27,6 +27,7 @@ class CachePersistenceHandler:
             budget_mb=policy.budget_mb,
             ttl_hours=policy.ttl_hours,
             files=files,
+            chats=self._store.chat_count(),
             used_bytes=used,
             folder=str(settings.prompt_cache_dir.resolve()),
             shared=FilesystemProbe().is_shared(settings.prompt_cache_dir),

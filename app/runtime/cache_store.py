@@ -15,6 +15,7 @@ import torch
 
 from app.runtime.cache_crypto import CacheCipher, CacheDecryptError
 from app.runtime.cache_policy import PersistencePolicy
+from app.runtime.cache_superseded import SupersededCopies
 from app.runtime.prompt_slot import CacheSlot
 from app.runtime.slot_codec import EncodedSlot, SlotCodec
 
@@ -185,8 +186,11 @@ class PersistentCacheStore:
         with self._lock:
             self._index[name] = entry
             gone = tag in self._forgotten
+            superseded = SupersededCopies.find(name, entry, list(self._index.items()))
         if gone:
             self._remove(name)
+        for old in superseded:
+            self._remove(old)
         self.enforce_limits()
 
     # restoring
@@ -311,6 +315,12 @@ class PersistentCacheStore:
             names = list(self._index)
         for name in names:
             self._remove(name)
+
+    def chat_count(self) -> int:
+        """Distinct chats with a saved copy (one chat can have several files, e.g. branches)."""
+        self._rescan_if_due()
+        with self._lock:
+            return SupersededCopies.chat_count(list(self._index.values()))
 
     def usage(self) -> tuple[int, int]:
         """(files, total bytes) currently stored."""
